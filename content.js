@@ -1,361 +1,338 @@
 (function() {
-    // --- State & Constants ---
-    let currentSongKey = null;
+   
+    let config = { deepLKey: null, useTrans: true, mode: true };
+    let currentKey = null;
     let lyricsData = [];
-    let lyricLines = [];
-    let isModeEnabled = true;
-    let lastSongChangeTime = 0;
     
-    // --- DOM Elements Cache ---
-    let lyricsContainer = null;
-    let customWrapper = null;
-    let customBg = null;
-    let titleEl = null;
-    let artistEl = null;
-    let artworkContainer = null;
-    let progressBarClone = null;
-    
-    const INIT_TIME = 2000; // 歌詞の更新が完了するまでの待機時間（ms）
+   
+    const ui = {
+        container: null, bg: null, wrapper: null, 
+        title: null, artist: null, artwork: null, 
+        lyrics: null, input: null, settings: null,
+        btnArea: null
+    };
 
-    // --- API & Parser ---
-    async function fetchLyrics(title, artist) {
+    let hideTimer = null;
+
+    
+    const handleInteraction = () => {
+        if (!ui.btnArea) return; 
+
+        ui.btnArea.classList.remove('inactive');
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+            if (!ui.settings?.classList.contains('active') && !ui.btnArea.matches(':hover')) {
+                ui.btnArea.classList.add('inactive');
+            }
+        }, 3000);
+    };
+    
+    const storage = {
+        _api: chrome?.storage?.local,
+        get: (k) => new Promise(r => {
+            if (!storage._api) return r(null);
+            storage._api.get([k], res => r(res[k] || null));
+        }),
+        set: (k, v) => {
+            if (!storage._api) return;
+            storage._api.set({ [k]: v });
+        },
+        remove: (k) => {
+            if (!storage._api) return;
+            storage._api.remove(k);
+        },
+        clear: () => confirm('全データを削除しますか？') && storage._api?.clear(() => location.reload())
+    };
+
+
+    const parseLRC = (lrc) => {
+        if (!lrc) return [];
+        const timeExp = /\[(\d{2})\:(\d{2})\.(\d{2,3})\]/;
+        return lrc.split('\n').reduce((acc, line) => {
+            const m = line.match(timeExp);
+            if (!m) return acc;
+            const time = parseInt(m[1]) * 60 + parseInt(m[2]) + parseInt(m[3]) / 100;
+            const text = line.replace(timeExp, '').trim();
+            if (text) acc.push({ time, text });
+            return acc;
+        }, []);
+    };
+
+
+    const translate = async (lines) => {
+        if (!config.deepLKey || !config.useTrans || !lines.length || lines[0].translation) return lines;
         try {
-            const cleanTitle = title.replace(/\s*[\(-\[].*?[\)-]].*/, "").trim();
-            const cleanArtist = artist.replace(/\s*[\(-\[].*?[\)-]].*/, "").trim();
-            const query = encodeURIComponent(`${cleanTitle} ${cleanArtist}`);
-            
-            const response = await fetch(`https://lrclib.net/api/search?q=${query}`);
-            const data = await response.json();
-
-            let match = data.find(item => {
-                if (!item.syncedLyrics) return false;
-                const itemArtist = item.artistName.toLowerCase();
-                const targetArtist = cleanArtist.toLowerCase();
-                const isArtistMatch = itemArtist.includes(targetArtist) || targetArtist.includes(itemArtist);
-                const itemTitle = item.trackName.toLowerCase();
-                const targetTitle = cleanTitle.toLowerCase();
-                const isTitleMatch = itemTitle.includes(targetTitle) || targetTitle.includes(itemTitle);
-                return isArtistMatch && isTitleMatch;
+            const res = await new Promise(resolve => {
+                chrome.runtime.sendMessage({
+                    type: 'TRANSLATE',
+                    payload: { text: lines.map(l => l.text), apiKey: config.deepLKey }
+                }, resolve);
             });
-
-            if (!match) match = data.find(item => item.syncedLyrics);
-            if (match) return parseLRC(match.syncedLyrics);
-            
-            return [{ time: 0, text: "Lyrics not found" }];
-        } catch (e) { return [{ time: 0, text: "" }]; }
-    }
-
-    function parseLRC(lrc) {
-        const lines = lrc.split('\n');
-        const result = [];
-        const timeRegex = /\[(\d{2})\:(\d{2})\.(\d{2,3})\]/;
-        lines.forEach(line => {
-            const match = line.match(timeRegex);
-            if (match) {
-                const time = parseInt(match[1]) * 60 + parseInt(match[2]) + parseInt(match[3]) / 100; 
-                const text = line.replace(timeRegex, '').trim();
-                if (text) result.push({ time, text });
+            if (res?.success && res.translations?.length === lines.length) {
+                lines.forEach((l, i) => l.translation = res.translations[i].text);
             }
-        });
-        return result;
-    }
+        } catch (e) { console.error('DeepL failed', e); }
+        return lines;
+    };
 
-    // --- Song Info ---
-    function getSongInfo() {
-        if ('mediaSession' in navigator && navigator.mediaSession.metadata) {
-            const meta = navigator.mediaSession.metadata;
-            return {
-                title: meta.title,
-                artist: meta.artist,
-                artwork: meta.artwork.length > 0 ? meta.artwork[meta.artwork.length - 1].src : null
-            };
+    const getMetadata = () => {
+        if (navigator.mediaSession?.metadata) {
+            const { title, artist, artwork } = navigator.mediaSession.metadata;
+            return { title, artist, src: artwork.length ? artwork[artwork.length - 1].src : null };
         }
-        const titleEl = document.querySelector('yt-formatted-string.title.style-scope.ytmusic-player-bar');
-        const subtitleEl = document.querySelector('.byline.style-scope.ytmusic-player-bar');
-        if (!titleEl || !subtitleEl) return null;
-        return { 
-            title: titleEl.textContent, 
-            artist: subtitleEl.textContent.split('•')[0].trim(),
-            artwork: null 
+        const t = document.querySelector('yt-formatted-string.title.style-scope.ytmusic-player-bar');
+        const a = document.querySelector('.byline.style-scope.ytmusic-player-bar');
+        return (t && a) ? { title: t.textContent, artist: a.textContent.split('•')[0].trim(), src: null } : null;
+    };
+
+  
+    const createEl = (tag, id, cls, html) => {
+        const el = document.createElement(tag);
+        if (id) el.id = id;
+        if (cls) el.className = cls;
+        if (html) el.innerHTML = html;
+        return el;
+    };
+
+    function setupAutoHideEvents() {
+
+        if (document.body.dataset.autohideSetup) return;
+        
+        ['mousemove', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, handleInteraction));
+        document.body.dataset.autohideSetup = "true";
+
+ 
+        handleInteraction();
+    }
+    
+    function initSettings() {
+        if (ui.settings) return;
+        ui.settings = createEl('div', 'ytm-settings-panel', '', `
+            <h3>Settings</h3>
+            <div class="setting-item">
+                <label class="toggle-label"><span>Translation</span><input type="checkbox" id="trans-toggle"></label>
+            </div>
+            <div class="setting-item" style="margin-top:15px;">
+                <input type="password" id="deepl-key-input" placeholder="DeepL API Key">
+            </div>
+            <div style="display:flex; gap:10px; margin-top:20px;">
+                <button id="save-settings-btn" style="flex:1;">Save</button>
+                <button id="clear-all-btn" style="background:#ff3b30; color:white;">Reset</button>
+            </div>
+        `);
+        document.body.appendChild(ui.settings);
+
+        document.getElementById('deepl-key-input').value = config.deepLKey || '';
+        document.getElementById('trans-toggle').checked = config.useTrans;
+
+        document.getElementById('save-settings-btn').onclick = () => {
+            config.deepLKey = document.getElementById('deepl-key-input').value.trim();
+            config.useTrans = document.getElementById('trans-toggle').checked;
+            storage.set('ytm_deepl_key', config.deepLKey);
+            storage.set('ytm_trans_enabled', config.useTrans);
+            alert('Saved');
+            ui.settings.classList.remove('active');
+            currentKey = null; // force refresh
         };
+        document.getElementById('clear-all-btn').onclick = storage.clear;
     }
 
-    // --- UI/Layout Management ---
-
-    /**
-     * カスタムレイアウトの適用状態を判定し、DOMにクラスを付与/削除する
-     * @returns {boolean} カスタムモードが現在有効かどうか
-     */
-    function applyLayout() {
-        const layout = document.querySelector('ytmusic-app-layout');
-        const isPlayerOpen = layout && layout.hasAttribute('player-page-open');
-        const btn = document.getElementById('my-mode-toggle');
-
-        if (btn) {
-            btn.style.display = isPlayerOpen ? "inline-block" : "none";
-            updateButtonStyle(btn);
+    function initLayout() {
+        if (document.getElementById('ytm-custom-wrapper')) {
+         
+            ui.wrapper = document.getElementById('ytm-custom-wrapper');
+            ui.bg = document.getElementById('ytm-custom-bg');
+            ui.lyrics = document.getElementById('my-lyrics-container');
+            ui.title = document.getElementById('ytm-custom-title');
+            ui.artist = document.getElementById('ytm-custom-artist');
+            ui.artwork = document.getElementById('ytm-artwork-container');
+            ui.btnArea = document.getElementById('ytm-btn-area');
+            
+            // ★修正: handleInteractionが定義済みなのでここで呼ぶ
+            setupAutoHideEvents(); 
+            return;
         }
 
-        const shouldApply = isModeEnabled && isPlayerOpen;
+        ui.bg = createEl('div', 'ytm-custom-bg');
+        document.body.appendChild(ui.bg);
 
-        document.body.classList.toggle('ytm-custom-layout', shouldApply);
-        if (customBg) customBg.style.display = shouldApply ? 'block' : 'none';
-        if (customWrapper) customWrapper.style.display = shouldApply ? 'flex' : 'none';
-
-        if (shouldApply) {
-            setupProgressBarClone();
-        } else if (progressBarClone && progressBarClone.parentNode) {
-            progressBarClone.parentNode.removeChild(progressBarClone);
-            progressBarClone = null;
-        }
-
-        return shouldApply;
-    }
-
-    function setupLayout() {
-        if (!document.getElementById('ytm-custom-bg')) {
-            customBg = document.createElement('div');
-            customBg.id = 'ytm-custom-bg';
-            document.body.appendChild(customBg);
-        }
-        if (!document.getElementById('ytm-custom-wrapper')) {
-            customWrapper = document.createElement('div');
-            customWrapper.id = 'ytm-custom-wrapper';
-            document.body.appendChild(customWrapper);
-            
-            const customLeftCol = document.createElement('div');
-            customLeftCol.id = 'ytm-custom-left-col';
-            artworkContainer = document.createElement('div');
-            artworkContainer.id = 'ytm-artwork-container';
-            const infoArea = document.createElement('div');
-            infoArea.id = 'ytm-custom-info-area';
-            titleEl = document.createElement('div');
-            titleEl.id = 'ytm-custom-title';
-            artistEl = document.createElement('div');
-            artistEl.id = 'ytm-custom-artist';
-            
-            infoArea.appendChild(titleEl);
-            infoArea.appendChild(artistEl);
-            customLeftCol.appendChild(artworkContainer);
-            customLeftCol.appendChild(infoArea);
-            
-            lyricsContainer = document.createElement('div');
-            lyricsContainer.id = 'my-lyrics-container';
-            
-            customWrapper.appendChild(customLeftCol);
-            customWrapper.appendChild(lyricsContainer);
-        } else {
-            // Re-cache elements
-            customWrapper = document.getElementById('ytm-custom-wrapper');
-            lyricsContainer = document.getElementById('my-lyrics-container');
-            titleEl = document.getElementById('ytm-custom-title');
-            artistEl = document.getElementById('ytm-custom-artist');
-            artworkContainer = document.getElementById('ytm-artwork-container');
-            customBg = document.getElementById('ytm-custom-bg');
-        }
-    }
-
-    function updateLyricsUI(data) {
-        if (!lyricsContainer) return;
-        lyricsContainer.innerHTML = '';
-
-        data.forEach(line => {
-            const p = document.createElement('div');
-            p.className = 'lyric-line';
-            p.innerText = line.text;
-            p.onclick = () => { 
-                const v = document.querySelector('video'); 
-                if(v) v.currentTime = line.time; 
-            };
-            lyricsContainer.appendChild(p);
+        ui.wrapper = createEl('div', 'ytm-custom-wrapper');
+        const leftCol = createEl('div', 'ytm-custom-left-col');
+        
+        ui.artwork = createEl('div', 'ytm-artwork-container');
+        const info = createEl('div', 'ytm-custom-info-area');
+        ui.title = createEl('div', 'ytm-custom-title');
+        ui.artist = createEl('div', 'ytm-custom-artist');
+        
+        ui.btnArea = createEl('div', 'ytm-btn-area');
+        const btns = [
+            { txt: 'Upload', click: () => ui.input?.click() },
+            { txt: '🗑️', cls: 'icon-btn', click: () => currentKey && confirm('歌詞を消しますか？') && storage.remove([currentKey, currentKey+"_TR"]) && (currentKey=null) },
+            { txt: '⚙️', cls: 'icon-btn', click: () => { initSettings(); ui.settings.classList.toggle('active'); } }
+        ];
+        
+        btns.forEach(b => {
+            const btn = createEl('button', '', `ytm-glass-btn ${b.cls||''}`, b.txt);
+            btn.onclick = b.click;
+            ui.btnArea.appendChild(btn);
         });
-        lyricLines = lyricsContainer.querySelectorAll('.lyric-line');
-        // スクロールを先頭に設定（アクティブ行の自動スクロールより前に実行）
-        lyricsContainer.scrollTo(0, 0);
+
+        ui.input = createEl('input');
+        ui.input.type = 'file'; ui.input.accept = '.lrc,.txt'; ui.input.style.display = 'none';
+        ui.input.onchange = handleUpload;
+        document.body.appendChild(ui.input);
+
+        info.append(ui.title, ui.artist, ui.btnArea);
+        leftCol.append(ui.artwork, info);
+        
+        ui.lyrics = createEl('div', 'my-lyrics-container');
+        ui.wrapper.append(leftCol, ui.lyrics);
+        document.body.appendChild(ui.wrapper);
+
+
+        setupAutoHideEvents();
     }
 
-    function setupToggleButton() {
-        const rightControls = document.querySelector('.right-controls-buttons.style-scope.ytmusic-player-bar');
-        if (!rightControls) return;
-
-        let btn = document.getElementById('my-mode-toggle');
-
-        if (!btn) {
-            btn = document.createElement('button');
-            btn.id = 'my-mode-toggle';
-            btn.innerText = 'IMMERSION';
-            btn.onclick = () => {
-                isModeEnabled = !isModeEnabled;
-                applyLayout();
-            };
-            rightControls.prepend(btn);
+  
+    const tick = async () => {
+  
+        if (!document.getElementById('my-mode-toggle')) {
+            const rc = document.querySelector('.right-controls-buttons');
+            if (rc) {
+                const btn = createEl('button', 'my-mode-toggle', '', 'IMMERSION');
+                btn.onclick = () => { config.mode = !config.mode; document.body.classList.toggle('ytm-custom-layout', config.mode); };
+                rc.prepend(btn);
+            }
         }
+
+        const layout = document.querySelector('ytmusic-app-layout');
+        const isPlayerOpen = layout?.hasAttribute('player-page-open');
+        
+        if (!config.mode || !isPlayerOpen) {
+            document.body.classList.remove('ytm-custom-layout');
+            return;
+        }
+        
+        document.body.classList.add('ytm-custom-layout');
+        initLayout(); // Ensure UI exists
+
+        const meta = getMetadata();
+        if (!meta) return;
+
+        const key = `${meta.title}///${meta.artist}`;
+        if (currentKey !== key) {
+            currentKey = key;
+            updateMetaUI(meta);
+            loadLyrics(meta);
+        }
+    };
+
+    function updateMetaUI(meta) {
+        ui.title.innerText = meta.title;
+        ui.artist.innerText = meta.artist;
+        if (meta.src) {
+            ui.artwork.innerHTML = `<img src="${meta.src}" crossorigin="anonymous">`;
+            ui.bg.style.backgroundImage = `url(${meta.src})`;
+        }
+        ui.lyrics.innerHTML = '<div style="opacity:0.5; padding:20px;">Loading...</div>';
     }
 
-    function updateButtonStyle(btn) {
-        if (isModeEnabled) {
-            btn.style.cssText = `
-                opacity: 1; 
-                box-shadow: 0 0 10px rgba(255,255,255,0.5); 
-                background: #fff; 
-                color: #000; 
-                font-weight: bold;
-            `;
+    async function loadLyrics(meta) {
+  
+        if (!config.deepLKey) config.deepLKey = await storage.get('ytm_deepl_key');
+        const cachedTrans = await storage.get('ytm_trans_enabled');
+        if (cachedTrans !== undefined) config.useTrans = cachedTrans;
+
+   
+        let data = await storage.get(currentKey + "_TR") || await storage.get(currentKey);
+        
+      
+        if (!data) {
+            try {
+                const q = encodeURIComponent(`${meta.title} ${meta.artist}`.replace(/\s*[\(-\[].*?[\)-]].*/, ""));
+                const res = await fetch(`https://lrclib.net/api/search?q=${q}`).then(r => r.json());
+                const hit = res.find(i => i.syncedLyrics);
+                if (hit) data = hit.syncedLyrics;
+            } catch(e) { console.warn('LRCLib fetch failed'); }
+        }
+
+        if (!data) {
+            renderLyrics([]);
+            return;
+        }
+
+       
+        if (typeof data === 'string') { 
+            let parsed = parseLRC(data);
+            renderLyrics(parsed); 
+            
+      
+            if (config.useTrans && config.deepLKey) {
+                parsed = await translate(parsed);
+                storage.set(currentKey + "_TR", parsed); 
+            } else {
+                storage.set(currentKey, data); 
+            }
+            lyricsData = parsed;
+            renderLyrics(parsed);
         } else {
-            btn.style.cssText = `
-                opacity: 0.6; 
-                box-shadow: none; 
-                background: rgba(255,255,255,0.1); 
-                color: #fff; 
-                font-weight: normal;
-            `;
+           
+            lyricsData = data;
+            renderLyrics(data);
         }
     }
 
-    // --- Progress Bar Handle Clone ---
-    function setupProgressBarClone() {
-        const playerBar = document.querySelector('body.ytm-custom-layout ytmusic-player-bar');
-        if (!playerBar) return;
-
-        // 既存のクローンを削除
-        if (progressBarClone && progressBarClone.parentNode) {
-            progressBarClone.parentNode.removeChild(progressBarClone);
-        }
-
-        // スライダーハンドルを探す
-        const handle = playerBar.querySelector('[role="slider"] [class*="thumb"], [role="slider"] [class*="handle"], [class*="progress"] [class*="thumb"]');
-        if (!handle) return;
-
-        // ハンドルをクローン
-        progressBarClone = handle.cloneNode(true);
-        progressBarClone.id = 'ytm-progress-bar-clone';
-        progressBarClone.style.cssText = `
-            position: fixed !important;
-            pointer-events: none !important;
-            z-index: 301 !important;
-        `;
-
-        document.body.appendChild(progressBarClone);
-        syncProgressBarClone();
-    }
-
-    function syncProgressBarClone() {
-        if (!progressBarClone) return;
-
-        const playerBar = document.querySelector('body.ytm-custom-layout ytmusic-player-bar');
-        if (!playerBar) return;
-
-        const handle = playerBar.querySelector('[role="slider"] [class*="thumb"], [role="slider"] [class*="handle"], [class*="progress"] [class*="thumb"]');
-        if (!handle) return;
-
-        // ハンドルのスタイルをコピー
-        const rect = handle.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(handle);
-
-        progressBarClone.style.cssText = `
-            position: fixed !important;
-            pointer-events: none !important;
-            z-index: 301 !important;
-            top: ${rect.top}px !important;
-            left: ${rect.left}px !important;
-            width: ${rect.width}px !important;
-            height: ${rect.height}px !important;
-            background: ${computedStyle.background || computedStyle.backgroundColor} !important;
-            border-radius: ${computedStyle.borderRadius} !important;
-            box-shadow: ${computedStyle.boxShadow} !important;
-            transform: ${computedStyle.transform} !important;
-        `;
-    }
-
-    // --- Main Logic ---
-
-    function handleTimeUpdate(video) {
-        if (!document.body.classList.contains('ytm-custom-layout')) return;
-        if (!lyricsData || lyricsData.length === 0) return;
-
-        const currentTime = video.currentTime;
-
-        if (Date.now() - lastSongChangeTime < INIT_TIME) return; 
-
-        let activeIndex = -1;
-        for (let i = 0; i < lyricsData.length; i++) {
-            if (currentTime >= lyricsData[i].time) activeIndex = i; else break;
-        }
+    function renderLyrics(data) {
+        if (!ui.lyrics) return;
+        ui.lyrics.innerHTML = '';
+        document.body.classList.toggle('ytm-no-lyrics', !data.length);
         
-        if (activeIndex !== -1 && lyricLines[activeIndex]) {
-            const activeLine = lyricLines[activeIndex];
-            if (!activeLine.classList.contains('active')) {
-                lyricLines.forEach(l => l.classList.remove('active'));
-                activeLine.classList.add('active');
-                // 曲開始時はauto、以降はsmooth
-                const behavior = (activeIndex === 0) ? 'auto' : 'smooth';
-                // 次の描画フレームで実行してレイアウト確定後にスクロール
-                requestAnimationFrame(() => {
-                    activeLine.scrollIntoView({ behavior: behavior, block: "center" });
-                });
+        data.forEach(line => {
+            const row = createEl('div', '', 'lyric-line', `<span>${line.text}</span>`);
+            if (line.translation) row.appendChild(createEl('span', '', 'lyric-translation', line.translation));
+            row.onclick = () => document.querySelector('video').currentTime = line.time;
+            ui.lyrics.appendChild(row);
+        });
+    }
+
+    const handleUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file || !currentKey) return;
+        const r = new FileReader();
+        r.onload = (ev) => {
+            storage.set(currentKey, ev.target.result);
+            currentKey = null; // reload
+        };
+        r.readAsText(file);
+        e.target.value = '';
+    };
+
+    // Sync Logic
+    document.addEventListener('timeupdate', (e) => {
+        if (!document.body.classList.contains('ytm-custom-layout') || !lyricsData.length) return;
+        if (e.target.tagName !== 'VIDEO') return; 
+        
+        const t = e.target.currentTime;
+        let idx = lyricsData.findIndex(l => l.time > t) - 1;
+        if (idx < 0) idx = lyricsData[lyricsData.length - 1].time <= t ? lyricsData.length - 1 : -1;
+        
+        const current = lyricsData[idx];
+        const next = lyricsData[idx + 1];
+        const isInterlude = current && next && (next.time - current.time > 10) && (t - current.time > 6);
+
+        const rows = document.querySelectorAll('.lyric-line');
+        rows.forEach((r, i) => {
+            if (i === idx && !isInterlude) {
+                if (!r.classList.contains('active')) {
+                    r.classList.add('active');
+                    r.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            } else {
+                r.classList.remove('active');
             }
-        }
+        });
+    }, true);
 
-        // プログレスバーのクローンを常に同期
-        syncProgressBarClone();
-    }
-
-    async function checkSongAndFetch() {
-        const video = document.querySelector('video');
-        if (!video) return;
-        
-        setupLayout();
-        const isActive = applyLayout();
-        if (!isActive) return;
-
-        const info = getSongInfo();
-        if (!info || !info.title) return;
-        
-        const songId = `${info.title}///${info.artist}`;
-        
-        if (currentSongKey !== songId) {
-            currentSongKey = songId;
-            lastSongChangeTime = Date.now();
-
-            if(titleEl) titleEl.innerText = info.title;
-            if(artistEl) artistEl.innerText = info.artist;
-            if(info.artwork) {
-                if(artworkContainer) artworkContainer.innerHTML = `<img src="${info.artwork}" crossorigin="anonymous">`;
-                if(customBg) customBg.style.backgroundImage = `url(${info.artwork})`;
-            }
-            
-            lyricsData = [];
-            if(lyricsContainer) {
-                lyricsContainer.innerHTML = '<div class="lyric-line" style="opacity:0.5">Loading...</div>';
-                lyricsContainer.scrollTo(0, 0);
-            }
-            
-            const fetchedData = await fetchLyrics(info.title, info.artist);
-            
-            // 競合状態を防ぐため、fetch完了後に再度IDを確認
-            if (currentSongKey === songId) {
-                lyricsData = fetchedData;
-                updateLyricsUI(lyricsData);
-            }
-        }
-        
-        // timeupdateリスナーのセットアップ
-        if (!video.dataset.hasCustomListener) {
-            video.dataset.hasCustomListener = "true";
-            video.addEventListener('timeupdate', () => handleTimeUpdate(video));
-        }
-    }
-
-    function init() {
-        // トグルボタンとレイアウト状態の監視 (200ms間隔で即応性重視)
-        setInterval(() => {
-            setupToggleButton();
-            applyLayout();
-        }, 200);
-
-        // 曲情報の監視と歌詞のフェッチ (1000ms間隔)
-        setInterval(checkSongAndFetch, 1000);
-    }
-
-    init();
+    console.log("YTM Immersion loaded.");
+    setInterval(tick, 1000);
 })();

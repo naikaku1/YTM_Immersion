@@ -1,3 +1,16 @@
+/* === フォント読み込み === */
+@font-face {
+  font-family: "Inter";
+  src: url("../assets/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+}
+
+*{
+  font-family: 'SF Pro Display', 'Inter', 'Noto Sans JP';
+}
+
 /* === 既存レイアウト === */
 #ytm-custom-bg {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -54,8 +67,8 @@ body.ytm-custom-layout ytmusic-search-box {
     box-shadow: 0 20px 60px rgba(0,0,0,0.6); overflow: hidden; margin-bottom: 30px; 
 }
 #ytm-artwork-container img { width: 100%; height: 100%; object-fit: cover; }
-#ytm-custom-title { font-family: "SF Pro Display", sans-serif; font-size: 32px; font-weight: 900; color: #fff; margin-bottom: 8px; line-height: 1.2; text-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-#ytm-custom-artist { font-family: "SF Pro Display", sans-serif; font-size: 20px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 24px; }
+#ytm-custom-title { font-size: 32px; font-weight: 900; color: #fff; margin-bottom: 8px; line-height: 1.2; text-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+#ytm-custom-artist { font-size: 20px; font-weight: 600; color: rgba(255,255,255,0.7); margin-bottom: 24px; }
 
 #ytm-btn-area { 
     display: flex; gap: 10px; margin-top: 10px;
@@ -134,9 +147,9 @@ body.ytm-custom-layout ytmusic-search-box {
 #my-lyrics-container::-webkit-scrollbar { display: none; }
 
 .lyric-line {
-  font-family: "SF Pro Display", sans-serif;
   font-size: 32px;
   font-weight: 800;
+  letter-spacing: -0.05em;
   color: rgba(255,255,255,0.3);
   margin-bottom: 35px;
   cursor: pointer;

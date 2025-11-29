@@ -18,7 +18,7 @@
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
   background-size: cover; background-position: center center;
   z-index: 1000; background-color: #050505;
-  filter: blur(80px) brightness(0.5) saturate(140%);
+  filter: blur(80px) brightness(0.35) saturate(140%);
   transform: scale(1.1); pointer-events: none; display: none;
 }
 body.ytm-custom-layout #ytm-custom-bg { display: block !important; }
@@ -561,4 +561,10 @@ body.ytm-custom-layout.ytm-no-timestamp .lyric-line {
     color: #3ea6ff;
     text-decoration: none;
     border-bottom: 1px solid rgba(62, 166, 255, 0.3);
+}
+
+/* issue #13 Fix */
+body.ytm-custom-layout ytmusic-popup-container,
+body.ytm-custom-layout ytmusic-popup-container tp-yt-iron-dropdown {
+    z-index: 3000 !important;
 }

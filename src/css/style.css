@@ -991,6 +991,19 @@ body:not(.ytm-custom-layout) ytmusic-player-bar .right-controls .toggle-player-p
     left: 50% !important;
     transform: translateX(-50%) !important;
   }
+
+  body.ytm-custom-layout .ytm-upload-menu {
+    top: 52px;
+    bottom: auto;
+    right: 0;
+    transform-origin: top right;
+  }
+
+  body.ytm-custom-layout .ytm-confirm-dialog {
+    top: 52px;
+    bottom: auto;
+    right: 56px;
+    transform-origin: top right;
 }
 
 /* フォールバック通知トースト */

@@ -13,7 +13,8 @@
     uiLang: 'ja'
   };
 
-  const TEXTS = {
+  // フォールバック言語
+  const LOCAL_FALLBACK_TEXTS = {
     ja: {
       unit_hour: "時間",
       unit_minute: "分",
@@ -30,10 +31,10 @@
       replay_empty: "まだ再生データがありません...",
       replay_no_data_sub: "曲を聴くとここに表示されます",
       replay_reset_confirm: "本当に再生履歴を全て削除しますか？\nこの操作は取り消せません。",
-      
+
       replay_vibe: "あなたの雰囲気",
       replay_lyrics_heard: "累計行数",
-      
+
       settings_title: "設定",
       settings_ui_lang: "UI言語 / Language",
       settings_trans: "歌詞翻訳機能を使う",
@@ -42,42 +43,209 @@
       settings_save: "保存",
       settings_reset: "リセット",
       settings_saved: "設定を保存しました"
-    },
-    en: {
-      unit_hour: "h",
-      unit_minute: "m",
-      unit_second: "s",
-      replay_playTime: "Play Time",
-      replay_plays: "plays",
-      replay_topSong: "Top Song",
-      replay_topArtist: "Top Artist",
-      replay_obsession: "Most obsession",
-      replay_ranking: "Top Songs",
-      replay_today: "Today",
-      replay_week: "This Week",
-      replay_all: "All Time",
-      replay_empty: "No music played yet...",
-      replay_no_data_sub: "Play some music to see stats",
-      replay_reset_confirm: "Are you sure you want to clear all history?\nThis cannot be undone.",
-
-      replay_vibe: "Your Vibe",
-      replay_lyrics_heard: "Lyrics Heard",
-      
-      settings_title: "Settings",
-      settings_ui_lang: "UI Language",
-      settings_trans: "Use Translation",
-      settings_main_lang: "Main language",
-      settings_sub_lang: "Sub language",
-      settings_save: "Save",
-      settings_reset: "Reset",
-      settings_saved: "Saved"
     }
   };
 
+
+  let UI_TEXTS = null;
+
+
   const t = (key) => {
     const lang = config.uiLang || 'ja';
-    return TEXTS[lang][key] || TEXTS['en'][key] || key;
+    const table =
+      (UI_TEXTS && UI_TEXTS[lang]) ||
+      (UI_TEXTS && UI_TEXTS['ja']) ||
+      LOCAL_FALLBACK_TEXTS[lang] ||
+      LOCAL_FALLBACK_TEXTS['ja'] ||
+      {};
+    return table[key] || key;
   };
+
+
+  // ===================== UI 言語: リポ から取得 =====================
+
+  const REMOTE_TEXTS_URL =
+    'https://raw.githubusercontent.com/neco222/YouTube_Music-Moden-UI/main/src/lang/ui.json';
+
+  let remoteTextsLoaded = false;
+
+  // 言語コード
+  function getLangDisplayName(code) {
+    if (UI_TEXTS && UI_TEXTS[code]) {
+      const metaName = UI_TEXTS[code].lang_name || UI_TEXTS[code].__name;
+      if (metaName) return metaName;
+    }
+    if (code === 'ja') return '日本語';
+    if (code === 'en') return 'English';
+    if (code === 'ko') return '한국어';
+    return code;
+  }
+
+  function mergeRemoteTexts(remote) {
+    if (!remote || typeof remote !== 'object') return;
+    UI_TEXTS = remote;
+    remoteTextsLoaded = true;
+    refreshUiLangGroup();
+  }
+
+  // UI 言語ピルを TEXTS の中身から自動生成
+
+  let uiLangEtcClickSetup = false;
+  
+  function refreshUiLangGroup() {
+    const group = document.getElementById('ui-lang-group');
+    if (!group) return;
+  
+    const current = config.uiLang || 'ja';
+    group.innerHTML = '';
+  
+    // 利用可能な言語一覧
+    const langs = UI_TEXTS
+      ? Object.keys(UI_TEXTS)
+      : Object.keys(LOCAL_FALLBACK_TEXTS);
+  
+    if (!langs.length) return;
+  
+    const MAX_DIRECT = 3; // ここまでが普通のボタン
+    const directLangs = langs.slice(0, MAX_DIRECT);
+    const hasMore = langs.length > MAX_DIRECT;
+  
+    // ---- 直接ボタン（最大3つ） ----
+    directLangs.forEach((code) => {
+      const btn = document.createElement('button');
+      btn.className = 'ytm-lang-pill';
+      btn.dataset.value = code;
+      btn.textContent = getLangDisplayName(code);
+      group.appendChild(btn);
+    });
+  
+    // ---- etc... ボタン ＋ スクロールメニュー ----
+    if (hasMore) {
+      const etcBtn = document.createElement('button');
+      etcBtn.className = 'ytm-lang-pill ytm-lang-pill-etc';
+      etcBtn.dataset.value = '__etc__';
+      etcBtn.textContent = 'etc...';
+      group.appendChild(etcBtn);
+  
+      // メニュー本体（スクロール可能）
+      let menu = document.getElementById('ui-lang-etc-menu');
+      if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'ui-lang-etc-menu';
+        menu.className = 'ytm-lang-etc-menu';
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '2147483647';
+        menu.style.maxHeight = '260px';
+        menu.style.overflowY = 'auto';
+        menu.style.borderRadius = '8px';
+        menu.style.padding = '6px';
+        menu.style.background = 'rgba(0,0,0,0.9)';
+        menu.style.border = '1px solid rgba(255,255,255,0.2)';
+        menu.style.minWidth = '160px';
+        menu.style.display = 'none';
+        document.body.appendChild(menu);
+      }
+  
+      // メニュー中身を作り直す（無制限）
+      menu.innerHTML = '';
+      langs.forEach((code) => {
+        const item = document.createElement('button');
+        item.className = 'ytm-lang-etc-item';
+        item.textContent = getLangDisplayName(code);
+        item.dataset.code = code;
+        item.style.display = 'block';
+        item.style.width = '100%';
+        item.style.textAlign = 'left';
+        item.style.border = 'none';
+        item.style.background = 'transparent';
+        item.style.padding = '4px 6px';
+        item.style.cursor = 'pointer';
+        item.style.color = '#fff';
+        item.style.fontSize = '12px';
+  
+        if (code === current) {
+          item.style.fontWeight = '600';
+          item.style.background = 'rgba(255,255,255,0.08)';
+        }
+  
+        item.addEventListener('click', () => {
+          config.uiLang = code;
+          if (storage && storage.set) {
+            storage.set('ytm_ui_lang', code);
+          }
+          menu.style.display = 'none';
+          refreshUiLangGroup(); // 選択後にラベルやアクティブ状態を更新
+        });
+  
+        menu.appendChild(item);
+      });
+  
+      // etc ボタンでメニュー開閉
+      etcBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const rect = etcBtn.getBoundingClientRect();
+        menu.style.left = `${rect.left}px`;
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+      });
+  
+      // 現在の言語が directLangs にない場合は etc ボタンをハイライト
+      if (!directLangs.includes(current)) {
+        etcBtn.classList.add('active');
+        etcBtn.textContent = getLangDisplayName(current);
+      }
+  
+      // 外側クリックでメニューを閉じる（1回だけ設定）
+      if (!uiLangEtcClickSetup) {
+        uiLangEtcClickSetup = true;
+        document.addEventListener('click', (ev) => {
+          if (!menu) return;
+          if (ev.target === menu || menu.contains(ev.target)) return;
+          const btn = document.querySelector('.ytm-lang-pill-etc');
+          if (btn && (ev.target === btn || btn.contains(ev.target))) return;
+          menu.style.display = 'none';
+        }, true);
+      }
+    }
+  
+    // ---- 直接ボタンの active 切り替え＆クリック処理 ----
+    const activeForDirect = directLangs.includes(current) ? current : '';
+    setupLangPills('ui-lang-group', activeForDirect, (v) => {
+      if (!v || v === '__etc__') return; // etc はここでは何もしない
+      config.uiLang = v;
+      if (storage && storage.set) {
+        storage.set('ytm_ui_lang', v);
+      }
+    });
+  }
+
+
+  // GitHub から TEXTS を読む
+  async function loadRemoteTextsFromGithub() {
+    try {
+      const res = await fetch(REMOTE_TEXTS_URL, { cache: 'no-store' });
+      if (!res.ok) {
+        console.warn('[UI TEXTS] HTTP error:', res.status);
+        return;
+      }
+      const raw = await res.text();
+
+      let obj = null;
+      try {
+        // ui.json は純粋な JSON
+        obj = JSON.parse(raw);
+      } catch (e) {
+        console.warn('[UI TEXTS] JSON.parse failed for ui.json', e);
+        return;
+      }
+
+      mergeRemoteTexts(obj);
+      console.log('[UI TEXTS] remote languages loaded:', Object.keys(obj));
+    } catch (e) {
+      console.warn('[UI TEXTS] failed to load remote texts:', e);
+    }
+  }
+
 
   const NO_LYRICS_SENTINEL = '__NO_LYRICS__';
 
@@ -1963,8 +2131,6 @@
       <div class="setting-item ytm-lang-section">
         <div class="ytm-lang-label">${t('settings_ui_lang')}</div>
         <div class="ytm-lang-group" id="ui-lang-group">
-          <button class="ytm-lang-pill" data-value="ja">日本語</button>
-          <button class="ytm-lang-pill" data-value="en">English</button>
         </div>
       </div>
 
@@ -2001,24 +2167,30 @@
       </div>
     `);
     document.body.appendChild(ui.settings);
-    (async () => {
-      if (!config.deepLKey) config.deepLKey = await storage.get('ytm_deepl_key');
-      const cachedTrans = await storage.get('ytm_trans_enabled');
-      if (cachedTrans !== null && cachedTrans !== undefined) config.useTrans = cachedTrans;
-      const mainLangStored = await storage.get('ytm_main_lang');
-      const subLangStored = await storage.get('ytm_sub_lang');
-      if (mainLangStored) config.mainLang = mainLangStored;
-      if (subLangStored !== null && subLangStored !== undefined) config.subLang = subLangStored;
-      const uiLangStored = await storage.get('ytm_ui_lang');
-      if (uiLangStored) config.uiLang = uiLangStored;
 
-      document.getElementById('deepl-key-input').value = config.deepLKey || '';
-      document.getElementById('trans-toggle').checked = config.useTrans;
-      
-      setupLangPills('main-lang-group', config.mainLang, v => { config.mainLang = v; });
-      setupLangPills('sub-lang-group', config.subLang, v => { config.subLang = v; });
-      setupLangPills('ui-lang-group', config.uiLang || 'ja', v => { config.uiLang = v; });
-    })();
+(async () => {
+  // ★ 追加：設定パネル初期化時にも GitHub から取得
+  await loadRemoteTextsFromGithub();
+
+  if (!config.deepLKey) config.deepLKey = await storage.get('ytm_deepl_key');
+  const cachedTrans = await storage.get('ytm_trans_enabled');
+  if (cachedTrans !== null && cachedTrans !== undefined) config.useTrans = cachedTrans;
+  const mainLangStored = await storage.get('ytm_main_lang');
+  const subLangStored = await storage.get('ytm_sub_lang');
+  if (mainLangStored) config.mainLang = mainLangStored;
+  if (subLangStored !== null && subLangStored !== undefined) config.subLang = subLangStored;
+  const uiLangStored = await storage.get('ytm_ui_lang');
+  if (uiLangStored) config.uiLang = uiLangStored;
+
+  document.getElementById('deepl-key-input').value = config.deepLKey || '';
+  document.getElementById('trans-toggle').checked = config.useTrans;
+
+  setupLangPills('main-lang-group', config.mainLang, v => { config.mainLang = v; });
+  setupLangPills('sub-lang-group', config.subLang, v => { config.subLang = v; });
+
+  refreshUiLangGroup();
+})();
+
     document.getElementById('save-settings-btn').onclick = () => {
       config.deepLKey = document.getElementById('deepl-key-input').value.trim();
       config.useTrans = document.getElementById('trans-toggle').checked;
@@ -2131,7 +2303,24 @@
     };
 
     const trashBtnConfig = { txt: '🗑️', cls: 'icon-btn', click: () => { } };
-    const settingsBtnConfig = { txt: '⚙️', cls: 'icon-btn', click: () => { initSettings(); ui.settings.classList.toggle('active'); } };
+    const settingsBtnConfig = {
+  txt: '⚙️',
+  cls: 'icon-btn',
+  click: async () => {
+    // パネルがなければ一度だけ生成
+    initSettings();
+
+    // ★ ここで毎回 GitHub の ui.json を取りに行く
+    await loadRemoteTextsFromGithub();
+
+    // 取得した UI_TEXTS をもとに言語ピルを作り直す
+    refreshUiLangGroup();
+
+    // パネルの開閉
+    ui.settings.classList.toggle('active');
+  }
+};
+
 
     btns.push(lyricsBtnConfig, shareBtnConfig, replayBtnConfig, trashBtnConfig, settingsBtnConfig);
 
@@ -2727,6 +2916,8 @@
   ReplayManager.init();
   QueueManager.init();
   CloudSync.init();
+
+  loadRemoteTextsFromGithub();
 
   console.log('YTM Immersion loaded.');
   setInterval(tick, 1000);

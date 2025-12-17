@@ -8,7 +8,10 @@ const DEFAULT_CLOUD_STATE = {
   lastSyncInfo: null,
 };
 
-const SHARED_TRANSLATE_ENDPOINT = 'http://immersionproject.coreone.work/api/translate';
+const SHARED_TRANSLATE_ENDPOINTS = [
+  'http://immersionproject.coreone.work/api/translate',
+  'http://immersionproject.coreone.work/api/translate/'
+];
 
 
 function loadCloudState() {
@@ -490,30 +493,68 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     };
 
     const fetchSharedJson = async (payload) => {
-      const res = await withTimeout(
-        fetch(SHARED_TRANSLATE_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }),
-        20000,
-        'shared translate timeout'
-      );
+      const tryFetch = async (url, init, label) => {
+        const res = await withTimeout(fetch(url, init), 20000, label || 'shared translate timeout');
+        const rawText = await res.text().catch(() => '');
+        let data = null;
+        try {
+          data = rawText ? JSON.parse(rawText) : null;
+        } catch (e) {
+          // JSON 以外でも data は null のまま
+        }
+        if (!res.ok) {
+          const msg = (data && (data.error || data.message)) ? (data.error || data.message) : (rawText || res.statusText);
+          throw new Error(`shared translate http ${res.status}: ${msg}`);
+        }
+        if (!data || (data.ok !== undefined && !data.ok)) {
+          const msg = (data && (data.error || data.message)) ? (data.error || data.message) : 'invalid response';
+          throw new Error(`shared translate: ${msg}`);
+        }
+        return data;
+      };
 
-      const rawText = await res.text().catch(() => '');
-      let data;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch (e) {
-        throw new Error(`Shared translate: invalid JSON (${res.status})`);
+      const jsonInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      };
+
+      let lastErr = null;
+
+      // 1) JSON で両方の URL を試す（/ の有無でリダイレクトが起きる環境対策）
+      for (const url of SHARED_TRANSLATE_ENDPOINTS) {
+        try {
+          return await tryFetch(url, jsonInit, 'shared translate timeout');
+        } catch (e) {
+          lastErr = e;
+        }
       }
 
-      if (!res.ok || !data || data.ok !== true) {
-        const hint = data && (data.error || data.message) ? (data.error || data.message) : rawText;
-        throw new Error(`Shared translate failed: ${res.status} ${hint || res.statusText}`);
+      // 2) それでも駄目な場合、プリフライト回避用にフォーム送信も試す（サーバーが受ければ動く）
+      //    ※ Content-Type を application/json にしない（simple request）
+      const formBody = new URLSearchParams();
+      if (Array.isArray(payload.text)) {
+        // バッチはフォーム送信だと仕様が不明なので個別に任せる
+        throw lastErr || new Error('shared translate failed');
       }
-      return data;
-    };
+      formBody.set('text', String(payload.text ?? ''));
+      formBody.set('target_lang', String(payload.target_lang ?? ''));
+      const formInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: formBody.toString(),
+      };
+
+      for (const url of SHARED_TRANSLATE_ENDPOINTS) {
+        try {
+          return await tryFetch(url, formInit, 'shared translate timeout');
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
+      throw lastErr || new Error('shared translate failed');
+    };;
 
     const translateViaShared = async () => {
       const toTranslations = (arr) => arr.map(v => ({ text: (v ?? '').toString() }));

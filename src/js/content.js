@@ -41,7 +41,7 @@
       settings_title: "設定",
       settings_ui_lang: "UI言語 / Language",
       settings_trans: "歌詞翻訳機能を使う",
-      settings_shared_trans: "共有翻訳を使う",
+      settings_shared_trans: "共有翻訳を使う（APIキー不要）",
       settings_main_lang: "メイン言語 (大きく表示)",
       settings_sub_lang: "サブ言語 (小さく表示)",
       settings_save: "保存",
@@ -49,6 +49,14 @@
       settings_saved: "設定を保存しました",
       settings_sync_offset: "歌詞同期オフセット",
       settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
+    }
+  ,
+    en: {
+      settings_shared_trans: "Use shared translation (no API key)",
+      settings_trans: "Use lyrics translation",
+      settings_save: "Save settings",
+      settings_title: "Settings",
+      settings_saved: "Settings saved",
     }
   };
 
@@ -66,13 +74,12 @@
       (UI_TEXTS && UI_TEXTS['ja']) ||
       null;
 
-    const localTable =
-      LOCAL_FALLBACK_TEXTS[lang] ||
-      LOCAL_FALLBACK_TEXTS['ja'] ||
-      {};
+    const localLangTable = LOCAL_FALLBACK_TEXTS[lang] || {};
+    const localJaTable = LOCAL_FALLBACK_TEXTS['ja'] || {};
 
     if (remoteTable && remoteTable[key]) return remoteTable[key];
-    if (localTable && localTable[key]) return localTable[key];
+    if (localLangTable && localLangTable[key]) return localLangTable[key];
+    if (localJaTable && localJaTable[key]) return localJaTable[key];
     return key;
   };
 
@@ -1671,11 +1678,11 @@
     
     // タイムスタンプがない場合
     if (!tagTest.test(lrc)) {
+      // 空行も保持して、翻訳時に行が詰まらないようにする
       const lines = lrc.split(/\r?\n/).map(line => {
-        const text = line.replace(/^\s+|\s+$/g, '');
-        // ★修正: テキストが空なら null を返す
-        return text ? { time: null, text } : null;
-      }).filter(Boolean); // ★修正: null (空行) を配列から消す
+        const text = (line ?? '').replace(/^\s+|\s+$/g, '');
+        return { time: null, text };
+      });
       return { lines, hasTs: false };
     }
 
@@ -1697,11 +1704,12 @@
         const rawText = lrc.slice(lastIndex, match.index);
         const cleaned = rawText.replace(/\r?\n/g, ' ');
         const text = cleaned.trim();
-        // ★修正: テキストがある場合だけ追加する (空行無視)
-        if (text) {
+        // ★修正: 空行(明示的な改行のみ)も保持してタイムスタンプのズレを防ぐ
+        const hasLineBreak = /[\r\n]/.test(rawText);
+        if (text || hasLineBreak) {
             result.push({ time: lastTime, text });
         }
-      }
+}
       lastTime = time;
       lastIndex = tagExp.lastIndex;
     }
@@ -1711,11 +1719,12 @@
       const rawText = lrc.slice(lastIndex);
       const cleaned = rawText.replace(/\r?\n/g, ' ');
       const text = cleaned.trim();
-      // ★修正: ここもテキストがある場合だけ追加
-      if (text) {
+      // ★修正: 空行(明示的な改行のみ)も保持してタイムスタンプのズレを防ぐ
+      const hasLineBreak = /[\r\n]/.test(rawText);
+      if (text || hasLineBreak) {
           result.push({ time: lastTime, text });
       }
-    }
+}
     
     result.sort((a, b) => (a.time || 0) - (b.time || 0));
     return { lines: result, hasTs: true };
@@ -1921,17 +1930,37 @@
     if ((!config.deepLKey && !config.useSharedTranslateApi) || !lines.length) return null;
     const targetLang = resolveDeepLTargetLang(langCode);
     try {
-      const baseTexts = lines.map(l => l.text || '');
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage(
-          { type: 'TRANSLATE', payload: { text: baseTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: config.useSharedTranslateApi } },
-          resolve
-        );
-      });
-      if (!res?.success || !Array.isArray(res.translations) || res.translations.length !== lines.length) {
-        return null;
+      const baseTexts = lines.map(l => (l && l.text !== undefined && l.text !== null) ? String(l.text) : '');
+      // 空行は翻訳APIへ送らず、行数だけ保持してタイムスタンプのズレを防ぐ
+      const mapIdx = [];
+      const requestTexts = [];
+      for (let i = 0; i < baseTexts.length; i++) {
+        const t = baseTexts[i];
+        if ((t || '').trim()) {
+          mapIdx.push(i);
+          requestTexts.push(t);
+        }
       }
-      let translated = res.translations.map(t => t.text || '');
+
+      let translated = new Array(lines.length).fill('');
+
+      if (requestTexts.length) {
+        const res = await new Promise(resolve => {
+          chrome.runtime.sendMessage(
+            { type: 'TRANSLATE', payload: { text: requestTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: config.useSharedTranslateApi } },
+            resolve
+          );
+        });
+
+        if (!res?.success || !Array.isArray(res.translations) || res.translations.length !== requestTexts.length) {
+          return null;
+        }
+
+        for (let i = 0; i < mapIdx.length; i++) {
+          const tr = res.translations[i];
+          translated[mapIdx[i]] = (tr && tr.text) ? tr.text : '';
+        }
+      }
       const fallbackIndexes = [];
       for (let i = 0; i < lines.length; i++) {
         const src = baseTexts[i];
@@ -2125,6 +2154,26 @@
       const arr = transLinesByLang[lang];
       const res = new Array(baseLines.length).fill(null);
       if (!Array.isArray(arr) || !arr.length) {
+        alignedMap[lang] = res;
+        return;
+      }
+      const hasAnyTime = arr.some(x => x && typeof x.time === 'number');
+      if (!hasAnyTime) {
+        // タイムスタンプ無しの翻訳は「空行を消費しない」方式で合わせる
+        let k = 0;
+        for (let i = 0; i < baseLines.length; i++) {
+          const baseTextRaw = (baseLines[i]?.text ?? '');
+          const isEmptyBaseLine = typeof baseTextRaw === 'string' && baseTextRaw.trim() === '';
+          if (isEmptyBaseLine) { res[i] = ''; continue; }
+          const cand = arr[k];
+          if (cand && typeof cand.text === 'string') {
+            const trimmed = cand.text.trim();
+            res[i] = trimmed === '' ? '' : trimmed;
+          } else {
+            res[i] = '';
+          }
+          k++;
+        }
         alignedMap[lang] = res;
         return;
       }
@@ -2575,13 +2624,6 @@
           <span>${t('settings_shared_trans')}</span>
           <input type="checkbox" id="shared-trans-toggle">
         </label>
-<span>
-  文字数増加の協力お願いします（
-  <a href="https://immersionproject.coreone.work/" target="_blank" rel="noopener noreferrer">
-    こちら
-  </a>
-  ）。
-</span>
       </div>
 
       <div class="setting-item ytm-lang-section">
@@ -2657,11 +2699,13 @@
       const savedSubLang = await storage.get('ytm_sub_lang');
       const savedUseTrans = await storage.get('ytm_trans_enabled');
       const savedSharedTrans = await storage.get('ytm_shared_trans_enabled');
+      const savedUiLang = await storage.get('ytm_ui_lang');
 
       const prevMainLang = savedMainLang || 'original';
       const prevSubLang = savedSubLang !== null ? savedSubLang : 'en'; 
       const prevUseTrans = savedUseTrans !== null ? savedUseTrans : true;
       const prevUseSharedTrans = savedSharedTrans !== null ? savedSharedTrans : false;
+      const prevUiLang = savedUiLang || (config.uiLang || 'ja');
 
       config.deepLKey = document.getElementById('deepl-key-input').value.trim();
       config.useTrans = document.getElementById('trans-toggle').checked;
@@ -2692,7 +2736,8 @@
           prevMainLang !== config.mainLang ||
           prevSubLang !== config.subLang ||
           prevUseTrans !== config.useTrans ||
-          prevUseSharedTrans !== config.useSharedTranslateApi
+          prevUseSharedTrans !== config.useSharedTranslateApi ||
+          prevUiLang !== config.uiLang
       );
 
       if (needReload) {

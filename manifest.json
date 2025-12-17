@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTM-Immersion",
-  "version": "0.9.3",
+  "version": "0.9.3-001",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",

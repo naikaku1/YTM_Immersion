@@ -1178,6 +1178,99 @@
   const QueueManager = {
     observer: null,
 
+
+    // ===== Next-song lyrics prefetch (always) =====
+    _prefetchLastAt: new Map(),
+    _prefetchInFlight: new Set(),
+    PREFETCH_DEDUP_MS: 6000,
+
+    _extractVideoIdFromQueueItem: function(queueItem) {
+      try {
+        const a =
+          queueItem.querySelector('a[href*="watch"]') ||
+          queueItem.querySelector('a[href*="youtu"]') ||
+          queueItem.querySelector('a');
+        const href = a ? (a.href || a.getAttribute('href')) : null;
+        if (!href) return null;
+        const u = new URL(href, location.origin);
+        // /watch?v=...
+        const v = u.searchParams.get('v');
+        if (v) return v;
+        // youtu.be/<id>
+        if (u.hostname.includes('youtu.be')) {
+          const parts = (u.pathname || '').split('/').filter(Boolean);
+          return parts[0] || null;
+        }
+      } catch (e) {}
+      return null;
+    },
+
+    _prefetchLyrics: function(meta) {
+      const title = (meta && meta.title) ? String(meta.title).trim() : '';
+      const artist = (meta && meta.artist) ? String(meta.artist).trim() : '';
+      if (!title) return;
+
+      const key = `${title}///${artist}`;
+      const now = Date.now();
+
+      const last = this._prefetchLastAt.get(key) || 0;
+      if (now - last < this.PREFETCH_DEDUP_MS) return;
+      if (this._prefetchInFlight.has(key)) return;
+
+      this._prefetchLastAt.set(key, now);
+      this._prefetchInFlight.add(key);
+
+      const videoId = meta && meta.videoId ? meta.videoId : null;
+      const youtubeUrl = meta && meta.youtubeUrl ? meta.youtubeUrl : (videoId ? `https://youtu.be/${videoId}` : null);
+
+      console.log('[Queue] Prefetch(next) lyrics:', title, '/', artist);
+
+      chrome.runtime.sendMessage({
+        type: 'GET_LYRICS',
+        payload: {
+          track: title,
+          artist: artist,
+          youtube_url: youtubeUrl,
+          video_id: videoId,
+        }
+      }, (res) => {
+        this._prefetchInFlight.delete(key);
+
+        // Don't overwrite existing good cache on transient failures
+        if (!res || !res.success) return;
+
+        const lyr = (res.lyrics || '');
+        if (typeof lyr === 'string' && lyr.trim()) {
+          storage.set(key, {
+            lyrics: lyr,
+            dynamicLines: res.dynamicLines || null,
+            candidates: res.candidates || null,
+            fetchedAt: Date.now(),
+          }).then(() => {
+            // Refresh highlight instantly if the panel is open
+            if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
+              this.syncQueue();
+            }
+          });
+        }
+      });
+    },
+
+    _applyLoadedLyricsHighlight: function(row, key) {
+      if (!row || !key) return;
+      storage.get(key).then(cached => {
+        if (!row.isConnected) return;
+        const lyr = cached && typeof cached.lyrics === 'string' ? cached.lyrics : '';
+        const ok = lyr && lyr.trim() && lyr !== NO_LYRICS_SENTINEL;
+        if (!ok) return;
+
+        // Slight glowing yellow-green border
+        row.dataset.lyricsLoaded = '1';
+        row.style.border = '1px solid rgba(190, 255, 110, 0.65)';
+        row.style.boxShadow = '0 0 0 1px rgba(190, 255, 110, 0.20), 0 0 14px rgba(190, 255, 110, 0.14)';
+        row.style.borderRadius = row.style.borderRadius || '12px';
+      });
+    },
     init: function () {
       if (ui.queuePanel) return;
       const trigger = createEl('div', 'ytm-queue-trigger');
@@ -1275,26 +1368,9 @@
         
        
         if (idx === 1) {
-            const prefetchKey = `${title}///${artist}`;
-            storage.get(prefetchKey).then(cached => {
-                if (!cached) {
-                    console.log('[Queue] Prefetching lyrics for:', title);
-                    chrome.runtime.sendMessage({ 
-                        type: 'GET_LYRICS', 
-                        payload: { track: title, artist: artist } 
-                    }, (res) => {
-                  
-                        if (res && res.success && res.lyrics) {
-                            storage.set(prefetchKey, {
-                                lyrics: res.lyrics,
-                                dynamicLines: res.dynamicLines || null,
-                                candidates: res.candidates || null,
-                            
-                            });
-                        }
-                    });
-                }
-            });
+            const videoId = this._extractVideoIdFromQueueItem(item);
+            const youtubeUrl = videoId ? `https://youtu.be/${videoId}` : null;
+            this._prefetchLyrics({ title, artist, videoId, youtubeUrl });
         }
         // ★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
@@ -1340,6 +1416,8 @@
         };
 
         container.appendChild(row);
+
+        this._applyLoadedLyricsHighlight(row, uniqueKey);
       });
     }
   };

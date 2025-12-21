@@ -96,7 +96,14 @@ body.ytm-custom-layout ytmusic-app-layout>[slot="nav-bar"],
 body.ytm-custom-layout #browse-page,
 body.ytm-custom-layout #player-page,
 body.ytm-custom-layout #main-panel,
-body.ytm-custom-layout .side-panel {
+body.ytm-custom-layout .side-panel,
+body.ytm-custom-layout tp-yt-app-drawer,
+body.ytm-custom-layout #nav-drawer,
+body.ytm-custom-layout ytmusic-pivot-bar-renderer,
+body.ytm-custom-layout [role="navigation"],
+body.ytm-custom-layout .ytmusic-nav-bar[is-bauhaus-sidenav-enabled] .left-content,
+body.ytm-custom-layout ytmusic-guide-renderer {
+  display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -1068,6 +1075,70 @@ body:not(.ytm-custom-layout) ytmusic-multi-page-menu-renderer {
     bottom: auto;
     right: 56px;
     transform-origin: top right;
+  }
+}
+
+/* ===== 横幅ベースのレスポンシブ対応 ===== */
+
+/* 中くらいの画面（1200px以下）：要素を少し縮小 */
+@media (max-width: 1200px) {
+  body.ytm-custom-layout #ytm-custom-left-col {
+    width: 320px;
+  }
+
+  body.ytm-custom-layout #my-lyrics-container {
+    width: 450px;
+  }
+
+  body.ytm-custom-layout .lyric-line {
+    font-size: 28px;
+  }
+}
+
+/* 狭い画面（900px以下）：縦並びレイアウトに切り替え */
+@media (max-width: 900px) {
+  body.ytm-custom-layout #ytm-custom-wrapper {
+    flex-direction: column;
+    gap: 20px;
+    padding: 80px 24px 140px 24px;
+    align-items: center;
+  }
+
+  body.ytm-custom-layout #ytm-custom-left-col {
+    width: 100%;
+    max-width: 500px;
+    flex-direction: row;
+    gap: 16px;
+    align-items: center;
+  }
+
+  body.ytm-custom-layout #ytm-artwork-container {
+    width: 80px;
+    height: 80px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  body.ytm-custom-layout #ytm-custom-title {
+    font-size: 20px;
+    text-align: left;
+  }
+
+  body.ytm-custom-layout #ytm-custom-artist {
+    font-size: 14px;
+    text-align: left;
+    margin-bottom: 8px;
+  }
+
+  body.ytm-custom-layout #my-lyrics-container {
+    width: 100%;
+    max-width: 500px;
+    height: 55vh;
+  }
+
+  body.ytm-custom-layout .lyric-line {
+    font-size: 24px;
+    padding-left: 20px;
   }
 }
 

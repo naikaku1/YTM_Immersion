@@ -363,10 +363,20 @@ const fetchFromGithub = (video_id) => {
   const url = `https://raw.githubusercontent.com/LRCHub/${video_id}/main/README.md`;
   return fetch(url)
     .then(r => (r.ok ? r.text() : ''))
-    .then(text => (text || '').trim())
+    .then(text => {
+      if (!text) return '';
+      
+      return text
+        .split('\n')
+        .filter(line => !line.trim().startsWith('#'))      
+                .filter(line => !line.trim().startsWith('>'))      
+        .filter(line => !line.trim().startsWith('```'))    
+        .filter(line => !line.includes('歌詞登録ステータス')) 
+        .join('\n')
+        .trim();
+    })
     .catch(err => '');
 };
-
 const extractVideoIdFromUrl = (youtube_url) => {
   if (!youtube_url) return null;
   try {

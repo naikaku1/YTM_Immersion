@@ -359,24 +359,99 @@ const fetchFromLrchub = (track, artist, youtube_url, video_id) => {
 };
 
 const fetchFromGithub = (video_id) => {
-  if (!video_id) return Promise.resolve('');
-  const url = `https://raw.githubusercontent.com/LRCHub/${video_id}/main/README.md`;
-  return fetch(url)
-    .then(r => (r.ok ? r.text() : ''))
-    .then(text => {
-      if (!text) return '';
-      
-      return text
-        .split('\n')
-        .filter(line => !line.trim().startsWith('#'))      
-                .filter(line => !line.trim().startsWith('>'))      
-        .filter(line => !line.trim().startsWith('```'))    
-        .filter(line => !line.includes('歌詞登録ステータス')) 
-        .join('\n')
-        .trim();
+  if (!video_id) return Promise.resolve({ lyrics: '', dynamicLines: null });
+
+  const base = `https://raw.githubusercontent.com/LRCHub/${video_id}/main`;
+
+  const normalizeDynamicLines = (json) => {
+    if (!json) return null;
+    if (Array.isArray(json.lines)) return json.lines;
+    if (json.dynamic_lyrics && Array.isArray(json.dynamic_lyrics.lines)) return json.dynamic_lyrics.lines;
+    if (json.response && json.response.dynamic_lyrics && Array.isArray(json.response.dynamic_lyrics.lines)) return json.response.dynamic_lyrics.lines;
+    return null;
+  };
+
+  const buildLrcFromDynamic = (lines) => {
+    if (!Array.isArray(lines) || !lines.length) return '';
+    const lrcLines = lines
+      .map(line => {
+        let ms = null;
+
+        if (typeof line.startTimeMs === 'number') {
+          ms = line.startTimeMs;
+        } else if (typeof line.startTimeMs === 'string') {
+          const n = Number(line.startTimeMs);
+          if (!Number.isNaN(n)) ms = n;
+        } else if (Array.isArray(line.chars) && line.chars.length) {
+          const ts = line.chars
+            .map(c => (typeof c.t === 'number' ? c.t : null))
+            .filter(v => v != null);
+          if (ts.length) ms = Math.min(...ts);
+        }
+
+        if (ms == null) return null;
+
+        let textLine = '';
+        if (typeof line.text === 'string' && line.text.length) {
+          textLine = line.text;
+        } else if (Array.isArray(line.chars)) {
+          textLine = line.chars.map(c => c.c || c.text || c.caption || '').join('');
+        }
+
+        textLine = (textLine || '').trim();
+        const timeTag = `[${formatLrcTime(ms / 1000)}]`;
+        return textLine ? `${timeTag} ${textLine}` : timeTag;
+      })
+      .filter(Boolean);
+
+    return lrcLines.join('\n').trim();
+  };
+
+  // 1) DynamicLyrics.json を最優先
+  const dynUrl = `${base}/DynamicLyrics.json`;
+  return fetch(dynUrl)
+    .then(async (r) => {
+      if (!r.ok) return null;
+      try {
+        return await r.json();
+      } catch (e) {
+        return null;
+      }
     })
-    .catch(err => '');
+    .then(json => {
+      const lines = normalizeDynamicLines(json);
+      if (lines && lines.length) {
+        const lyrics = buildLrcFromDynamic(lines);
+        if (lyrics) return { lyrics, dynamicLines: lines };
+      }
+      return null;
+    })
+    .catch(() => null)
+    .then(dynRes => {
+      if (dynRes && dynRes.lyrics) return dynRes;
+
+      // 2) README.md (タイムスタンプ/プレーン)
+      const readmeUrl = `${base}/README.md`;
+      return fetch(readmeUrl)
+        .then(r => (r.ok ? r.text() : ''))
+        .then(text => {
+          if (!text) return { lyrics: '', dynamicLines: null };
+
+          const body = text
+            .split('\n')
+            .filter(line => !line.trim().startsWith('#'))
+            .filter(line => !line.trim().startsWith('>'))
+            .filter(line => !line.trim().startsWith('```'))
+            .filter(line => !line.includes('歌詞登録ステータス'))
+            .join('\n')
+            .trim();
+
+          return { lyrics: body, dynamicLines: null };
+        })
+        .catch(() => ({ lyrics: '', dynamicLines: null }));
+    });
 };
+
 const extractVideoIdFromUrl = (youtube_url) => {
   if (!youtube_url) return null;
   try {
@@ -774,12 +849,18 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       }
 
       // C. GitHub
-      if (gitRes && !gitRes.error && gitRes.data && typeof gitRes.data === 'string' && gitRes.data.trim()) {
+      if (
+        gitRes &&
+        !gitRes.error &&
+        gitRes.data &&
+        typeof gitRes.data.lyrics === 'string' &&
+        gitRes.data.lyrics.trim()
+      ) {
         console.log('[BG] Won: GitHub');
         sendResponse({
           success: true,
-          lyrics: gitRes.data,
-          dynamicLines: null,
+          lyrics: gitRes.data.lyrics,
+          dynamicLines: gitRes.data.dynamicLines || null,
           hasSelectCandidates: hasCandidates,
           candidates: sharedCandidates,
           config: sharedConfig,
@@ -838,39 +919,78 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 
   if (req.type === 'GET_TRANSLATION') {
-    const { youtube_url, video_id, lang, langs } = req.payload;
-    try {
-      const url = new URL('https://lrchub.coreone.work/api/translation');
-      if (youtube_url) url.searchParams.set('youtube_url', youtube_url);
-      else if (video_id) url.searchParams.set('video_id', video_id);
+    const payload = req.payload || {};
+    const { youtube_url, video_id, lang, langs } = payload;
 
+    (async () => {
       const reqLangs = Array.isArray(langs) && langs.length ? langs : (lang ? [lang] : []);
-      reqLangs.forEach(l => url.searchParams.append('lang', l));
+      if (!reqLangs.length) {
+        sendResponse({ success: true, lrcMap: {}, missing: [] });
+        return;
+      }
 
-      fetch(url.toString(), { method: 'GET' })
-        .then(r => r.text())
-        .then(text => {
-          let lrcMap = {};
-          let missing = [];
+      const vid = video_id || extractVideoIdFromUrl(youtube_url);
+      const lrcMap = {};
+      const missingSet = new Set();
+
+      // 1) GitHub translation/<lang>.txt を最優先で試す
+      if (vid) {
+        await Promise.all(reqLangs.map(async (l) => {
+          const url = `https://raw.githubusercontent.com/LRCHub/${vid}/main/translation/${l}.txt`;
+          try {
+            const r = await fetch(url, { cache: 'no-store' });
+            if (!r.ok) return;
+            const text = (await r.text()) || '';
+            if (text.trim()) {
+              lrcMap[l] = text;
+            }
+          } catch (e) {
+          }
+        }));
+      }
+
+      const remaining = reqLangs.filter(l => !(l in lrcMap));
+
+      // 2) まだ無いものだけ LRCHub API にフォールバック
+      if (remaining.length) {
+        try {
+          const url = new URL('https://lrchub.coreone.work/api/translation');
+          if (youtube_url) url.searchParams.set('youtube_url', youtube_url);
+          else if (video_id) url.searchParams.set('video_id', video_id);
+          else if (vid) url.searchParams.set('video_id', vid);
+
+          remaining.forEach(l => url.searchParams.append('lang', l));
+
+          const text = await fetch(url.toString(), { method: 'GET' }).then(r => r.text());
           try {
             const json = JSON.parse(text);
-            const translations = json.translations || {};
-            lrcMap = {};
-            reqLangs.forEach(l => {
-              lrcMap[l] = translations[l] || '';
-            });
-            missing = json.missing_langs || [];
+            if (json && json.lrc_map) {
+              Object.keys(json.lrc_map).forEach(k => {
+                if (!lrcMap[k] && json.lrc_map[k]) lrcMap[k] = json.lrc_map[k];
+              });
+            }
+            const missing = json.missing_langs || [];
+            missing.forEach(m => missingSet.add(m));
           } catch (e) {
-            lrcMap = {};
+            // JSON parse failed -> treat as missing
+            remaining.forEach(m => missingSet.add(m));
           }
-          sendResponse({ success: true, lrcMap, missing });
-        })
-        .catch(err => sendResponse({ success: false, error: err.toString() }));
-    } catch (e) {
-      sendResponse({ success: false, error: e.toString() });
-    }
+        } catch (e) {
+          remaining.forEach(m => missingSet.add(m));
+        }
+      }
+
+      // GitHub + API どちらにも無かった lang を missing に入れる
+      reqLangs.forEach(l => {
+        if (!lrcMap[l]) missingSet.add(l);
+      });
+
+      sendResponse({ success: true, lrcMap, missing: Array.from(missingSet) });
+    })().catch(err => sendResponse({ success: false, error: String(err) }));
+
     return true;
   }
+
 
   if (req.type === 'REGISTER_TRANSLATION') {
     const { youtube_url, video_id, lang, lyrics } = req.payload;

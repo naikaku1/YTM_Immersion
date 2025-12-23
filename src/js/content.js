@@ -188,7 +188,7 @@
       settings_saved: "設定を保存しました",
       settings_sync_offset: "歌詞同期オフセット",
       settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
-      settings_fast_mode: "高速読み込みモード (カバー曲の精度は下がります)"
+      settings_fast_mode: "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)"
     },
     en: {
       unit_hour: "hours",
@@ -3361,41 +3361,147 @@
     }
     if (!data && !noLyricsCached) {
       let gotLyrics = false;
-      
 
       if (config.fastMode) {
-        console.log('🚀 Fast Mode: Fetching for', meta.title);
-        try {
-          // 直接 LrcLib API を叩く 
-          const q = encodeURIComponent(meta.title + ' ' + meta.artist);
-          const res = await fetch(`https://lrclib.net/api/search?q=${q}`);
-          const list = await res.json();
-          
-          // 曲の長さ(秒)を取得して、誤差5秒以内の候補を探す
-          const video = document.querySelector('video');
-          const duration = video ? video.duration : 0;
-          const match = list.find(t => Math.abs(t.duration - duration) < 5);
+        console.log('🚀 Fast Mode: Fetching from GitHub for', meta.title);
 
-          if (match) {
-            console.log('🚀 Fast Mode Hit:', match.name);
-            // 歌詞があれば即適用して関数を終了（これ以降の重い処理はスキップ）
-            await applyLyricsText(match.syncedLyrics || match.plainLyrics);
-            
-            // キャッシュにも保存しておく
-            if (thisKey === currentKey) {
-              storage.set(thisKey, {
-                lyrics: match.syncedLyrics || match.plainLyrics,
-                dynamicLines: null, 
-                noLyrics: false
-              });
+        const video_id_fast = getCurrentVideoId();
+        if (video_id_fast) {
+          const GH_BASE = `https://raw.githubusercontent.com/LRCHub/${video_id_fast}/main`;
+
+          const safeFetchText = async (url) => {
+            try {
+              const r = await fetch(url, { cache: 'no-store' });
+              if (!r.ok) return '';
+              return (await r.text()) || '';
+            } catch (e) {
+              return '';
             }
-            return; 
+          };
+
+          const safeFetchJson = async (url) => {
+            try {
+              const r = await fetch(url, { cache: 'no-store' });
+              if (!r.ok) return null;
+              return await r.json();
+            } catch (e) {
+              return null;
+            }
+          };
+
+          const extractLyricsFromReadme = (text) => {
+            if (!text) return '';
+            // README に ``` が入っている場合は、最初のコードブロックだけを優先
+            const m = text.match(/```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```/);
+            let body = m ? m[1] : text;
+
+            return body
+              .split('\n')
+              .filter(line => !line.trim().startsWith('#'))
+              .filter(line => !line.trim().startsWith('>'))
+              .filter(line => !line.trim().startsWith('```'))
+              .filter(line => !line.includes('歌詞登録ステータス'))
+              .join('\n')
+              .trim();
+          };
+
+          const normalizeDynamicLines = (json) => {
+            if (!json) return null;
+            if (Array.isArray(json.lines)) return json.lines;
+            if (json.dynamic_lyrics && Array.isArray(json.dynamic_lyrics.lines)) return json.dynamic_lyrics.lines;
+            if (json.response && json.response.dynamic_lyrics && Array.isArray(json.response.dynamic_lyrics.lines)) return json.response.dynamic_lyrics.lines;
+            return null;
+          };
+
+          const formatLrcTimeLocal = (sec) => {
+            sec = Math.max(0, Number(sec) || 0);
+            const m = Math.floor(sec / 60);
+            const s = sec - (m * 60);
+            const ss = Math.floor(s);
+            const xx = Math.floor((s - ss) * 100);
+            return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}.${String(xx).padStart(2, '0')}`;
+          };
+
+          const buildLrcFromDynamic = (lines) => {
+            if (!Array.isArray(lines) || !lines.length) return '';
+            const out = [];
+            for (const line of lines) {
+              let ms = null;
+
+              if (typeof line.startTimeMs === 'number') {
+                ms = line.startTimeMs;
+              } else if (typeof line.startTimeMs === 'string') {
+                const n = Number(line.startTimeMs);
+                if (!Number.isNaN(n)) ms = n;
+              } else if (Array.isArray(line.chars) && line.chars.length) {
+                const ts = line.chars
+                  .map(c => (typeof c.t === 'number' ? c.t : null))
+                  .filter(v => v != null);
+                if (ts.length) ms = Math.min(...ts);
+              }
+
+              if (ms == null) continue;
+
+              let textLine = '';
+              if (typeof line.text === 'string' && line.text.length) {
+                textLine = line.text;
+              } else if (Array.isArray(line.chars)) {
+                textLine = line.chars.map(c => c.c || c.text || c.caption || '').join('');
+              }
+
+              textLine = (textLine || '').trim();
+              const tag = `[${formatLrcTimeLocal(ms / 1000)}]`;
+              out.push(textLine ? `${tag} ${textLine}` : tag);
+            }
+            return out.join('\n').trim();
+          };
+
+          try {
+            // 1) DynamicLyrics を最優先
+            const dynJson = await safeFetchJson(`${GH_BASE}/DynamicLyrics.json`);
+            const dynLines = normalizeDynamicLines(dynJson);
+
+            if (dynLines && dynLines.length) {
+              const built = buildLrcFromDynamic(dynLines);
+              if (built) {
+                dynamicLines = dynLines;
+                await applyLyricsText(built);
+
+                if (thisKey === currentKey) {
+                  storage.set(thisKey, {
+                    lyrics: built,
+                    dynamicLines: dynLines,
+                    noLyrics: false,
+                    githubFallback: true
+                  });
+                }
+                return;
+              }
+            }
+
+            // 2) README (タイムスタンプ or プレーン) を取得
+            const readme = await safeFetchText(`${GH_BASE}/README.md`);
+            const lyricsText = extractLyricsFromReadme(readme);
+
+            if (lyricsText) {
+              await applyLyricsText(lyricsText);
+
+              if (thisKey === currentKey) {
+                storage.set(thisKey, {
+                  lyrics: lyricsText,
+                  dynamicLines: null,
+                  noLyrics: false,
+                  githubFallback: true
+                });
+              }
+              return;
+            }
+          } catch (e) {
+            console.error('Fast mode GitHub error:', e);
           }
-        } catch (e) {
-          console.error('Fast mode error:', e);
         }
       }
-      
+
       try {
         const track = meta.title.replace(/\s*[\(-\[].*?[\)-]].*/, '');
         const artist = meta.artist;

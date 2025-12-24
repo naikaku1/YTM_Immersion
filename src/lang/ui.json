@@ -28,7 +28,7 @@
     "settings_saved": "設定を保存しました",
     "settings_sync_offset": "歌詞同期オフセット",
     "settings_sync_offset_save": "曲が切り替わったときにオフセットをリセットしない",
-    "settings_fast_mode": "高速読み込みモード (カバー曲の精度は下がります)"
+    "settings_fast_mode": "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)"
   },
   "en": {
     "unit_hour": "hours",
@@ -59,7 +59,7 @@
     "settings_saved": "Settings saved",
     "settings_sync_offset": "Lyrics sync offset",
     "settings_sync_offset_save": "Don't reset offset when the song changes",
-    "settings_fast_mode": "Fast Load Mode (May reduce accuracy for covers)"
+    "settings_fast_mode": "Fast Load Mode (May reduce accuracy for covers)"]
   },
   "ko": {
     "unit_hour": "시간",

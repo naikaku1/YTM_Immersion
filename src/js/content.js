@@ -2535,6 +2535,15 @@
         }
       }
 
+      // dynamic: char-timed lines can arrive later (GitHub) even if lyrics came from API
+      if (Array.isArray(p.dynamicLines) && p.dynamicLines.length) {
+        dynamicLines = p.dynamicLines;
+        // re-render to attach per-char spans while keeping current lines/translations
+        if (Array.isArray(lyricsData) && lyricsData.length) {
+          renderLyrics(lyricsData);
+        }
+      }
+
       // candidates/config が更新されたらメニューを再描画
       refreshCandidateMenu();
       refreshLockMenu();
@@ -3848,9 +3857,78 @@ const withRandomCacheBusterFast = (url) => {
           };
 
           try {
-            // 1) DynamicLyrics を最優先
-            const dynJson = await safeFetchJson(`${GH_BASE}/DynamicLyrics.json`);
-            const dynLines = normalizeDynamicLines(dynJson);
+            // 1) Dynamic.lrc を最優先（1文字タイムタグ）
+            const parseLrcTimeToMsLocal = (ts) => {
+              const s = String(ts || '').trim();
+              const mm = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
+              if (!mm) return null;
+              const m = parseInt(mm[1], 10);
+              const sec = parseInt(mm[2], 10);
+              let frac = mm[3] || '0';
+              if (frac.length === 1) frac = frac + '00';
+              else if (frac.length === 2) frac = frac + '0';
+              const ms = parseInt(frac.slice(0, 3), 10);
+              if (!Number.isFinite(m) || !Number.isFinite(sec) || !Number.isFinite(ms)) return null;
+              return (m * 60 + sec) * 1000 + ms;
+            };
+
+            const parseDynamicLrcLocal = (text) => {
+              const out = [];
+              if (!text) return out;
+              const rows = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+              for (const raw of rows) {
+                const line = raw.trimEnd();
+                if (!line) continue;
+                const m = line.match(/^\[(\d+:\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
+                if (!m) continue;
+
+                const lineMs = parseLrcTimeToMsLocal(m[1]);
+                const rest = m[2] || '';
+
+                const chars = [];
+                const tagRe = /<(\d+:\d{2}(?:\.\d{1,3})?)>/g;
+
+                let prevMs = null;
+                let prevEnd = 0;
+
+                while (true) {
+                  const mm = tagRe.exec(rest);
+                  if (!mm) break;
+
+                  const tagMs = parseLrcTimeToMsLocal(mm[1]);
+                  if (prevMs != null) {
+                    const chunk = rest.slice(prevEnd, mm.index);
+                    if (chunk) {
+                      for (const ch of Array.from(chunk)) {
+                        chars.push({ t: prevMs, c: ch });
+                      }
+                    }
+                  }
+                  prevMs = tagMs;
+                  prevEnd = mm.index + mm[0].length;
+                }
+
+                if (prevMs != null) {
+                  const chunk = rest.slice(prevEnd);
+                  if (chunk) {
+                    for (const ch of Array.from(chunk)) {
+                      chars.push({ t: prevMs, c: ch });
+                    }
+                  }
+                }
+
+                const textLine = chars.map(c => c.c).join('');
+                out.push({
+                  startTimeMs: (typeof lineMs === 'number' ? lineMs : (chars.length ? chars[0].t : 0)),
+                  text: textLine,
+                  chars,
+                });
+              }
+              return out;
+            };
+
+            const dynText = await safeFetchText(`${GH_BASE}/Dynamic.lrc`);
+            const dynLines = parseDynamicLrcLocal(dynText);
 
             if (dynLines && dynLines.length) {
               const built = buildLrcFromDynamic(dynLines);
@@ -3871,7 +3949,8 @@ const withRandomCacheBusterFast = (url) => {
               }
             }
 
-            // 2) README (タイムスタンプ or プレーン) を取得
+            // 2) README
+            // (タイムスタンプ or プレーン) を取得
             const readme = await safeFetchText(`${GH_BASE}/README.md`);
             const lyricsText = extractLyricsFromReadme(readme);
 

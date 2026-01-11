@@ -407,19 +407,95 @@ const fetchFromGithub = (video_id) => {
 
   const base = `https://raw.githubusercontent.com/LRCHub/${video_id}/main`;
   const __cacheBuster = (1000 + Math.floor(Math.random() * 9000));
+  const bust = (url) => withRandomCacheBuster(url, __cacheBuster);
+
+  const safeFetchText = async (url) => {
+    try {
+      const r = await fetch(bust(url), { cache: 'no-store' });
+      if (!r.ok) return '';
+      return (await r.text()) || '';
+    } catch (e) {
+      return '';
+    }
+  };
 
   // duet: optional sub vocal LRC (only lines that should be shown on the right)
-  const subUrl = `${base}/sub.txt`;
-  const pSub = fetch(withRandomCacheBuster(subUrl, __cacheBuster), { cache: 'no-store' })
-    .then(r => (r.ok ? r.text() : ''))
-    .catch(() => '');
+  const pSub = safeFetchText(`${base}/sub.txt`);
 
-  const normalizeDynamicLines = (json) => {
-    if (!json) return null;
-    if (Array.isArray(json.lines)) return json.lines;
-    if (json.dynamic_lyrics && Array.isArray(json.dynamic_lyrics.lines)) return json.dynamic_lyrics.lines;
-    if (json.response && json.response.dynamic_lyrics && Array.isArray(json.response.dynamic_lyrics.lines)) return json.response.dynamic_lyrics.lines;
-    return null;
+  const parseLrcTimeToMs = (ts) => {
+    const s = String(ts || '').trim();
+    // mm:ss.xx or mm:ss.xxx
+    const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
+    if (!m) return null;
+    const mm = parseInt(m[1], 10);
+    const ss = parseInt(m[2], 10);
+    let frac = m[3] || '0';
+    if (frac.length === 1) frac = frac + '00';
+    else if (frac.length === 2) frac = frac + '0';
+    const ms = parseInt(frac.slice(0, 3), 10);
+    if (!Number.isFinite(mm) || !Number.isFinite(ss) || !Number.isFinite(ms)) return null;
+    return (mm * 60 + ss) * 1000 + ms;
+  };
+
+  // Dynamic.lrc format:
+  // [00:00.56]<00:00.56>無<00:00.68>敵...
+  const parseDynamicLrc = (text) => {
+    const out = [];
+    if (!text) return out;
+
+    const lines = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      if (!line) continue;
+
+      const m = line.match(/^\[(\d+:\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
+      if (!m) continue;
+
+      const lineMs = parseLrcTimeToMs(m[1]);
+      const rest = m[2] || '';
+
+      const chars = [];
+      const tagRe = /<(\d+:\d{2}(?:\.\d{1,3})?)>/g;
+
+      let prevMs = null;
+      let prevEnd = 0;
+
+      while (true) {
+        const mm = tagRe.exec(rest);
+        if (!mm) break;
+
+        const tagMs = parseLrcTimeToMs(mm[1]);
+        if (prevMs != null) {
+          const chunk = rest.slice(prevEnd, mm.index);
+          if (chunk) {
+            for (const ch of Array.from(chunk)) {
+              chars.push({ t: prevMs, c: ch });
+            }
+          }
+        }
+        prevMs = tagMs;
+        prevEnd = mm.index + mm[0].length;
+      }
+
+      if (prevMs != null) {
+        const chunk = rest.slice(prevEnd);
+        if (chunk) {
+          for (const ch of Array.from(chunk)) {
+            chars.push({ t: prevMs, c: ch });
+          }
+        }
+      }
+
+      const textLine = chars.map(c => c.c).join('');
+
+      out.push({
+        startTimeMs: (typeof lineMs === 'number' ? lineMs : (chars.length ? chars[0].t : 0)),
+        text: textLine,
+        chars,
+      });
+    }
+
+    return out;
   };
 
   const buildLrcFromDynamic = (lines) => {
@@ -458,53 +534,39 @@ const fetchFromGithub = (video_id) => {
     return lrcLines.join('\n').trim();
   };
 
-  // 1) DynamicLyrics.json を最優先
-  const dynUrl = `${base}/DynamicLyrics.json`;
-  return fetch(withRandomCacheBuster(dynUrl, __cacheBuster), { cache: 'no-store' })
-    .then(async (r) => {
-      if (!r.ok) return null;
-      try {
-        return await r.json();
-      } catch (e) {
-        return null;
-      }
-    })
-    .then(json => {
-      const lines = normalizeDynamicLines(json);
-      if (lines && lines.length) {
-        const lyrics = buildLrcFromDynamic(lines);
-        if (lyrics) return { lyrics, dynamicLines: lines };
-      }
-      return null;
-    })
-    .catch(() => null)
-    .then(async (dynRes) => {
-      const subLyrics = (await pSub) || '';
+  const extractLyricsFromReadme = (text) => {
+    if (!text) return '';
+    const m = String(text).match(/```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```/);
+    const body = m ? m[1] : String(text);
 
-      if (dynRes && dynRes.lyrics) {
-        return { ...dynRes, subLyrics };
-      }
+    return body
+      .split('\n')
+      .filter(line => !line.trim().startsWith('#'))
+      .filter(line => !line.trim().startsWith('>'))
+      .filter(line => !line.trim().startsWith('```'))
+      .filter(line => !line.includes('歌詞登録ステータス'))
+      .join('\n')
+      .trim();
+  };
 
-      // 2) README.md (タイムスタンプ/プレーン)
-      const readmeUrl = `${base}/README.md`;
-      return fetch(withRandomCacheBuster(readmeUrl, __cacheBuster), { cache: 'no-store' })
-        .then(r => (r.ok ? r.text() : ''))
-        .then(text => {
-          if (!text) return { lyrics: '', dynamicLines: null, subLyrics };
+  return (async () => {
+    const subLyrics = (await pSub) || '';
 
-          const body = text
-            .split('\n')
-            .filter(line => !line.trim().startsWith('#'))
-            .filter(line => !line.trim().startsWith('>'))
-            .filter(line => !line.trim().startsWith('```'))
-            .filter(line => !line.includes('歌詞登録ステータス'))
-            .join('\n')
-            .trim();
+    // 1) Dynamic.lrc (char-timed) を最優先
+    const dynText = await safeFetchText(`${base}/Dynamic.lrc`);
+    const dynLines = parseDynamicLrc(dynText);
 
-          return { lyrics: body, dynamicLines: null, subLyrics };
-        })
-        .catch(() => ({ lyrics: '', dynamicLines: null, subLyrics }));
-    });
+    if (dynLines && dynLines.length) {
+      const lyrics = buildLrcFromDynamic(dynLines);
+      if (lyrics && lyrics.trim()) return { lyrics, dynamicLines: dynLines, subLyrics };
+    }
+
+    // 2) README.md (タイムスタンプ/プレーン)
+    const readme = await safeFetchText(`${base}/README.md`);
+    const lyrics = extractLyricsFromReadme(readme);
+
+    return { lyrics: lyrics || '', dynamicLines: null, subLyrics };
+  })();
 };;
 
 const extractVideoIdFromUrl = (youtube_url) => {
@@ -960,6 +1022,15 @@ if (req.type === 'GET_CLOUD_STATE') {
         try {
           if (gitRes && !gitRes.error && gitRes.data && typeof gitRes.data.subLyrics === 'string' && gitRes.data.subLyrics.trim()) {
             pushMetaUpdate({ video_id: vidForGit, subLyrics: gitRes.data.subLyrics });
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // dynamic: char-timed lines can arrive later via GitHub even when LRCHub won first
+        try {
+          if (gitRes && !gitRes.error && gitRes.data && Array.isArray(gitRes.data.dynamicLines) && gitRes.data.dynamicLines.length) {
+            pushMetaUpdate({ video_id: vidForGit, dynamicLines: gitRes.data.dynamicLines });
           }
         } catch (e) {
           // ignore

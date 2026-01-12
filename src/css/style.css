@@ -516,7 +516,7 @@ body.ytm-custom-layout ytmusic-search-box {
   overflow-wrap: anywhere;
   word-break: keep-all;
   text-wrap: balance;
-  white-space: normal;
+  white-space: pre-wrap;
 }
 
 

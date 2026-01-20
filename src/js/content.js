@@ -2633,7 +2633,7 @@
           }));
           transLinesByLang[lang] = lines;
           const plain = translatedTexts.join('\n');
-          if (plain.trim() && !isFallbackLyrics) {
+          if (plain.trim()) {
             chrome.runtime.sendMessage({
               type: 'REGISTER_TRANSLATION',
               payload: { youtube_url: youtubeUrl, lang, lyrics: plain }

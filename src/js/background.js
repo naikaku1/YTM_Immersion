@@ -856,10 +856,13 @@ if (req.type === 'GET_CLOUD_STATE') {
     const translateViaShared = async () => {
       const toTranslations = (arr) => arr.map(v => ({ text: (v ?? '').toString() }));
 
-      // まずバッチを試す（サーバーが配列対応していれば最速）
+      // ★修正: 個別リクエストへのフォールバック (pMap) を完全に削除し、一括送信のみを行う
       try {
+        // 全行をまとめて送信
         const data = await fetchSharedJson({ text: texts, target_lang: target });
-        if (Array.isArray(data.text) && data.text.length === texts.length) {
+
+        // パターン1: { text: ["訳文1", "訳文2"...] } の形式
+        if (Array.isArray(data.text)) {
           return {
             translations: toTranslations(data.text),
             detected_source_language: data.detected_source_language || null,
@@ -867,7 +870,9 @@ if (req.type === 'GET_CLOUD_STATE') {
             plan: data.plan || null,
           };
         }
-        if (Array.isArray(data.translations) && data.translations.length === texts.length) {
+
+        // パターン2: { translations: [{text: "訳文1"}, ...] } の形式
+        if (Array.isArray(data.translations)) {
           const mapped = data.translations.map(x => ({ text: (x && x.text !== undefined ? x.text : x) ?? '' }));
           return {
             translations: mapped,
@@ -876,7 +881,9 @@ if (req.type === 'GET_CLOUD_STATE') {
             plan: data.plan || null,
           };
         }
-        if (typeof data.text === 'string' && texts.length === 1) {
+
+        // パターン3: 単一の文字列 (リクエストが1行だった場合など)
+        if (typeof data.text === 'string') {
           return {
             translations: [{ text: data.text }],
             detected_source_language: data.detected_source_language || null,
@@ -884,41 +891,15 @@ if (req.type === 'GET_CLOUD_STATE') {
             plan: data.plan || null,
           };
         }
-        // 想定外の形なら個別へフォールバック
+
+        // 想定外のフォーマット
+        throw new Error('Invalid response format from shared API');
+
       } catch (e) {
-        // バッチ失敗 → 個別へ
+        // バッチ失敗時はエラーを投げ、上位の DeepL フォールバックを作動させる
+        console.warn('[BG] Shared batch translation failed:', e);
+        throw e;
       }
-
-      // 個別リクエスト（サーバーが "text: string" 前提でも動く）
-      const pMap = async (arr, mapper, concurrency = 5) => {
-        const results = new Array(arr.length);
-        let i = 0;
-        const workers = Array.from({ length: Math.min(concurrency, arr.length) }, async () => {
-          while (true) {
-            const idx = i++;
-            if (idx >= arr.length) break;
-            results[idx] = await mapper(arr[idx], idx);
-          }
-        });
-        await Promise.all(workers);
-        return results;
-      };
-
-      const perItem = await pMap(
-        texts,
-        async (t) => fetchSharedJson({ text: t ?? '', target_lang: target }),
-        5
-      );
-
-      const translated = perItem.map(d => (d && d.text !== undefined ? d.text : ''));
-
-      const meta = perItem.find(Boolean) || {};
-      return {
-        translations: toTranslations(translated),
-        detected_source_language: meta.detected_source_language || null,
-        engine: meta.engine || 'shared',
-        plan: meta.plan || null,
-      };
     };
 
     (async () => {

@@ -974,7 +974,7 @@ tp-yt-paper-toast.style-scope {
   background: rgba(30, 30, 30, 0.5) !important;
   backdrop-filter: blur(20px) saturate(180%) !important;
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
-  border-radius: 10px !important; 
+  border-radius: 10px !important;
   transform: translateY(0px) !important; /* 下から上に行くアニメーションをオーバーライド */
   margin-top: -20px !important;
   left:1vh !important;

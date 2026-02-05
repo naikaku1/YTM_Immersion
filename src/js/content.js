@@ -2495,7 +2495,7 @@
       pusher(switcher);
       const video = document.querySelector("ytmusic-player#player");
       pusher(video);
-      const navBar = document.querySelector("ytmusic-nav-bar")
+      const navBar = document.querySelector("ytmusic-nav-bar");
       pusher(navBar);
 
       classTargets.forEach(element => {

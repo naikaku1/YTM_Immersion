@@ -5286,31 +5286,53 @@ function updateMetaUI(meta) {
   const maxRetries = 5;
   const trySetArtistLink = () => {
     const bylineWrapper = document.querySelector('ytmusic-player-bar yt-formatted-string.byline.complex-string');
-    const artistLinkEl = bylineWrapper ? bylineWrapper.querySelector('a.yt-simple-endpoint') : null;
+    if (!bylineWrapper) {
+      retryCount++;
+      if (retryCount < maxRetries) {
+        setTimeout(trySetArtistLink, 300);
+      } else {
+        ui.artist.innerText = meta.artist; // フォールバック
+      }
+      return;
+    }
 
-    if (artistLinkEl && artistLinkEl.href) {
-      const channelUrl = artistLinkEl.href;
-        ui.artist.innerHTML = `<a href="${channelUrl}" 
+    const artistLinks = Array.from(
+      bylineWrapper.querySelectorAll('a.yt-simple-endpoint')
+    ).filter(a => {
+      const href = a.href || '';
+      return href.includes('channel/') || href.includes('/channel/');
+    });
+
+    if (artistLinks.length > 0) {
+      let artistHTML = '';
+
+      artistLinks.forEach((link, index) => {
+        const name = link.textContent.trim();
+        const url = link.href;
+
+        artistHTML += `<a href="${url}" 
           style="color:inherit; text-decoration:none;"
           target="_blank">
-          ${meta.artist}
+          ${name}
         </a>`;
+        if (index < artistLinks.length - 1) {
+          artistHTML += ' • ';
+        }
+      });
+      ui.artist.innerHTML = artistHTML;
       return;
     }
 
     retryCount++;
     if (retryCount < maxRetries) {
       setTimeout(trySetArtistLink, 300);
-    } else { // URL失敗時
+    } else {
       ui.artist.innerText = meta.artist;
     }
   };
 
-  trySetArtistLink();
+trySetArtistLink();
 }
-  
-  
-  
 
   (async function applySavedVisualSettings() {
     // 1. 歌詞の太さ

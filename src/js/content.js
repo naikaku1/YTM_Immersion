@@ -4399,7 +4399,6 @@ const withRandomCacheBusterFast = (url) => {
           };
 
           try {
-            // 1) Dynamic.lrc を最優先（1文字タイムタグ）
             const parseLrcTimeToMsLocal = (ts) => {
               const s = String(ts || '').trim();
               const mm = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
@@ -4542,8 +4541,7 @@ const withRandomCacheBusterFast = (url) => {
               }
             }
 
-            // 2) README
-            // (タイムスタンプ or プレーン) を取得
+
             const readme = await safeFetchText(`${GH_BASE}/README.md`);
             const lyricsText = extractLyricsFromReadme(readme);
 
@@ -4604,7 +4602,7 @@ const withRandomCacheBusterFast = (url) => {
             });
           }
         } else {
-          //console.warn('Lyrics API returned no lyrics or success=false');
+
         }
       } catch (e) {
         console.error('GET_LYRICS failed', e);
@@ -4624,9 +4622,82 @@ const withRandomCacheBusterFast = (url) => {
     await applyLyricsText(data);
   }
 
+const optimizeLineBreaks = (text) => {
+    if (!text) return '';
 
+    const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+    const segments = Array.from(segmenter.segment(text));
 
-function renderLyrics(data) {
+    let html = '';
+    let buffer = '';
+
+    const rules = {
+      suffixes: new Set([
+        'て', 'に', 'を', 'は', 'が', 'の', 'へ', 'と', 'も', 'で', 'や', 'し', 'から', 'より', 'だけ', 'まで', 'こそ', 'さえ', 'でも', 'など', 'なら', 'くらい', 'ぐらい', 'ばかり',
+        'ね', 'よ', 'な', 'さ', 'わ', 'ぞ', 'ぜ', 'かしら', 'かな', 'かも', 'だし', 'もん', 'もの',
+        'って', 'けど', 'けれど', 'のに', 'ので', 'から', 'ため', 'よう', 'こと', 'もの', 'わけ', 'ほう', 'ところ', 'とおり',
+        'た', 'だ', 'ない', 'たい', 'ます', 'ません', 'う', 'よう', 'れる', 'られる', 'せる', 'させる', 'ん', 'ず',
+        'てた', 'てる', 'ちゃう', 'じゃん', 'なきゃ', 'なくちゃ', 'く', 'き', 'けれ', 'れば',
+        'った', 'たら', 'たり',
+        'か', 'かい', 'だい', 'いる', 'ある', 'くる', 'いく', 'みる', 'おく', 'しまう', 'ほしい', 'あげる', 'くれる', 'もらう',
+        '、', '。', '，', '．', '…', '・', '！', '？', '!', '?', '~', '～', '“', '”', '‘', '’', ')', ']', '}', '」', '』', '】', '）'
+      ]),
+
+      isEnglish: (w) => /^[a-zA-Z0-9'\-\.,!?:;]+$/.test(w),
+      isSpace: (w) => /^\s+$/.test(w),
+      isOpenParen: (w) => /^[\(\[\{「『（【]$/.test(w),
+      hasKanji: (w) => /[\u4E00-\u9FFF]/.test(w),
+      isHiragana: (w) => /^[\u3040-\u309F\u30FC]+$/.test(w),
+      isKatakana: (w) => /^[\u30A0-\u30FF\u30FC]+$/.test(w),
+      startsWithSmallKana: (w) => /^[\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308E\u3095\u3096]/.test(w)
+    };
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const word = seg.segment;
+      const next = segments[i + 1];
+
+      buffer += word;
+
+      if (!next) {
+        html += `<span class="lyric-phrase">${buffer}</span>`;
+        break;
+      }
+
+      const nextWord = next.segment;
+      let shouldMerge = false;
+
+      if (rules.startsWithSmallKana(nextWord)) {
+        shouldMerge = true;
+      }
+      else if (rules.suffixes.has(nextWord)) {
+         if (!rules.isOpenParen(nextWord)) {
+           shouldMerge = true;
+         }
+      }
+
+      else if (rules.hasKanji(word) && rules.isHiragana(nextWord)) {
+        shouldMerge = true;
+      }
+      else if (rules.isKatakana(word) && rules.isKatakana(nextWord)) {
+        shouldMerge = true;
+      }
+      else if ((rules.isEnglish(word) || rules.isSpace(word)) && 
+               (rules.isEnglish(nextWord) || rules.isSpace(nextWord))) {
+        shouldMerge = true;
+      }
+
+      if (shouldMerge) {
+        continue;
+      }
+
+      html += `<span class="lyric-phrase">${buffer}</span>`;
+      buffer = '';
+    }
+
+    return html;
+  };    
+  function renderLyrics(data) {
     if (!ui.lyrics) return;
     ui.lyrics.innerHTML = '';
     ui.lyrics.scrollTop = 0;
@@ -4693,7 +4764,8 @@ function renderLyrics(data) {
           mainSpan.appendChild(chSpan);
         });
       } else {
-        mainSpan.textContent = line ? line.text : '';
+        const rawText = line ? line.text : '';
+        mainSpan.innerHTML = optimizeLineBreaks(rawText);
       }
       row.appendChild(mainSpan);
       
@@ -4848,7 +4920,7 @@ function renderLyrics(data) {
             // Only the primary line should scroll / count replay
             if (isPrimary) {
               r.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              // ★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
               if (container === ui.lyrics) {
                 ReplayManager.incrementLyricCount();
               }

@@ -194,7 +194,8 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.moviemode{
     top: 1vh;
     right: 1vw;
 }
-body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemode {
+
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;

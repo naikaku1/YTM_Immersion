@@ -593,17 +593,14 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   height: 65vh;
   overflow-y: auto;
   padding-right: 48px;
+  padding-left: 40px;
   scrollbar-width: none;
   mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
   padding-top: 30vh;
 }
 
 #my-lyrics-container.moviemode {
-  height: 28vh;
-  position: absolute;
-  left: 75%;
-  top: 60%;
-  text-align: right;
+  display: none !important;
 }
 #my-lyrics-container::-webkit-scrollbar {
   display: none;
@@ -616,7 +613,6 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   letter-spacing: -0.03em;
   color: rgba(255, 255, 255, 0.3);
   margin-bottom: 35px;
-  padding-left: 40px;
   cursor: pointer;
   transition: transform 0.5s, filter 0.5s, color 0.5s; 
   transform-origin: left;
@@ -812,6 +808,8 @@ body.ytm-custom-layout ytmusic-player-bar.moviemode{
     visibility: visible !important;
     background: rgba(0, 0, 0, 20%) !important;
     backdrop-filter: blur(8px) saturate(100%) !important;
+    width: 98% !important;
+    max-width: 1200px !important;
 }
 body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
   opacity: 0 !important;

@@ -403,8 +403,239 @@ const withRandomCacheBuster = (url, buster) => {
   }
 };
 
+const normalizeCandidateFilePath = (value) => {
+  const s = String(value || '').trim().replace(/^\/+/, '');
+  if (!s) return '';
+
+  const rawPrefix = /^https?:\/\/raw\.githubusercontent\.com\/LRCHub\/[^/]+\/main\/(.*)$/i;
+  const treePrefix = /^https?:\/\/github\.com\/LRCHub\/[^/]+\/(?:blob|tree)\/main\/(.*)$/i;
+
+  let m = s.match(rawPrefix);
+  if (m && m[1]) return String(m[1]).replace(/^\/+/, '');
+  m = s.match(treePrefix);
+  if (m && m[1]) return String(m[1]).replace(/^\/+/, '');
+
+  return s;
+};
+
+const buildGitHubSelectRawUrl = (video_id, relPath) => {
+  const cleaned = normalizeCandidateFilePath(relPath);
+  if (!video_id || !cleaned) return '';
+  const encoded = cleaned
+    .split('/')
+    .filter(Boolean)
+    .map(seg => encodeURIComponent(seg))
+    .join('/');
+  return `https://raw.githubusercontent.com/LRCHub/${video_id}/main/${encoded.startsWith('select/') ? encoded : 'select/' + encoded}`;
+};
+
+const normalizeGitHubSelectCandidateEntry = (entry, idx, video_id) => {
+  let obj = null;
+  if (typeof entry === 'string') {
+    obj = { path: entry };
+  } else if (entry && typeof entry === 'object') {
+    obj = { ...entry };
+  } else {
+    return null;
+  }
+
+  const path = normalizeCandidateFilePath(
+    obj.path ||
+    obj.file ||
+    obj.filename ||
+    obj.name ||
+    obj.select ||
+    obj.id ||
+    ''
+  );
+
+  if (!path) return null;
+
+  const basename = path.split('/').pop() || path;
+  const candidateId = String(obj.candidate_id || obj.id || basename);
+  const rawUrl = obj.raw_url || obj.rawUrl || buildGitHubSelectRawUrl(video_id, path);
+  const lyrics = typeof obj.lyrics === 'string' ? obj.lyrics.trim() : '';
+
+  return {
+    ...obj,
+    id: candidateId,
+    candidate_id: candidateId,
+    path,
+    select: obj.select || path,
+    title: obj.title || obj.name || basename,
+    source: obj.source || 'GitHub',
+    raw_url: rawUrl,
+    lyrics,
+  };
+};
+
+const parseGitHubSelectIndexPayload = (json, video_id) => {
+  const wrap = json && typeof json === 'object' && json.response ? json.response : json;
+
+  let list = [];
+  if (Array.isArray(wrap)) {
+    list = wrap;
+  } else if (wrap && typeof wrap === 'object') {
+    if (Array.isArray(wrap.candidates)) list = wrap.candidates;
+    else if (Array.isArray(wrap.files)) list = wrap.files;
+    else if (Array.isArray(wrap.items)) list = wrap.items;
+    else if (Array.isArray(wrap.list)) list = wrap.list;
+    else if (wrap.entries && typeof wrap.entries === 'object') {
+      list = Object.entries(wrap.entries).map(([k, v]) => (v && typeof v === 'object') ? ({ path: k, ...v }) : ({ path: k }));
+    } else {
+      list = Object.entries(wrap)
+        .filter(([k]) => /\.(?:lrc|txt)$/i.test(String(k || '')))
+        .map(([k, v]) => (v && typeof v === 'object') ? ({ path: k, ...v }) : ({ path: k }));
+    }
+  }
+
+  return list
+    .map((entry, idx) => normalizeGitHubSelectCandidateEntry(entry, idx, video_id))
+    .filter(Boolean);
+};
+
+const fetchGithubSelectCandidates = async (video_id, bust) => {
+  if (!video_id) return [];
+  const idxUrl = `https://raw.githubusercontent.com/LRCHub/${video_id}/main/select/index.json`;
+  try {
+    const res = await fetch(typeof bust === 'function' ? bust(idxUrl) : withRandomCacheBuster(idxUrl), { cache: 'no-store' });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return parseGitHubSelectIndexPayload(json, video_id);
+  } catch (e) {
+    console.warn('[BG] GitHub select index error:', e);
+    return [];
+  }
+};
+
+const fetchGithubSelectIndex = async (video_id) => fetchGithubSelectCandidates(video_id);
+
+const candidateKeySet = (candidate_id, cand) => {
+  const values = [
+    candidate_id,
+    cand && cand.id,
+    cand && cand.candidate_id,
+    cand && cand.path,
+    cand && cand.name,
+    cand && cand.filename,
+    cand && cand.file,
+    cand && cand.title,
+    cand && cand.label,
+    cand && cand.select,
+    cand && cand.list,
+  ].filter(Boolean);
+
+  const set = new Set();
+  values.forEach((value) => {
+    const s = String(value).trim();
+    if (!s) return;
+    set.add(s);
+    set.add(s.toLowerCase());
+
+    const norm = normalizeCandidateFilePath(s);
+    if (norm) {
+      set.add(norm);
+      set.add(norm.toLowerCase());
+    }
+
+    const base = s.split('/').pop();
+    if (base) {
+      set.add(base);
+      set.add(base.toLowerCase());
+      const noExt = base.replace(/\.[^.]+$/, '');
+      if (noExt) {
+        set.add(noExt);
+        set.add(noExt.toLowerCase());
+      }
+    }
+  });
+  return set;
+};
+
+const findCandidateEntry = (entries, candidate_id, cand) => {
+  const keys = candidateKeySet(candidate_id, cand);
+  if (!Array.isArray(entries) || !entries.length || !keys.size) return null;
+  const probeFields = ['candidate_id', 'id', 'path', 'name', 'filename', 'file', 'title', 'label', 'select', 'list'];
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    for (const field of probeFields) {
+      const value = entry[field];
+      if (!value) continue;
+      const entryKeys = candidateKeySet(value, { [field]: value });
+      for (const k of entryKeys) {
+        if (keys.has(k)) return entry;
+      }
+    }
+  }
+  return null;
+};
+
+const buildCandidateUrls = (video_id, candidate_id, cand, entry) => {
+  const urls = [];
+  const addUrl = (raw) => {
+    if (!raw) return;
+    try {
+      const u = new URL(String(raw), `https://raw.githubusercontent.com/LRCHub/${video_id}/main/`);
+      u.searchParams.set('v', String(1000 + Math.floor(Math.random() * 9000)));
+      urls.push(u.toString());
+    } catch (e) {
+    }
+  };
+
+  const addPath = (raw) => {
+    const p = normalizeCandidateFilePath(raw);
+    if (!p) return;
+    if (/^https?:\/\//i.test(p)) {
+      addUrl(p);
+      return;
+    }
+    addUrl(`https://raw.githubusercontent.com/LRCHub/${video_id}/main/${p}`);
+    if (!p.startsWith('select/')) {
+      addUrl(`https://raw.githubusercontent.com/LRCHub/${video_id}/main/select/${p}`);
+    }
+  };
+
+  [entry, cand].filter(Boolean).forEach((src) => {
+    ['raw_url', 'rawUrl', 'download_url', 'downloadUrl', 'url'].forEach((k) => addUrl(src[k]));
+    ['path', 'name', 'filename', 'file', 'select', 'list'].forEach((k) => addPath(src[k]));
+  });
+
+  const cid = String(candidate_id || '').trim();
+  if (cid) {
+    addPath(cid);
+    addPath(`${cid}.lrc`);
+    addPath(`${cid}.txt`);
+  }
+
+  return [...new Set(urls)];
+};
+
+const fetchCandidateLyrics = async (video_id, candidate_id, candidate) => {
+  const cand = candidate && typeof candidate === 'object' ? candidate : {};
+  if (typeof cand.lyrics === 'string' && cand.lyrics.trim()) return cand.lyrics.trim();
+  if (!video_id) return '';
+
+  const entries = await fetchGithubSelectIndex(video_id);
+  const entry = findCandidateEntry(entries, candidate_id, cand);
+  const urls = buildCandidateUrls(video_id, candidate_id, cand, entry);
+
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const text = (await r.text()).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      if (!text) continue;
+      if (/^<!doctype html/i.test(text) || /^<html/i.test(text)) continue;
+      return text;
+    } catch (e) {
+    }
+  }
+  return '';
+};
+
 const fetchFromGithub = (video_id) => {
-  if (!video_id) return Promise.resolve({ lyrics: '', dynamicLines: null, subLyrics: '' });
+  if (!video_id) return Promise.resolve({ lyrics: '', dynamicLines: null, subLyrics: '', candidates: [] });
 
   const base = `https://raw.githubusercontent.com/LRCHub/${video_id}/main`;
   const __cacheBuster = (1000 + Math.floor(Math.random() * 9000));
@@ -420,12 +651,11 @@ const fetchFromGithub = (video_id) => {
     }
   };
 
-  // duet: optional sub vocal LRC (only lines that should be shown on the right)
   const pSub = safeFetchText(`${base}/sub.txt`);
+  const pSelectCandidates = fetchGithubSelectCandidates(video_id, bust);
 
   const parseLrcTimeToMs = (ts) => {
     const s = String(ts || '').trim();
-    // mm:ss.xx or mm:ss.xxx
     const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
     if (!m) return null;
     const mm = parseInt(m[1], 10);
@@ -438,27 +668,17 @@ const fetchFromGithub = (video_id) => {
     return (mm * 60 + ss) * 1000 + ms;
   };
 
-  // Dynamic.lrc format:
-  // [00:00.56]<00:00.56>無<00:00.68>敵...
   const parseDynamicLrc = (text) => {
     const out = [];
     if (!text) return out;
-
     const rows = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-
-    // 1st pass: parse lines so we can use the next line timestamp as an end bound
     const parsed = [];
     for (const raw of rows) {
       const line = raw.trimEnd();
       if (!line) continue;
-
       const m = line.match(/^\[(\d+:\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
       if (!m) continue;
-
-      parsed.push({
-        lineMs: parseLrcTimeToMs(m[1]),
-        rest: m[2] || '',
-      });
+      parsed.push({ lineMs: parseLrcTimeToMs(m[1]), rest: m[2] || '' });
     }
 
     const pushDistributed = (chars, chunk, startMs, endMs) => {
@@ -466,79 +686,53 @@ const fetchFromGithub = (video_id) => {
       const arr = Array.from(chunk);
       const n = arr.length;
       if (!n) return;
-
       const s = (typeof startMs === 'number') ? startMs : null;
       const e = (typeof endMs === 'number') ? endMs : null;
-
       if (s == null) {
         for (const ch of arr) chars.push({ t: 0, c: ch });
         return;
       }
-
-      // no duration: show immediately at s
       if (e == null || e <= s) {
         for (const ch of arr) chars.push({ t: s, c: ch });
         return;
       }
-
       const dur = Math.max(1, e - s);
       const step = dur / n;
-
-      for (let i = 0; i < n; i++) {
-        const t = s + Math.floor(step * i);
-        chars.push({ t, c: arr[i] });
-      }
+      for (let i = 0; i < n; i++) chars.push({ t: s + Math.floor(step * i), c: arr[i] });
     };
 
     for (let li = 0; li < parsed.length; li++) {
       const { lineMs, rest } = parsed[li];
-      const nextLineMs = (li + 1 < parsed.length && typeof parsed[li + 1].lineMs === 'number')
-        ? parsed[li + 1].lineMs
-        : null;
-
+      const nextLineMs = (li + 1 < parsed.length && typeof parsed[li + 1].lineMs === 'number') ? parsed[li + 1].lineMs : null;
       const tagRe = /<(\d+:\d{2}(?:\.\d{1,3})?)>/g;
       const chars = [];
-
       let prevMs = null;
       let prevEnd = 0;
 
       while (true) {
         const mm = tagRe.exec(rest);
         if (!mm) break;
-
         const tagMs = parseLrcTimeToMs(mm[1]);
-
-        // chunk before the 1st tag (often a leading space)
         if (prevMs == null && tagMs != null && mm.index > prevEnd) {
-          const chunk0 = rest.slice(prevEnd, mm.index);
-          pushDistributed(chars, chunk0, tagMs, tagMs);
+          pushDistributed(chars, rest.slice(prevEnd, mm.index), tagMs, tagMs);
         }
-
         if (prevMs != null) {
-          const chunk = rest.slice(prevEnd, mm.index);
-          pushDistributed(chars, chunk, prevMs, tagMs);
+          pushDistributed(chars, rest.slice(prevEnd, mm.index), prevMs, tagMs);
         }
-
         prevMs = tagMs;
         prevEnd = mm.index + mm[0].length;
       }
 
       if (prevMs != null) {
-        const chunk = rest.slice(prevEnd);
-
-        // For the tail, spread chars until the next line begins (or a fallback window)
         let endMs = nextLineMs;
         if (typeof endMs !== 'number') endMs = prevMs + 1500;
         if (endMs <= prevMs) endMs = prevMs + 200;
-
-        pushDistributed(chars, chunk, prevMs, endMs);
+        pushDistributed(chars, rest.slice(prevEnd), prevMs, endMs);
       }
-
-      const textLine = chars.map(c => c.c).join('');
 
       out.push({
         startTimeMs: (typeof lineMs === 'number' ? lineMs : (chars.length ? chars[0].t : 0)),
-        text: textLine,
+        text: chars.map(c => c.c).join(''),
         chars,
       });
     }
@@ -548,46 +742,31 @@ const fetchFromGithub = (video_id) => {
 
   const buildLrcFromDynamic = (lines) => {
     if (!Array.isArray(lines) || !lines.length) return '';
-    const lrcLines = lines
-      .map(line => {
-        let ms = null;
+    return lines.map((line) => {
+      let ms = null;
+      if (typeof line.startTimeMs === 'number') ms = line.startTimeMs;
+      else if (typeof line.startTimeMs === 'string') {
+        const n = Number(line.startTimeMs);
+        if (!Number.isNaN(n)) ms = n;
+      } else if (Array.isArray(line.chars) && line.chars.length) {
+        const ts = line.chars.map(c => (typeof c.t === 'number' ? c.t : null)).filter(v => v != null);
+        if (ts.length) ms = Math.min(...ts);
+      }
+      if (ms == null) return null;
 
-        if (typeof line.startTimeMs === 'number') {
-          ms = line.startTimeMs;
-        } else if (typeof line.startTimeMs === 'string') {
-          const n = Number(line.startTimeMs);
-          if (!Number.isNaN(n)) ms = n;
-        } else if (Array.isArray(line.chars) && line.chars.length) {
-          const ts = line.chars
-            .map(c => (typeof c.t === 'number' ? c.t : null))
-            .filter(v => v != null);
-          if (ts.length) ms = Math.min(...ts);
-        }
-
-        if (ms == null) return null;
-
-        let textLine = '';
-        if (typeof line.text === 'string' && line.text.length) {
-          textLine = line.text;
-        } else if (Array.isArray(line.chars)) {
-          textLine = line.chars.map(c => c.c || c.text || c.caption || '').join('');
-        }
-
-        // Keep original spaces (do not auto-trim)
-        textLine = String(textLine ?? '');
-        const timeTag = `[${formatLrcTime(ms / 1000)}]`;
-        return textLine ? `${timeTag} ${textLine}` : timeTag;
-      })
-      .filter(Boolean);
-
-    return lrcLines.join('\n').trimEnd();
+      let textLine = '';
+      if (typeof line.text === 'string' && line.text.length) textLine = line.text;
+      else if (Array.isArray(line.chars)) textLine = line.chars.map(c => c.c || c.text || c.caption || '').join('');
+      textLine = String(textLine ?? '');
+      const timeTag = `[${formatLrcTime(ms / 1000)}]`;
+      return textLine ? `${timeTag} ${textLine}` : timeTag;
+    }).filter(Boolean).join('\n').trimEnd();
   };
 
   const extractLyricsFromReadme = (text) => {
     if (!text) return '';
     const m = String(text).match(/```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```/);
     const body = m ? m[1] : String(text);
-
     return body
       .split('\n')
       .filter(line => !line.trim().startsWith('#'))
@@ -599,22 +778,19 @@ const fetchFromGithub = (video_id) => {
   };
 
   return (async () => {
-    const subLyrics = (await pSub) || '';
+    const [subLyrics, selectCandidates] = await Promise.all([pSub, pSelectCandidates]);
 
-    // 1) Dynamic.lrc (char-timed) を最優先
     const dynText = await safeFetchText(`${base}/Dynamic.lrc`);
     const dynLines = parseDynamicLrc(dynText);
-
     if (dynLines && dynLines.length) {
       const lyrics = buildLrcFromDynamic(dynLines);
-      if (lyrics && lyrics.trim()) return { lyrics, dynamicLines: dynLines, subLyrics };
+      if (lyrics && lyrics.trim()) return { lyrics, dynamicLines: dynLines, subLyrics: subLyrics || '', candidates: selectCandidates || [] };
     }
 
-    // 2) README.md (タイムスタンプ/プレーン)
     const readme = await safeFetchText(`${base}/README.md`);
     const lyrics = extractLyricsFromReadme(readme);
 
-    return { lyrics: lyrics || '', dynamicLines: null, subLyrics };
+    return { lyrics: lyrics || '', dynamicLines: null, subLyrics: subLyrics || '', candidates: selectCandidates || [] };
   })();
 };;
 
@@ -960,22 +1136,42 @@ if (req.type === 'GET_CLOUD_STATE') {
     (async () => {
       const timeoutMs = 15000;
 
-      // 1) LRCHub
+      const mergeCandidateLists = (...lists) => {
+        const out = [];
+        const seen = new Set();
+        for (const list of lists) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            if (!item || typeof item !== 'object') continue;
+            const key = String(
+              item.id ||
+              item.candidate_id ||
+              item.path ||
+              item.select ||
+              item.raw_url ||
+              `${item.artist || ''}///${item.title || ''}`
+            );
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(item);
+          }
+        }
+        return out;
+      };
+
       const pHub = withTimeout(
         fetchFromLrchub(track, artist, youtube_url, video_id),
         timeoutMs, 'lrchub'
       ).then(res => ({ source: 'hub', data: res })).catch(e => ({ source: 'hub', error: e }));
 
-      // 2) GitHub
       const vidForGit = video_id || extractVideoIdFromUrl(youtube_url);
-      let pGit = Promise.resolve({ source: 'git', data: '' });
+      let pGit = Promise.resolve({ source: 'git', data: { lyrics: '', dynamicLines: null, subLyrics: '', candidates: [] } });
       if (vidForGit) {
         pGit = fetchFromGithub(vidForGit)
           .then(res => ({ source: 'git', data: res }))
           .catch(e => ({ source: 'git', error: e }));
       }
 
-      // 返答を一度だけ返す（遅い方を待たない）
       let responded = false;
       const sendOnce = (payload) => {
         if (responded) return;
@@ -983,37 +1179,27 @@ if (req.type === 'GET_CLOUD_STATE') {
         sendResponse(payload);
       };
 
-      // LRCHub の candidates/config/requests は、GitHub が先に返っても後追いで UI 更新できるように push する
       const pushMetaUpdate = (meta) => {
         if (!tabId) return;
         try {
           chrome.tabs.sendMessage(tabId, { type: 'LYRICS_META_UPDATE', payload: meta });
         } catch (e) {
-          // ignore
         }
       };
 
-      // 並列実行（"両方待ち" をやめる）
       let hubRes = null;
       let gitRes = null;
 
+      const getHubCandidates = () => (hubRes && !hubRes.error && hubRes.data && Array.isArray(hubRes.data.candidates)) ? hubRes.data.candidates.slice() : [];
+      const getGitCandidates = () => (gitRes && !gitRes.error && gitRes.data && Array.isArray(gitRes.data.candidates)) ? gitRes.data.candidates.slice() : [];
+
       const handleHub = async () => {
-        const r = await pHub;
-        hubRes = r;
-
-        let sharedCandidates = [];
-        let sharedConfig = null;
-        let sharedRequests = [];
-
-        if (hubRes && !hubRes.error && hubRes.data) {
-          if (Array.isArray(hubRes.data.candidates)) sharedCandidates = hubRes.data.candidates.slice();
-          if (hubRes.data.config) sharedConfig = hubRes.data.config;
-          if (Array.isArray(hubRes.data.requests)) sharedRequests = hubRes.data.requests.slice();
-        }
-
+        hubRes = await pHub;
+        const sharedCandidates = mergeCandidateLists(getGitCandidates(), getHubCandidates());
+        const sharedConfig = hubRes && !hubRes.error && hubRes.data ? (hubRes.data.config || null) : null;
+        const sharedRequests = hubRes && !hubRes.error && hubRes.data && Array.isArray(hubRes.data.requests) ? hubRes.data.requests.slice() : [];
         const hasCandidates = sharedCandidates.length > 0;
 
-        // まだ返してない & LRCHub に歌詞がある → 即返す
         if (!responded && hubRes && !hubRes.error && hubRes.data && hubRes.data.lyrics && hubRes.data.lyrics.trim()) {
           const d = hubRes.data;
           console.log('[BG] Won (fast): LRCHub');
@@ -1024,14 +1210,13 @@ if (req.type === 'GET_CLOUD_STATE') {
             subLyrics: (typeof d.subLyrics === 'string' ? d.subLyrics : ''),
             hasSelectCandidates: d.hasSelectCandidates || hasCandidates,
             candidates: sharedCandidates,
-            config: d.config || null,
-            requests: d.requests || [],
+            config: sharedConfig,
+            requests: sharedRequests,
             githubFallback: false,
           });
           return;
         }
 
-        // 既に GitHub で歌詞を返していたら、候補/設定だけ後追いで通知
         if (responded && (hasCandidates || sharedConfig || (sharedRequests && sharedRequests.length))) {
           const vid = video_id || extractVideoIdFromUrl(youtube_url);
           pushMetaUpdate({
@@ -1045,45 +1230,41 @@ if (req.type === 'GET_CLOUD_STATE') {
       };
 
       const handleGit = async () => {
-        const r = await pGit;
-        gitRes = r;
+        gitRes = await pGit;
+        const mergedCandidates = mergeCandidateLists(getGitCandidates(), getHubCandidates());
 
-        // duet: sub.txt may arrive via GitHub even when LRCHub won first
         try {
-          if (gitRes && !gitRes.error && gitRes.data && typeof gitRes.data.subLyrics === 'string' && gitRes.data.subLyrics.trim()) {
-            pushMetaUpdate({ video_id: vidForGit, subLyrics: gitRes.data.subLyrics });
+          if (gitRes && !gitRes.error && gitRes.data) {
+            const meta = { video_id: vidForGit };
+            let shouldPush = false;
+            if (typeof gitRes.data.subLyrics === 'string' && gitRes.data.subLyrics.trim()) {
+              meta.subLyrics = gitRes.data.subLyrics;
+              shouldPush = true;
+            }
+            if (Array.isArray(gitRes.data.dynamicLines) && gitRes.data.dynamicLines.length) {
+              meta.dynamicLines = gitRes.data.dynamicLines;
+              shouldPush = true;
+            }
+            if (mergedCandidates.length) {
+              meta.hasSelectCandidates = true;
+              meta.candidates = mergedCandidates;
+              shouldPush = true;
+            }
+            if (shouldPush) pushMetaUpdate(meta);
           }
         } catch (e) {
-          // ignore
         }
 
-        // dynamic: char-timed lines can arrive later via GitHub even when LRCHub won first
-        try {
-          if (gitRes && !gitRes.error && gitRes.data && Array.isArray(gitRes.data.dynamicLines) && gitRes.data.dynamicLines.length) {
-            pushMetaUpdate({ video_id: vidForGit, dynamicLines: gitRes.data.dynamicLines });
-          }
-        } catch (e) {
-          // ignore
-        }
-
-        if (
-          !responded &&
-          gitRes &&
-          !gitRes.error &&
-          gitRes.data &&
-          typeof gitRes.data.lyrics === 'string' &&
-          gitRes.data.lyrics.trim()
-        ) {
+        if (!responded && gitRes && !gitRes.error && gitRes.data && typeof gitRes.data.lyrics === 'string' && gitRes.data.lyrics.trim()) {
           const d = gitRes.data;
           console.log('[BG] Won (fast): GitHub');
-          // ※ candidates/config/requests は後から LRCHub が来たら pushMetaUpdate で更新
           sendOnce({
             success: true,
             lyrics: d.lyrics,
             dynamicLines: d.dynamicLines || null,
             subLyrics: (typeof d.subLyrics === 'string' ? d.subLyrics : ''),
-            hasSelectCandidates: false,
-            candidates: [],
+            hasSelectCandidates: mergedCandidates.length > 0,
+            candidates: mergedCandidates,
             config: null,
             requests: [],
             githubFallback: true,
@@ -1091,25 +1272,12 @@ if (req.type === 'GET_CLOUD_STATE') {
         }
       };
 
-      const hubTask = handleHub();
-      const gitTask = handleGit();
-
-      await Promise.allSettled([hubTask, gitTask]);
-
-      // どちらかで返していたら終了
+      await Promise.allSettled([handleHub(), handleGit()]);
       if (responded) return;
 
-      // ここに来るのは「どっちも歌詞が取れなかった」だけ。候補だけでも返す（あれば）
-      let sharedCandidates = [];
-      let sharedConfig = null;
-      let sharedRequests = [];
-
-      if (hubRes && !hubRes.error && hubRes.data) {
-        if (Array.isArray(hubRes.data.candidates)) sharedCandidates = hubRes.data.candidates.slice();
-        if (hubRes.data.config) sharedConfig = hubRes.data.config;
-        if (Array.isArray(hubRes.data.requests)) sharedRequests = hubRes.data.requests.slice();
-      }
-
+      const sharedCandidates = mergeCandidateLists(getGitCandidates(), getHubCandidates());
+      const sharedConfig = hubRes && !hubRes.error && hubRes.data ? (hubRes.data.config || null) : null;
+      const sharedRequests = hubRes && !hubRes.error && hubRes.data && Array.isArray(hubRes.data.requests) ? hubRes.data.requests.slice() : [];
       const hasCandidates = sharedCandidates.length > 0;
 
       console.log('[BG] No lyrics found (Hub+GitHub)');
@@ -1123,6 +1291,38 @@ if (req.type === 'GET_CLOUD_STATE') {
         requests: sharedRequests,
       });
 
+    })();
+
+    return true;
+  }
+
+  if (req.type === 'GET_CANDIDATE_LYRICS') {
+    const payload = req.payload || {};
+    const video_id = payload.video_id || extractVideoIdFromUrl(payload.youtube_url || '');
+    const candidate_id = payload.candidate_id || null;
+    const candidate = payload.candidate && typeof payload.candidate === 'object' ? payload.candidate : {};
+
+    (async () => {
+      try {
+        const lyrics = await fetchCandidateLyrics(video_id, candidate_id, candidate);
+        if (typeof lyrics === 'string' && lyrics.trim()) {
+          sendResponse({
+            success: true,
+            lyrics: lyrics.trim(),
+            candidate_id: candidate_id || candidate.id || candidate.candidate_id || null,
+            path: candidate.path || candidate.select || candidate.name || candidate.file || candidate.filename || ''
+          });
+          return;
+        }
+        sendResponse({
+          success: false,
+          error: 'Candidate lyrics not found',
+          candidate_id: candidate_id || candidate.id || candidate.candidate_id || null,
+          path: candidate.path || candidate.select || candidate.name || candidate.file || candidate.filename || ''
+        });
+      } catch (e) {
+        sendResponse({ success: false, error: String(e) });
+      }
     })();
 
     return true;

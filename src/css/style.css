@@ -1115,7 +1115,9 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+  overflow: visible;
 }
+
 
 .ytm-upload-menu.visible {
   opacity: 1;
@@ -1179,8 +1181,8 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 180px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .ytm-upload-menu-item-candidate {
@@ -2355,4 +2357,75 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
 .lyric-phrase {
   display: inline-block;       
   margin: 0 1px;           
+}
+
+
+.ytm-upload-menu-item-candidate.is-selected {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+#ytm-candidate-hover-preview {
+  position: absolute;
+  right: calc(100% + 12px);
+  top: 8px;
+  left: auto;
+  width: min(420px, min(42vw, calc(100vw - 40px)));
+  max-width: 420px;
+  min-width: 280px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(18, 18, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  color: #fff;
+  z-index: 2147483647;
+  pointer-events: none;
+  opacity: 0;
+  display: none;
+  transform: translateX(-8px) scale(0.985);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+#ytm-candidate-hover-preview.visible {
+  display: block;
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.ytm-candidate-hover-preview-title {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.92;
+  margin-bottom: 8px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.ytm-candidate-hover-preview-line {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ytm-candidate-hover-preview-meta {
+  margin-top: 10px;
+  font-size: 11px;
+  opacity: 0.74;
+  line-height: 1.4;
+}
+
+.ytm-candidate-hover-preview-current {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  opacity: 0.88;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

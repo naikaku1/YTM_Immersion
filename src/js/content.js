@@ -949,6 +949,12 @@
   let toastTimer = null;
   let moviemode = null;
   let movieObserver = null;
+  let hoverPreviewCandidateId = null;
+  let hoverPreviewMouseX = 0;
+  let hoverPreviewMouseY = 0;
+  let hoverPreviewRafId = null;
+  let hoverPreviewLoading = false;
+  let hoverPreviewAnchorEl = null;
 
   const handleInteraction = () => {
     const targets = [];
@@ -1595,7 +1601,6 @@
       document.body.appendChild(panel);
       ui.queuePanel = panel;
 
-      // ===== Pin to keep Up Next always visible =====
       const PIN_KEY = 'ytm_queue_pinned';
       const pinBtn = panel.querySelector('.queue-pin');
 
@@ -1817,152 +1822,272 @@
           }
         } catch (e) { }
       });
-
-      const forceStyle = pipDoc.createElement('style');
+      
+      
+      
+const forceStyle = pipDoc.createElement('style');
       forceStyle.textContent = `
-        body {
-          margin: 0; overflow: hidden;
-          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
-          background: #000; color: #fff;
-          cursor: default;
-        }
-        @keyframes bgFloat {
-          0% { transform: scale(1.4) rotate(0deg); }
-          50% { transform: scale(1.6) rotate(8deg); }
-          100% { transform: scale(1.4) rotate(0deg); }
-        }
-        #pip-bg-layer {
-          position: fixed; top: -50%; left: -50%; width: 200%; height: 200%;
-          z-index: -2;
-          background-size: cover; background-position: center;
-          filter: blur(60px) saturate(240%) brightness(0.7);
-          animation: bgFloat 45s ease-in-out infinite;
-          opacity: 1; transition: background-image 0.8s ease;
-        }
-        #pip-noise-layer {
-          position: fixed; inset: 0; z-index: -1;
-          opacity: 0.06; pointer-events: none;
-          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-        }
-        #pip-bg-overlay {
-          position: fixed; inset: 0; z-index: -1;
-          background: linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.5));
-        }
-        .lyric-line {
-          color: rgba(255, 255, 255, 0.5) !important;
-          font-size: 26px !important; font-weight: 700 !important;
-          margin-bottom: 30px !important; line-height: 1.35 !important;
-          transition: all 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
-          filter: blur(0.8px); transform: scale(0.96);
-          text-align: center !important; width: 100%;
-          cursor: pointer !important; 
-          letter-spacing: -0.01em;
-        }
-        .lyric-line:hover {
-          color: rgba(255, 255, 255, 0.8) !important; 
-        }
-        .lyric-line.active {
-          color: #ffffff !important; filter: blur(0) !important;
-          transform: scale(1.08) !important; 
-          text-shadow: 0 0 40px rgba(255, 255, 255, 0.5) !important;
-          opacity: 1 !important;
+        /* 画面全体：SF Proへのこだわりと背景の固定 */
+        html, body {
+          margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000;
+          position: fixed; inset: 0;
+          font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+          color: #fff; cursor: default;
+          -webkit-font-smoothing: antialiased;
         }
         
-        .lyric-line.active .lyric-char {
-            display: inline-block;
-            transition: opacity 0.1s linear, transform 0.1s linear, text-shadow 0.1s linear;
+        #pip-container {
+          position: absolute; inset: 0; overflow: hidden;
+          isolation: isolate; 
         }
-        .lyric-line.active .lyric-char.char-pending {
-            opacity: 0.35 !important;
-            text-shadow: none !important;
+        
+        /* 背景レイヤー：明るさを0.8まで上げ、ブラーを滑らかに */
+        #pip-bg-layer {
+          position: absolute; inset: -20%;
+          background-size: cover; background-position: center;
+          filter: blur(80px) saturate(1.4) brightness(0.8);
+          z-index: -3; transition: background-image 1.2s ease;
         }
-        .lyric-line.active .lyric-char.char-active {
-            opacity: 1 !important;
-            color: #ffffff !important;
-            transform: translateY(-2px);
-            text-shadow: 0 0 15px rgba(255, 255, 255, 0.9) !important;
+        
+        #pip-noise-layer {
+          position: absolute; inset: 0; z-index: -2; opacity: 0.04; pointer-events: none;
+          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+        }
+        
+        /* ヘッダー：アートワークと文字の階層を明確に */
+        .pip-header {
+            position: absolute; top: 0; left: 0; width: 100%;
+            display: flex; flex-direction: row; align-items: center; gap: 14px;
+            padding: 28px 24px 10px 24px; box-sizing: border-box;
+            z-index: 10; pointer-events: none;
+        }
+        .artwork-box {
+            width: 52px; height: 52px; flex-shrink: 0; 
+            border-radius: 8px; overflow: hidden; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            pointer-events: auto;
+        }
+        .artwork-box img { width: 100%; height: 100%; object-fit: cover; }
+        .info-box { 
+            flex-grow: 1; text-align: left; 
+            display: flex; flex-direction: column; justify-content: center; 
+            pointer-events: auto; overflow: hidden;
+        }
+        #pip-title {
+            font-size: 16px; font-weight: 700; margin-bottom: 1px;
+            display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        #pip-artist {
+            font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500;
+            display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
         }
 
-        .lyric-translation { font-size: 0.65em; opacity: 0.7; font-weight: 600; margin-top: 6px; display: block; }
-        #pip-lyrics-container::-webkit-scrollbar { display: none; }
-        #pip-lyrics-container { -ms-overflow-style: none; scrollbar-width: none; }
-
-        body.ytm-no-timestamp .lyric-line {
-          color: #fff !important;
-          filter: blur(0) !important;
-          transform: scale(1) !important;
-          opacity: 1 !important;
-          cursor: default !important;
-          margin-bottom: 20px !important;
-          text-shadow: 0 0 10px rgba(0, 0, 0, 0.3) !important;
+        /* 歌詞エリア：マスクのグラデーションをより滑らかに */
+        #pip-lyrics-container {
+            position: absolute; inset: 0;
+            overflow-y: auto; text-align: left;
+            padding: 120px 24px 160px 24px; 
+            box-sizing: border-box;
+            mask-image: linear-gradient(to bottom, transparent 0%, transparent 70px, black 120px, black 70%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 70px, black 120px, black 70%, transparent 100%);
+            -ms-overflow-style: none; scrollbar-width: none;
+            z-index: 5; overscroll-behavior: contain;
         }
-    `;
-      pipDoc.head.appendChild(forceStyle);
+#pip-lyrics-container::-webkit-scrollbar { display: none; }
+
+        /* ロード中の表示を中央に配置 */
+        .lyric-loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.2);
+            z-index: 1;
+            pointer-events: none;
+        }
+        
+        .lyric-line {
+      
+          font-size: 26px !important; 
+          font-weight: 800 !important;
+          letter-spacing: -0.015em !important;
+          margin-bottom: 16px !important; 
+          line-height: 1.35 !important;
+          
+          color: rgba(255, 255, 255, 0.25) !important; 
+          filter: blur(1.5px) !important;
+          transform: scale(0.85) !important; 
+          transform-origin: left center !important; 
+          
+          transition: transform 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.2), 
+                      color 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), 
+                      filter 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) !important; 
+          
+          cursor: pointer !important;
+          text-align: left !important; 
+          width: 100% !important;
+          text-shadow: none !important; 
+        }
+        
+        .lyric-line:hover { 
+          color: rgba(255, 255, 255, 0.6) !important; 
+        }
+
+        .lyric-line.active {
+            color: #fff !important; 
+            transform: scale(1) !important; 
+            filter: blur(0px) !important; 
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.2) !important; 
+        }
+        .lyric-line.active .lyric-char { display: inline-block; transition: opacity 0.2s linear; }
+        .lyric-line.active .lyric-char.char-pending { opacity: 0.25 !important; }
+        .lyric-line.active .lyric-char.char-active { opacity: 1 !important; }
+        
+        .lyric-translation { font-size: 0.6em; opacity: 0.5; font-weight: 600; margin-top: 4px; display: block; }
+        
+        body.ytm-no-timestamp .lyric-line { 
+          color: #fff !important; 
+          transform: scale(1) !important; 
+          opacity: 1 !important; 
+          cursor: default !important; 
+          filter: blur(0px) !important; 
+          text-shadow: 0 0 10px rgba(0, 0, 0, 0.3) !important; 
+        }
+
+        .lyric-line {
+          text-wrap: balance !important;
+          word-break: keep-all !important;     
+          overflow-wrap: break-word !important; 
+        }
+        .lyric-phrase {
+          display: inline-block !important;       
+          margin: 0 1px !important;           
+        }
+        
+        .controls-box { 
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            display: flex; align-items: center; justify-content: center; gap: 36px; 
+            padding: 30px 0 50px 0; box-sizing: border-box;
+            z-index: 20; 
+            background: linear-gradient(to top, rgba(0,0,0,0.15) 0%, transparent 100%);
+            pointer-events: none; 
+        }
+        .control-btn {
+            pointer-events: auto;
+            background: rgba(255, 255, 255, 0.1); border: none;
+            border-radius: 50%; 
+            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; color: #fff; transition: all 0.2s ease;
+        }
+        .control-btn:hover { background: rgba(255, 255, 255, 0.2); transform: scale(1.05); }
+        .control-btn:active { transform: scale(0.92); background: rgba(255, 255, 255, 0.3); }
+        .control-btn svg { fill: currentColor; pointer-events: none; }
+        
+        .main-btn { width: 52px; height: 52px; }
+        .main-btn svg { width: 32px; height: 32px; }
+        .sub-btn { width: 42px; height: 42px; }
+        .sub-btn svg { width: 20px; height: 20px; }
+        
+        .top-right-btn { width: 36px; height: 36px; flex-shrink: 0; background: rgba(255, 255, 255, 0.1); }
+        .top-right-btn svg { width: 18px; height: 18px; }
+        .top-right-btn.liked { color: #ffffff; }
+      `;
+      
+            
+            
+            pipDoc.head.appendChild(forceStyle);
       pipDoc.body.className = 'ytm-pip-mode';
-
-      if (document.body.classList.contains('ytm-no-timestamp')) {
-        pipDoc.body.classList.add('ytm-no-timestamp');
-      }
-
-      const bgLayer = pipDoc.createElement('div'); bgLayer.id = 'pip-bg-layer';
-      pipDoc.body.appendChild(bgLayer);
-      const noiseLayer = pipDoc.createElement('div'); noiseLayer.id = 'pip-noise-layer';
-      pipDoc.body.appendChild(noiseLayer);
-      const bgOverlay = pipDoc.createElement('div'); bgOverlay.id = 'pip-bg-overlay';
-      pipDoc.body.appendChild(bgOverlay);
-
-      const container = pipDoc.createElement('div');
-      container.style.display = 'flex';
-      container.style.flexDirection = 'column';
-      container.style.height = '100vh';
-      container.style.width = '100vw';
-      container.style.zIndex = '1';
-      container.style.alignItems = 'center';
-      pipDoc.body.appendChild(container);
+      if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
 
       const artworkUrl = ui.artwork.querySelector('img')?.src || '';
-      bgLayer.style.backgroundImage = `url(${artworkUrl})`;
+      
+pipDoc.body.innerHTML = `
+        <div id="pip-container">
+            <div id="pip-bg-layer" style="background-image: url('${artworkUrl}')"></div>
+            <div id="pip-noise-layer"></div>
+            
+            <div class="pip-header">
+                <div class="artwork-box">
+                    <img id="pip-img" src="${artworkUrl}" alt="">
+                </div>
+                <div class="info-box">
+                    <div id="pip-title">${ui.title.textContent}</div>
+                    <div id="pip-artist">${ui.artist.textContent}</div>
+                </div>
+                <button id="pip-like-btn" class="control-btn top-right-btn">
+                    <svg viewBox="0 0 24 24"><path id="pip-like-icon-path" d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z"/></svg>
+                </button>
+            </div>
 
-      const header = pipDoc.createElement('div');
-      header.style.width = '100%';
-      header.style.padding = '30px 20px 20px 20px';
-      header.style.textAlign = 'center';
-      header.style.flexShrink = '0';
-      header.style.display = 'flex';
-      header.style.flexDirection = 'column';
-      header.style.alignItems = 'center';
-      header.style.boxSizing = 'border-box';
-      header.innerHTML = `
-        <div style="width:130px; height:130px; border-radius:16px; overflow:hidden; margin: 0 auto 20px auto; box-shadow: 0 16px 50px rgba(0,0,0,0.5); transition: transform 0.3s;">
-            <img id="pip-img" src="${artworkUrl}" style="width:100%; height:100%; object-fit:cover;">
-        </div>
-        <div style="width: 100%; display: flex; flex-direction: column; align-items: center;">
-            <div id="pip-title" style="
-                font-size: 18px; font-weight: 800; color: #fff; 
-                margin-bottom: 6px; line-height: 1.3; text-align: center; width: 100%;
-                text-shadow: 0 2px 10px rgba(0,0,0,0.5);
-                display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
-            ">${ui.title.textContent}</div>
-            <div id="pip-artist" style="
-                font-size: 14px; color: rgba(255,255,255,0.85); text-align: center; width: 100%;
-                text-shadow: 0 2px 10px rgba(0,0,0,0.5);
-            ">${ui.artist.textContent}</div>
+            <div id="pip-lyrics-container"></div>
+            
+            <div class="controls-box">
+                <button id="pip-prev-btn" class="control-btn sub-btn">
+                    <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                </button>
+                <button id="pip-play-pause-btn" class="control-btn main-btn">
+                    <svg id="pip-play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <svg id="pip-pause-icon" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <button id="pip-next-btn" class="control-btn sub-btn">
+                    <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+                </button>
+            </div>
         </div>
       `;
-      container.appendChild(header);
 
-      this.pipLyricsContainer = pipDoc.createElement('div');
-      this.pipLyricsContainer.id = 'pip-lyrics-container';
-      this.pipLyricsContainer.style.height = '100%';
-      this.pipLyricsContainer.style.overflowY = 'auto';
-      this.pipLyricsContainer.style.padding = '10px 24px 40px 24px';
-      this.pipLyricsContainer.style.flex = '1';
-      this.pipLyricsContainer.style.width = '100%';
-      this.pipLyricsContainer.style.boxSizing = 'border-box';
-      this.pipLyricsContainer.style.maskImage = 'linear-gradient(to bottom, transparent 0%, black 10%, black 85%, transparent 100%)';
-      this.pipLyricsContainer.style.textAlign = 'center';
+      this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
       this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
-      container.appendChild(this.pipLyricsContainer);
+
+      const likeBtn = pipDoc.getElementById('pip-like-btn');
+      const prevBtn = pipDoc.getElementById('pip-prev-btn'); // ★ 追加
+      const playBtn = pipDoc.getElementById('pip-play-pause-btn');
+      const nextBtn = pipDoc.getElementById('pip-next-btn');
+
+      likeBtn.addEventListener('click', () => {
+        const likeWrapper = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like');
+        if (likeWrapper) {
+          const btn = likeWrapper.querySelector('button') || likeWrapper.querySelector('tp-yt-paper-icon-button') || likeWrapper;
+          btn.click();
+          setTimeout(() => PipManager.updateLikeState(pipDoc), 200);
+        }
+      });
+
+      prevBtn.addEventListener('click', () => {
+        const prevWrapper = document.querySelector('ytmusic-player-bar .previous-button') || document.querySelector('ytmusic-player-bar [aria-label="前へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Previous track"]');
+        if (prevWrapper) {
+          const btn = prevWrapper.querySelector('button') || prevWrapper.querySelector('tp-yt-paper-icon-button') || prevWrapper;
+          btn.click();
+        }
+      });
+
+      playBtn.addEventListener('click', () => {
+        const wrapper = document.querySelector('ytmusic-player-bar #play-pause-button') || document.querySelector('ytmusic-player-bar .play-pause-button');
+        if (wrapper) {
+          const btn = wrapper.querySelector('button') || wrapper.querySelector('tp-yt-paper-icon-button') || wrapper;
+          btn.click();
+        } else {
+          const v = document.querySelector('video');
+          if (v) v.paused ? v.play() : v.pause();
+        }
+      });
+
+      nextBtn.addEventListener('click', () => {
+        const nextWrapper = document.querySelector('ytmusic-player-bar .next-button') || document.querySelector('ytmusic-player-bar [aria-label="次へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Next track"]');
+        if (nextWrapper) {
+          const btn = nextWrapper.querySelector('button') || nextWrapper.querySelector('tp-yt-paper-icon-button') || nextWrapper;
+          btn.click();
+        }
+      });
+
+      PipManager.updateLikeState(pipDoc);
+      
+      const videoEl = document.querySelector('video');
+      PipManager.updatePlayState(videoEl ? videoEl.paused : true);
 
       this.pipLyricsContainer.addEventListener('click', (e) => {
         const target = e.target.closest('.lyric-line');
@@ -1972,9 +2097,7 @@
           const time = parseFloat(timeStr);
           if (!isNaN(time)) {
             const v = document.querySelector('video');
-            if (v) {
-              v.currentTime = time + timeOffset;
-            }
+            if (v) v.currentTime = time + timeOffset;
           }
         }
       });
@@ -1999,6 +2122,40 @@
       await this.start();
     },
 
+    updateLikeState: function (targetDoc) {
+      const doc = targetDoc || (this.pipWindow ? this.pipWindow.document : null);
+      if (!doc) return;
+      const likeBtn = doc.getElementById('pip-like-btn');
+      if (!likeBtn) return;
+
+      let isLiked = false;
+      const likeButtonElement = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like button');
+
+      if (likeButtonElement) {
+        isLiked = likeButtonElement.getAttribute('aria-pressed') === 'true';
+      } else {
+        const ytmLikeRenderer = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer');
+        if (ytmLikeRenderer && ytmLikeRenderer.hasAttribute('like-status')) {
+          isLiked = ytmLikeRenderer.getAttribute('like-status') === 'LIKE';
+        }
+      }
+
+      // 星のアイコンのパス定義
+      const STAR_OUTLINE = "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z";
+      const STAR_FILLED = "M12 17.27L18.18 21l-1.63-7.03L22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
+
+      const likeIconPath = doc.getElementById('pip-like-icon-path');
+      if (likeIconPath) {
+        likeIconPath.setAttribute('d', isLiked ? STAR_FILLED : STAR_OUTLINE);
+      }
+
+      if (isLiked) {
+        likeBtn.classList.add('liked');
+      } else {
+        likeBtn.classList.remove('liked');
+      }
+    },
+
     updateMeta: function (title, artist) {
       if (!this.pipWindow) return;
       const pipDoc = this.pipWindow.document;
@@ -2013,17 +2170,32 @@
         if (iEl) iEl.src = src;
         if (bgEl) bgEl.style.backgroundImage = `url(${src})`;
       }
+      this.updateLikeState(pipDoc);
     },
 
     resetLyrics: function () {
       if (this.pipWindow && this.pipLyricsContainer) {
-        this.pipLyricsContainer.innerHTML = '<div class="lyric-loading" style="opacity:0.5; padding:20px;">Loading...</div>';
+        // 余計なスタイルを消して、クラスだけで制御
+        this.pipLyricsContainer.innerHTML = '<div class="lyric-loading">Loading...</div>';
       }
     },
 
     updatePlayState: function (isPaused) {
-    
+      if (!this.pipWindow) return;
+      const playIcon = this.pipWindow.document.getElementById('pip-play-icon');
+      const pauseIcon = this.pipWindow.document.getElementById('pip-pause-icon');
+      if (playIcon && pauseIcon) {
+        if (isPaused) {
+          playIcon.style.display = 'block';
+          pauseIcon.style.display = 'none';
+        } else {
+          playIcon.style.display = 'none';
+          pauseIcon.style.display = 'block';
+        }
+      }
     }
+    
+    
   };
   const resolveDeepLTargetLang = (lang) => {
     switch ((lang || '').toLowerCase()) {
@@ -3319,20 +3491,345 @@ async function applyLyricsText(rawLyrics) {
 
   // ===================== 歌詞候補・ロック関連 =====================
 
+  const getCandidateId = (cand, idx = 0) => {
+    if (!cand || typeof cand !== 'object') return String(idx);
+    return String(cand.id || cand.candidate_id || cand.path || cand.file || cand.filename || cand.name || cand.title || idx);
+  };
+
+  const buildCandidateLabel = (cand, idx = 0) => {
+    if (!cand || typeof cand !== 'object') return `候補${idx + 1}`;
+
+    const rawName = (
+      cand.file ||
+      cand.filename ||
+      cand.name ||
+      cand.path ||
+      cand.select ||
+      cand.list ||
+      cand.candidate_id ||
+      cand.id ||
+      ''
+    );
+
+    const normalized = String(rawName || '').trim().replace(/\\/g, '/');
+    const labelText = normalized ? normalized.split('/').pop() : `候補${idx + 1}`;
+    return labelText;
+  };
+
+  const safeRuntimeSendMessage = (message) => {
+    return new Promise((resolve) => {
+      try {
+        if (!EXT || !EXT.runtime || typeof EXT.runtime.sendMessage !== 'function') {
+          resolve(null);
+          return;
+        }
+        EXT.runtime.sendMessage(message, (resp) => {
+          const err = EXT.runtime && EXT.runtime.lastError ? EXT.runtime.lastError : null;
+          if (err) {
+            console.warn('[CS] runtime.sendMessage failed:', err.message || err);
+            resolve({ success: false, error: err.message || String(err) });
+            return;
+          }
+          resolve(resp || null);
+        });
+      } catch (e) {
+        console.warn('[CS] runtime.sendMessage exception:', e);
+        resolve({ success: false, error: String(e) });
+      }
+    });
+  };
+
+  const formatPreviewTime = (seconds) => {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '--:--';
+    const total = Math.max(0, Math.floor(seconds));
+    const mm = Math.floor(total / 60);
+    const ss = total % 60;
+    return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  };
+
+  const getCurrentPlaybackSeconds = () => {
+    try {
+      const v = document.querySelector('video');
+      if (v && Number.isFinite(v.currentTime)) return v.currentTime;
+    } catch (e) { }
+    return null;
+  };
+
+  const getCurrentRenderedLyricText = () => {
+    if (lastActiveIndex >= 0 && Array.isArray(lyricsData) && lyricsData[lastActiveIndex]) {
+      const line = lyricsData[lastActiveIndex];
+      const txt = String(line.text || line.rawLine || '').trim();
+      if (txt) return txt;
+    }
+    try {
+      const activeRow = ui.lyrics ? ui.lyrics.querySelector('.lyric-line.active .lyric-main, .lyric-line.active') : null;
+      return activeRow && activeRow.textContent ? activeRow.textContent.trim() : '';
+    } catch (e) {
+      return '';
+    }
+  };
+
+  const getCurrentRenderedLyricIndex = () => {
+    if (!Array.isArray(lyricsData) || !lyricsData.length) return -1;
+    if (Number.isInteger(lastActiveIndex) && lastActiveIndex >= 0) {
+      let nonEmptyIndex = -1;
+      for (let i = 0; i <= Math.min(lastActiveIndex, lyricsData.length - 1); i++) {
+        const txt = String(lyricsData[i]?.text || lyricsData[i]?.rawLine || '').trim();
+        if (txt) nonEmptyIndex += 1;
+      }
+      return nonEmptyIndex;
+    }
+    return -1;
+  };
+
+  const pickPreviewInfoFromLyrics = (rawLyrics) => {
+    const txt = typeof rawLyrics === 'string' ? rawLyrics.trim() : '';
+    if (!txt) return { line: '', mode: 'empty', lineIndex: -1, total: 0 };
+
+    const parsed = parseLRCNoFlag(txt);
+    const nonEmpty = Array.isArray(parsed)
+      ? parsed.filter(line => line && typeof line.text === 'string' && line.text.trim())
+      : [];
+
+    if (!nonEmpty.length) {
+      const plain = txt.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      if (!plain.length) return { line: '', mode: 'empty', lineIndex: -1, total: 0 };
+      return { line: plain[0], mode: 'plain-first', lineIndex: 0, total: plain.length };
+    }
+
+    const currentSeconds = getCurrentPlaybackSeconds();
+    const hasTs = nonEmpty.some(line => typeof line.time === 'number' && Number.isFinite(line.time));
+
+    if (hasTs && typeof currentSeconds === 'number') {
+      let foundIndex = 0;
+      for (let i = 0; i < nonEmpty.length; i++) {
+        const t = nonEmpty[i] && typeof nonEmpty[i].time === 'number' ? nonEmpty[i].time : null;
+        if (t == null) continue;
+        if (t > currentSeconds) break;
+        foundIndex = i;
+      }
+      return {
+        line: String(nonEmpty[foundIndex].text || '').trim(),
+        mode: 'timestamp',
+        lineIndex: foundIndex,
+        total: nonEmpty.length
+      };
+    }
+
+    const currentLineIndex = getCurrentRenderedLyricIndex();
+    if (currentLineIndex >= 0) {
+      const idx = Math.max(0, Math.min(currentLineIndex, nonEmpty.length - 1));
+      return {
+        line: String(nonEmpty[idx].text || '').trim(),
+        mode: 'current-line-index',
+        lineIndex: idx,
+        total: nonEmpty.length
+      };
+    }
+
+    try {
+      const v = document.querySelector('video');
+      if (v && Number.isFinite(v.currentTime) && Number.isFinite(v.duration) && v.duration > 0) {
+        const ratio = Math.max(0, Math.min(1, v.currentTime / v.duration));
+        const idx = Math.max(0, Math.min(nonEmpty.length - 1, Math.round((nonEmpty.length - 1) * ratio)));
+        return {
+          line: String(nonEmpty[idx].text || '').trim(),
+          mode: 'progress-ratio',
+          lineIndex: idx,
+          total: nonEmpty.length
+        };
+      }
+    } catch (e) { }
+
+    return {
+      line: String(nonEmpty[0].text || '').trim(),
+      mode: 'plain-first',
+      lineIndex: 0,
+      total: nonEmpty.length
+    };
+  };
+
+  async function ensureCandidateLyricsLoaded(candId) {
+    if (!Array.isArray(lyricsCandidates) || !lyricsCandidates.length) return null;
+    const idx = lyricsCandidates.findIndex((cand, i) => getCandidateId(cand, i) === String(candId));
+    if (idx < 0) return null;
+    const cand = lyricsCandidates[idx];
+    if (cand && typeof cand.lyrics === 'string' && cand.lyrics.trim()) return cand;
+
+    const payload = {
+      youtube_url: getCurrentVideoUrl(),
+      video_id: getCurrentVideoId(),
+      candidate_id: getCandidateId(cand, idx),
+      candidate: cand || null
+    };
+    console.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
+    const res = await safeRuntimeSendMessage({ type: 'GET_CANDIDATE_LYRICS', payload });
+    console.log('[CS] GET_CANDIDATE_LYRICS response:', res);
+    if (res && res.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
+      const next = {
+        ...(cand || {}),
+        lyrics: res.lyrics,
+        has_synced: typeof res.has_synced === 'boolean' ? res.has_synced : !!/\[\d+:\d{2}(?:\.\d{1,3})?\]/.test(res.lyrics)
+      };
+      lyricsCandidates[idx] = next;
+      return next;
+    }
+    return cand || null;
+  }
+
+  function ensureCandidateHoverPreview() {
+    let el = document.getElementById('ytm-candidate-hover-preview');
+    const parent = ui.uploadMenu || document.body;
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ytm-candidate-hover-preview';
+      el.innerHTML = `
+        <div class="ytm-candidate-hover-preview-title"></div>
+        <div class="ytm-candidate-hover-preview-line"></div>
+        <div class="ytm-candidate-hover-preview-meta"></div>
+        <div class="ytm-candidate-hover-preview-current"></div>
+      `;
+      parent.appendChild(el);
+    } else if (el.parentElement !== parent) {
+      parent.appendChild(el);
+    }
+    return el;
+  }
+
+  function updateCandidateHoverPreviewPosition(clientX, clientY, anchorEl) {
+    const el = ensureCandidateHoverPreview();
+    if (!el) return;
+    if (ui.uploadMenu && el.parentElement === ui.uploadMenu) {
+      const menuRect = ui.uploadMenu.getBoundingClientRect();
+      const anchorRect = (anchorEl || hoverPreviewAnchorEl || ui.uploadMenu).getBoundingClientRect();
+      const height = el.offsetHeight || 180;
+      const maxTop = Math.max(8, ui.uploadMenu.offsetHeight - height - 8);
+      const desiredTop = Math.max(8, Math.min(maxTop, anchorRect.top - menuRect.top - 8));
+      el.style.top = `${desiredTop}px`;
+      el.style.left = 'auto';
+      el.style.right = `calc(100% + 12px)`;
+      return;
+    }
+    const pad = 18;
+    const width = el.offsetWidth || 360;
+    const height = el.offsetHeight || 160;
+    let left = clientX + pad;
+    let top = clientY + pad;
+    if (left + width > window.innerWidth - 12) left = Math.max(12, clientX - width - pad);
+    if (top + height > window.innerHeight - 12) top = Math.max(12, clientY - height - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }
+
+  function renderCandidateHoverPreview(candId) {
+    const el = ensureCandidateHoverPreview();
+    if (!el || !candId) return;
+    const list = Array.isArray(lyricsCandidates) ? lyricsCandidates : [];
+    const idx = list.findIndex((cand, i) => getCandidateId(cand, i) === String(candId));
+    if (idx < 0) return;
+    const cand = list[idx];
+    const titleEl = el.querySelector('.ytm-candidate-hover-preview-title');
+    const lineEl = el.querySelector('.ytm-candidate-hover-preview-line');
+    const metaEl = el.querySelector('.ytm-candidate-hover-preview-meta');
+    const currentEl = el.querySelector('.ytm-candidate-hover-preview-current');
+    const info = pickPreviewInfoFromLyrics(cand && cand.lyrics ? cand.lyrics : '');
+    const currentLine = getCurrentRenderedLyricText();
+    const currentSeconds = getCurrentPlaybackSeconds();
+
+    if (titleEl) titleEl.textContent = buildCandidateLabel(cand, idx);
+
+    if (lineEl) {
+      if (info.line) lineEl.textContent = info.line;
+      else if (hoverPreviewLoading) lineEl.textContent = '候補の歌詞データを読み込み中...';
+      else lineEl.textContent = 'この候補の歌詞データを表示できませんでした';
+    }
+
+    if (metaEl) {
+      const parts = [];
+      if (typeof currentSeconds === 'number') parts.push(`再生位置 ${formatPreviewTime(currentSeconds)}`);
+      if (info.total > 0 && info.lineIndex >= 0) parts.push(`行 ${info.lineIndex + 1}/${info.total}`);
+      if (info.mode === 'timestamp') parts.push('候補自身の同期位置');
+      else if (info.mode === 'current-line-index') parts.push('現在の表示行に追従');
+      else if (info.mode === 'progress-ratio') parts.push('再生率から推定');
+      else if (info.mode === 'plain-first') parts.push('先頭行を表示');
+      metaEl.textContent = parts.join(' / ');
+    }
+
+    if (currentEl) {
+      currentEl.textContent = currentLine ? `現在表示中: ${currentLine}` : '';
+    }
+
+    updateCandidateHoverPreviewPosition(hoverPreviewMouseX, hoverPreviewMouseY);
+    el.classList.add('visible');
+  }
+
+  function startCandidateHoverPreviewLoop() {
+    if (hoverPreviewRafId) return;
+    const tick = () => {
+      if (!hoverPreviewCandidateId) {
+        hoverPreviewRafId = null;
+        return;
+      }
+      renderCandidateHoverPreview(hoverPreviewCandidateId);
+      hoverPreviewRafId = requestAnimationFrame(tick);
+    };
+    hoverPreviewRafId = requestAnimationFrame(tick);
+  }
+
+  async function showCandidateHoverPreview(candId, ev) {
+    if (!candId) return;
+    hoverPreviewCandidateId = candId;
+    hoverPreviewAnchorEl = ev?.currentTarget || ev?.target?.closest?.('.ytm-upload-menu-item-candidate') || hoverPreviewAnchorEl;
+    hoverPreviewMouseX = ev?.clientX ?? hoverPreviewMouseX;
+    hoverPreviewMouseY = ev?.clientY ?? hoverPreviewMouseY;
+    hoverPreviewLoading = true;
+    console.log('[CS] hover preview start:', candId);
+    const el = ensureCandidateHoverPreview();
+    if (el) {
+      renderCandidateHoverPreview(candId);
+      updateCandidateHoverPreviewPosition(hoverPreviewMouseX, hoverPreviewMouseY, hoverPreviewAnchorEl);
+      el.classList.add('visible');
+    }
+    startCandidateHoverPreviewLoop();
+    const cand = await ensureCandidateLyricsLoaded(candId);
+    if (hoverPreviewCandidateId !== candId) return;
+    hoverPreviewLoading = false;
+    renderCandidateHoverPreview(candId);
+  }
+
+  function hideCandidateHoverPreview() {
+    hoverPreviewCandidateId = null;
+    hoverPreviewLoading = false;
+    hoverPreviewAnchorEl = null;
+    if (hoverPreviewRafId) {
+      cancelAnimationFrame(hoverPreviewRafId);
+      hoverPreviewRafId = null;
+    }
+    const el = document.getElementById('ytm-candidate-hover-preview');
+    if (el) el.classList.remove('visible');
+  }
+
   async function selectCandidateById(candId) {
     if (!Array.isArray(lyricsCandidates) || !lyricsCandidates.length) return;
-    const cand = lyricsCandidates.find((c, idx) => (c.id || String(idx)) === candId);
-  if (!cand || typeof cand.lyrics !== 'string' || !cand.lyrics.trim()) return;
-  selectedCandidateId = candId;
-  dynamicLines = null;
-  duetSubDynamicLines = null;
-  _duetExcludedTimes = new Set();
-  if (currentKey) {
-  storage.set(currentKey, {
+    let cand = lyricsCandidates.find((c, idx) => getCandidateId(c, idx) === String(candId));
+    if (!cand) return;
+    if (!(typeof cand.lyrics === 'string' && cand.lyrics.trim())) {
+      cand = await ensureCandidateLyricsLoaded(candId);
+    }
+    if (!cand || typeof cand.lyrics !== 'string' || !cand.lyrics.trim()) {
+      showToast('この候補の歌詞データを読み込めませんでした');
+      return;
+    }
+    selectedCandidateId = candId;
+    dynamicLines = null;
+    duetSubDynamicLines = null;
+    _duetExcludedTimes = new Set();
+    if (currentKey) {
+      storage.set(currentKey, {
         lyrics: cand.lyrics,
         dynamicLines: null,
         noLyrics: false,
-        candidateId: cand.id || null
+        candidateId: cand.id || candId || null
       });
     }
     await applyLyricsText(cand.lyrics);
@@ -3367,26 +3864,34 @@ async function applyLyricsText(rawLyrics) {
     const list = section ? section.querySelector('.ytm-upload-menu-candidate-list') : null;
     if (!section || !list) return;
     list.innerHTML = '';
-    if (!Array.isArray(lyricsCandidates) || lyricsCandidates.length <= 1) {
+    if (!Array.isArray(lyricsCandidates) || !lyricsCandidates.length) {
       section.style.display = 'none';
       if (ui.lyricsBtn) ui.lyricsBtn.classList.remove('ytm-lyrics-has-candidates');
       return;
     }
     section.style.display = 'block';
     lyricsCandidates.forEach((cand, idx) => {
-      const id = cand.id || String(idx);
+      const id = getCandidateId(cand, idx);
       const btn = document.createElement('button');
       btn.className = 'ytm-upload-menu-item ytm-upload-menu-item-candidate';
       btn.dataset.action = 'candidate';
       btn.dataset.candidateId = id;
-      let labelText = '';
-      if (cand.artist && cand.title) labelText = `${cand.artist} - ${cand.title}`;
-      else if (cand.artist || cand.title) labelText = `${cand.artist || ''}${cand.artist && cand.title ? ' - ' : ''}${cand.title || ''}`;
-      else if (cand.path) labelText = cand.path;
-      else labelText = `候補${idx + 1}`;
-      if (cand.source) labelText += ` [${cand.source}]`;
-      if (cand.has_synced) labelText += ' ⏱';
-      btn.textContent = labelText;
+      btn.textContent = buildCandidateLabel(cand, idx);
+      if (String(selectedCandidateId || '') === id) {
+        btn.classList.add('is-selected');
+      }
+      btn.addEventListener('mouseenter', (ev) => {
+        showCandidateHoverPreview(id, ev);
+      });
+      btn.addEventListener('mousemove', (ev) => {
+        hoverPreviewMouseX = ev.clientX;
+        hoverPreviewMouseY = ev.clientY;
+        hoverPreviewAnchorEl = ev.currentTarget || hoverPreviewAnchorEl;
+        updateCandidateHoverPreviewPosition(hoverPreviewMouseX, hoverPreviewMouseY, hoverPreviewAnchorEl);
+      });
+      btn.addEventListener('mouseleave', () => {
+        hideCandidateHoverPreview();
+      });
       list.appendChild(btn);
     });
     if (ui.lyricsBtn) {
@@ -3494,7 +3999,7 @@ async function applyLyricsText(rawLyrics) {
       const cl = ui.uploadMenu.classList;
       if (show === undefined) cl.toggle('visible');
       else if (show) cl.add('visible');
-      else cl.remove('visible');
+      else { cl.remove('visible'); hideCandidateHoverPreview(); }
     };
     uploadBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -3512,6 +4017,7 @@ async function applyLyricsText(rawLyrics) {
       const candId = target.dataset.candidateId || null;
       const reqId = target.dataset.requestId || null;
       toggleMenu(false);
+      hideCandidateHoverPreview();
       if (action === 'local') {
         ui.input?.click();
       } else if (action === 'add-sync') {
@@ -3533,6 +4039,7 @@ async function applyLyricsText(rawLyrics) {
         sendLockRequest(reqId);
       }
     });
+
     if (!uploadMenuGlobalSetup) {
       uploadMenuGlobalSetup = true;
       document.addEventListener('click', (ev) => {
@@ -3540,6 +4047,7 @@ async function applyLyricsText(rawLyrics) {
         if (!ui.uploadMenu.classList.contains('visible')) return;
         if (ui.uploadMenu.contains(ev.target) || uploadBtn.contains(ev.target)) return;
         ui.uploadMenu.classList.remove('visible');
+        hideCandidateHoverPreview();
       }, true);
     }
     refreshCandidateMenu();
@@ -4917,15 +5425,25 @@ const optimizeLineBreaks = (text) => {
           if (!r.classList.contains('active')) {
             r.classList.add('active');
 
-            // Only the primary line should scroll / count replay
+// Only the primary line should scroll / count replay
+           // Only the primary line should scroll / count replay
+// Only the primary line should scroll / count replay
+           // Only the primary line should scroll / count replay
             if (isPrimary) {
-              r.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
+              // 画面の種類（通常画面かPIPか）でスクロール位置を分ける
               if (container === ui.lyrics) {
+                // 【通常再生画面】 ブラウザの標準機能で「物理的な中央」に強制配置
+                r.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 ReplayManager.incrementLyricCount();
+              } else {
+                // 【PIP（小窓）】 引き続き Apple Music風に「二行上 (35%の位置)」をキープ
+                const offsetTop = r.offsetTop;
+                const containerHeight = container.clientHeight;
+                const targetScroll = offsetTop - (containerHeight * 0.35) + (r.offsetHeight / 2);
+                container.scrollTo({ top: targetScroll, behavior: 'smooth' });
               }
-            }
-          }
+            }            
+                      }
 
           if (r.classList.contains('has-translation')) {
             r.classList.add('show-translation');
@@ -5329,9 +5847,10 @@ const optimizeLineBreaks = (text) => {
 
       updateMetaUI(meta);
 
-      // PIPウィンドウのメタデータ(タイトル・アーティスト・画像)を更新
+      // PIPウィンドウのメタデータと歌詞表示をリセット
       if (PipManager) {
         PipManager.updateMeta(meta.title, meta.artist);
+        PipManager.resetLyrics(); // ここで歌詞を一旦消す
       }
 
       // Discord presence: set line1 immediately (lyrics line2 will update during playback)

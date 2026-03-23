@@ -49,7 +49,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/assets/fonts/*.woff2"
+        "src/assets/fonts/*.woff2",
+        "src/assets/icons/*.png"
       ],
       "matches": [
         "<all_urls>"

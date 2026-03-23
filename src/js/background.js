@@ -1,6 +1,6 @@
 import * as CloudSync from './module/bg-cloud-sync.js';
 import * as API from './module/api.js';
-import * as LocalDiscord from './module/local-discord.js';
+
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(CloudSync.CLOUD_STORAGE_KEY, (items) => {
@@ -14,21 +14,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return;
   }
 
-  
-  // Local Discord presence (localhost python server)
-  if (req.type === 'DISCORD_PRESENCE_UPDATE') {
-    LocalDiscord.postLocalDiscordPresence('/presence', req.payload || {})
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e) }));
-    return true;
-  }
 
-  if (req.type === 'DISCORD_PRESENCE_CLEAR') {
-    LocalDiscord.postLocalDiscordPresence('/clear', {})
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ ok: false, error: String(e) }));
-    return true;
-  }
 
 if (req.type === 'GET_CLOUD_STATE') {
     CloudSync.loadCloudState()

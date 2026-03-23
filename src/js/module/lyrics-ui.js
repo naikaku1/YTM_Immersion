@@ -821,62 +821,6 @@
       src: null
     };
   };
-  // ===================== Discord Presence (Localhost) =====================
-  const DISCORD_PRESENCE_THROTTLE_MS = 1200;
-  let __lastPresence = { line1: '', line2: '', ts: 0 };
-
-  const _normPresence = (s, maxLen = 128) => {
-    const t = (s ?? '').toString().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!t) return '';
-    return t.length > maxLen ? (t.slice(0, maxLen - 1) + '…') : t;
-  };
-
-  const _buildPresenceLine1 = (meta) => {
-    if (!meta) return '';
-    const parts = [meta.artist, meta.album, meta.title]
-      .map(v => (v ?? '').toString().trim())
-      .filter(Boolean);
-    return parts.join(' - ');
-  };
-
-//歌詞送信ロジック
-  const sendDiscordPresence = (meta, lyricLine) => {
-    try {
-      if (!meta) return;
-      const line1 = _normPresence(_buildPresenceLine1(meta), 128);
-      const line2 = _normPresence(lyricLine || '', 128);
-      const now = Date.now();
-
-      // Don't spam: send only if content changed OR enough time passed
-      if (line1 === __lastPresence.line1 && line2 === __lastPresence.line2 && (now - __lastPresence.ts) < DISCORD_PRESENCE_THROTTLE_MS) {
-        return;
-      }
-      __lastPresence = { line1, line2, ts: now };
-
-      chrome.runtime.sendMessage({
-        type: 'DISCORD_PRESENCE_UPDATE',
-        payload: {
-          line1,
-          line2,
-          url: getCurrentVideoUrl(),
-          meta: {
-            title: meta.title || '',
-            artist: meta.artist || '',
-            album: meta.album || '',
-            src: meta.src || null
-          }
-        }
-      });
-    } catch (e) {
-      // ignore
-    }
-  };
-
-  const clearDiscordPresence = () => {
-    try {
-      chrome.runtime.sendMessage({ type: 'DISCORD_PRESENCE_CLEAR' });
-    } catch (e) { }
-  };
 
 
   const getCurrentVideoUrl = () => {
@@ -2447,7 +2391,191 @@ function renderSettingsPanel() {
     };
   }
 
+  // ===================== Artist Seamless Switch =====================
+  const SWITCH_NOISE_KEYWORDS = [
+    '歌ってみた', '弾いてみた', '弾いてみたけど', '踊ってみた', '叩いてみた',
+    '歌われてみた', '演奏してみた', '演奏動画',
+    'cover', 'covered', 'karaoke', 'カラオケ',
+    'acoustic', 'live', 'remix', 'piano',
+    'arrange', 'off vocal', 'instrumental', 'full chorus', 'short ver'
+  ];
+
+  function _switchQueryForMeta(meta) {
+    // Search title only — not title+artist, so we get all versions
+    return (meta?.title || '').trim();
+  }
+
+  function _filterSwitchResults(items, meta) {
+    const titleLower = (meta?.title || '').toLowerCase();
+    return items.filter(item => {
+      const t = (item.title || '').toLowerCase();
+      const ch = (item.channel || '').toLowerCase();
+      // Keep items whose title shares words with the song title (looser check)
+      const titleWords = titleLower.split(/\s+/).filter(w => w.length > 1);
+      const hasTitle = titleWords.some(w => t.includes(w));
+      if (!hasTitle) return false;
+      // Exclude noise keywords
+      for (const kw of SWITCH_NOISE_KEYWORDS) {
+        if (t.includes(kw) || ch.includes(kw)) return false;
+      }
+      return true;
+    });
+  }
+
+  async function searchYTMAlternatives(meta) {
+    const q = _switchQueryForMeta(meta);
+    if (!q) return [];
+    // Use YouTube Music's InnerTube API — same endpoint the web app itself uses
+    try {
+      const resp = await fetch('https://music.youtube.com/youtubei/v1/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-YouTube-Client-Name': '67', 'X-YouTube-Client-Version': '1.20240101.01.00' },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB_REMIX',
+              clientVersion: '1.20240101.01.00',
+              hl: 'ja',
+              gl: 'JP',
+            }
+          },
+          query: q
+          // No params = search all types (songs, videos, albums, etc.)
+        })
+      });
+      if (!resp.ok) { console.warn('[Switch] InnerTube API error:', resp.status); return []; }
+      const data = await resp.json();
+
+      const results = [];
+      const walk = (obj, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth > 30) return;
+        if (obj.musicResponsiveListItemRenderer) {
+          const r = obj.musicResponsiveListItemRenderer;
+          const videoId =
+            r.playlistItemData?.videoId ||
+            r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+            r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.find(x => x.navigationEndpoint?.watchEndpoint)?.navigationEndpoint?.watchEndpoint?.videoId;
+          const title    = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
+          const subtitle = (r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map(x => x.text).join('');
+          const thumbs   = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+          const thumb    = thumbs.length ? thumbs[thumbs.length - 1].url : '';
+          if (videoId && title) results.push({ videoId, title, channel: subtitle, thumb });
+          return; // don't descend into an item we already parsed
+        }
+        for (const key of Object.keys(obj)) {
+          const val = obj[key];
+          if (Array.isArray(val)) val.forEach(v => walk(v, depth + 1));
+          else if (val && typeof val === 'object') walk(val, depth + 1);
+        }
+      };
+      walk(data);
+      const seen = new Set();
+      return results.filter(r => { if (seen.has(r.videoId)) return false; seen.add(r.videoId); return true; });
+    } catch (e) {
+      console.error('[Switch] Search failed:', e);
+      return [];
+    }
+  }
+
+
+  function setupSwitchPanel(triggerBtn) {
+    // Toggle: close if already open
+    const existing = document.getElementById('ytm-switch-panel');
+    if (existing) { existing.remove(); return; }
+
+    const meta = getMetadata();
+    if (!meta || !meta.title) { showToast('曲名情報を取得できませんでした'); return; }
+
+    const panel = document.createElement('div');
+    panel.id = 'ytm-switch-panel';
+    panel.className = 'ytm-switch-panel';
+    panel.innerHTML = `
+      <div class="ytm-switch-header">
+        <span>🔄 代替バージョンを検索: ${escHtml(meta.title)}</span>
+        <button class="ytm-switch-close" id="ytm-switch-close">✕</button>
+      </div>
+      <div class="ytm-switch-list" id="ytm-switch-list">
+        <div class="ytm-switch-loading">検索中…</div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    // Position panel ABOVE the trigger button
+    if (triggerBtn) {
+      const rect = triggerBtn.getBoundingClientRect();
+      const panelWidth = 360;
+      let left = rect.left + rect.width / 2 - panelWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+      panel.style.position = 'fixed';
+      panel.style.left = `${left}px`;
+      panel.style.bottom = `${window.innerHeight - rect.top + 10}px`;
+      panel.style.top = 'auto';
+      panel.style.right = 'auto';
+    }
+
+    document.getElementById('ytm-switch-close').onclick = () => panel.remove();
+    setTimeout(() => {
+      document.addEventListener('click', function outsideClick(ev) {
+        if (!panel.contains(ev.target) && !ev.target.closest('#ytm-switch-btn')) {
+          panel.remove();
+          document.removeEventListener('click', outsideClick, true);
+        }
+      }, true);
+    }, 100);
+
+    searchYTMAlternatives(meta).then(rawResults => {
+      const results = _filterSwitchResults(rawResults, meta);
+      const listEl = document.getElementById('ytm-switch-list');
+      if (!listEl) return;
+
+      if (!results.length) {
+        // Show all unfiltered results if filter removed everything
+        const fallback = rawResults.slice(0, 10);
+        if (!fallback.length) {
+          listEl.innerHTML = '<div class="ytm-switch-loading">候補が見つかりませんでした</div>';
+          return;
+        }
+        listEl.innerHTML = '<div class="ytm-switch-loading" style="font-size:10px;opacity:0.6;padding:6px 10px">フィルターを緩めて表示しています</div>';
+        renderSwitchItems(listEl, fallback, false);
+        return;
+      }
+      listEl.innerHTML = '';
+      renderSwitchItems(listEl, results, true);
+    });
+  }
+
+  function renderSwitchItems(listEl, items, clearFirst) {
+    if (clearFirst) listEl.innerHTML = '';
+    const video = document.querySelector('video');
+    const currentTime = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+
+    items.forEach(item => {
+      const row = document.createElement('button');
+      row.className = 'ytm-switch-item';
+      row.innerHTML = `
+        ${item.thumb ? `<img class="ytm-switch-thumb" src="${escHtml(item.thumb)}" alt="">` : '<div class="ytm-switch-thumb"></div>'}
+        <div class="ytm-switch-info">
+          <div class="ytm-switch-title">${escHtml(item.title)}</div>
+          <div class="ytm-switch-channel">${escHtml(item.channel)}</div>
+        </div>
+      `;
+      row.onclick = () => {
+        document.getElementById('ytm-switch-panel')?.remove();
+        const t = Math.floor(currentTime);
+        const url = `https://music.youtube.com/watch?v=${item.videoId}&t=${t}s`;
+        location.href = url;
+      };
+      listEl.appendChild(row);
+    });
+  }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   function initLayout() {
+
     if (document.getElementById('ytm-custom-wrapper')) {
       ui.wrapper = document.getElementById('ytm-custom-wrapper');
       ui.bg = document.getElementById('ytm-custom-bg');
@@ -2504,8 +2632,14 @@ function renderSettingsPanel() {
       }
     };
 
+    const switchBtnConfig = {
+      txt: '',
+      cls: 'icon-btn ytm-switch-icon-btn',
+      click: (ev) => setupSwitchPanel(ev.currentTarget)
+    };
+
     // ボタン配列に追加
-    btns.push(lyricsBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig,  settingsBtnConfig);
+    btns.push(lyricsBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
 
     btns.forEach(b => {
       const btn = createEl('button', '', `ytm-glass-btn ${b.cls || ''}`, b.txt);
@@ -2518,7 +2652,14 @@ function renderSettingsPanel() {
       if (b === shareBtnConfig) {
         ui.shareBtn = btn;
       }
-      
+      if (b === switchBtnConfig) {
+        btn.id = 'ytm-switch-btn';
+        // Use the custom icon image
+        try {
+          const iconUrl = chrome.runtime.getURL('src/assets/icons/ArtistChange.png');
+          btn.innerHTML = `<img src="${iconUrl}" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" alt="ArtistChange">`;
+        } catch(_) { btn.textContent = '🔄'; }
+      }
       if (b === settingsBtnConfig) ui.settingsBtn = btn;
     });
 
@@ -3181,24 +3322,7 @@ const optimizeLineBreaks = (text) => {
       }
       if (i === lyricsData.length - 1) idx = i;
     }
-    // Discord presence: reflect the lyric at the current playback position (seek-safe)
-    try {
-      const metaNow = getMetadata();
-      let lyricText = '';
-      if (idx >= 0 && idx < lyricsData.length) {
-        lyricText = (lyricsData[idx]?.text || '').trim();
-      }
-      // Fallback to DOM text (in case rendered text differs)
-      if (!lyricText && ui.lyrics) {
-        const rowsMain = ui.lyrics.querySelectorAll('.lyric-line');
-        if (rowsMain && rowsMain.length && idx >= 0 && idx < rowsMain.length) {
-          const row = rowsMain[idx];
-          const mainEl = row.querySelector('.lyric-main') || row;
-          lyricText = (mainEl && mainEl.textContent ? mainEl.textContent : '').trim();
-        }
-      }
-      sendDiscordPresence(metaNow, lyricText);
-    } catch (e) { }
+
 
 
     const targets = [];
@@ -3566,8 +3690,6 @@ const optimizeLineBreaks = (text) => {
     const isPlayerOpen = layout?.hasAttribute('player-page-open');
     if (!config.mode || !isPlayerOpen) {
       document.body.classList.remove('ytm-custom-layout');
-      // Discord presence: clear when not in player-page
-      clearDiscordPresence();
       return;
     }
     document.body.classList.add('ytm-custom-layout');
@@ -3654,8 +3776,6 @@ const optimizeLineBreaks = (text) => {
         PipManager.resetLyrics(); // ここで歌詞を一旦消す
       }
 
-      // Discord presence: set line1 immediately (lyrics line2 will update during playback)
-      sendDiscordPresence(meta, '');
       refreshCandidateMenu();
       refreshLockMenu();
       if (ui.lyrics) ui.lyrics.scrollTop = 0;

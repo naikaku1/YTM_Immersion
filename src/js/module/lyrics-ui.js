@@ -1,2202 +1,3 @@
-/* globals chrome, browser */
-(function () {
-  const EXT =
-    typeof globalThis.chrome !== 'undefined'
-      ? globalThis.chrome
-      : (typeof globalThis.browser !== 'undefined' ? globalThis.browser : null);
-
-  // カスタムハンドル（丸ポチ）を作成してoverflow:hiddenから逃がす
-  (function createCustomProgressHandle() {
-    const waitForPlayerBar = () => {
-      const playerBar = document.querySelector('ytmusic-player-bar');
-      const progressBar = document.querySelector('tp-yt-paper-slider#progress-bar');
-      if (!playerBar || !progressBar) {
-        setTimeout(waitForPlayerBar, 500);
-        return;
-      }
-
-      // カスタムハンドルを作成
-      let customHandle = document.getElementById('ytm-custom-progress-handle');
-      if (!customHandle) {
-        customHandle = document.createElement('div');
-        customHandle.id = 'ytm-custom-progress-handle';
-        customHandle.style.cssText = `
-          position: fixed;
-          width: 12px;
-          height: 12px;
-          background: #ff0000;
-          border-radius: 50%;
-          pointer-events: none;
-          z-index: 10000;
-          opacity: 0;
-          transform: translate(-50%, -50%);
-          transition: opacity 0.1s ease-out;
-        `;
-        document.body.appendChild(customHandle);
-      }
-
-      // 元のハンドルを非表示にするCSS（Shadow DOM内部に適用）
-      const style = document.createElement('style');
-      style.id = 'ytm-hide-original-handle';
-      style.textContent = `
-        body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar::part(knob),
-        body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [class*="knob"],
-        body.ytm-custom-layout ytmusic-player-bar #sliderKnobInner {
-          opacity: 0 !important;
-        }
-      `;
-      if (!document.getElementById('ytm-hide-original-handle')) {
-        document.head.appendChild(style);
-      }
-
-      // 表示状態を管理
-      let isHovering = false;      // カーソルがバー上にある
-      let positionChanged = false; // 位置を変更した（ドラッグした）
-      let isDragging = false;      // ドラッグ中かどうか
-
-      // ホバー検出
-      progressBar.addEventListener('mouseenter', () => {
-        isHovering = true;
-      });
-
-      progressBar.addEventListener('mouseleave', () => {
-        isHovering = false;
-      });
-
-      // ドラッグ（位置変更）検出
-      progressBar.addEventListener('mousedown', () => {
-        positionChanged = true;
-        isDragging = true;
-      });
-
-      // マウスアップでドラッグ終了
-      document.addEventListener('mouseup', () => {
-        isDragging = false;
-      });
-
-      // バー以外をクリックしたら非表示（キャプチャフェーズで確実にキャッチ）
-      document.addEventListener('click', (e) => {
-        if (!progressBar.contains(e.target)) {
-          positionChanged = false;
-        }
-      }, true);
-
-      // ハンドルの表示・非表示を制御
-      const shouldShowHandle = () => {
-        // ホバー中、または位置変更後（バー外クリックまで）
-        return isHovering || positionChanged;
-      };
-
-      // ハンドルの位置を更新
-      const updateHandlePosition = () => {
-        if (!document.body.classList.contains('ytm-custom-layout')) {
-          customHandle.style.opacity = '0';
-          requestAnimationFrame(updateHandlePosition);
-          return;
-        }
-
-        // ネイティブのsliderKnobを取得
-        const sliderKnob = progressBar.querySelector('#sliderKnob');
-        if (!sliderKnob) {
-          requestAnimationFrame(updateHandlePosition);
-          return;
-        }
-
-        // 表示条件をチェック
-        if (!shouldShowHandle()) {
-          customHandle.style.opacity = '0';
-          requestAnimationFrame(updateHandlePosition);
-          return;
-        }
-
-        // sliderKnobのrectを取得（ドラッグ中もリアルタイムで更新される）
-        const knobRect = sliderKnob.getBoundingClientRect();
-        const barRect = progressBar.getBoundingClientRect();
-
-        // knobの中心位置を計算（完全追従）
-        const handleX = knobRect.left + knobRect.width / 2;
-        const handleY = barRect.top + barRect.height / 2;
-
-        // ハンドルを表示して位置を更新
-        customHandle.style.opacity = '1';
-        customHandle.style.left = handleX + 'px';
-        customHandle.style.top = handleY + 'px';
-
-        // ドラッグ中は大きく、そうでなければ通常サイズ
-        if (isDragging) {
-          customHandle.style.width = '16px';
-          customHandle.style.height = '16px';
-        } else {
-          customHandle.style.width = '12px';
-          customHandle.style.height = '12px';
-        }
-
-        requestAnimationFrame(updateHandlePosition);
-      };
-
-      requestAnimationFrame(updateHandlePosition);
-
-    };
-
-    // DOMが準備できたら開始
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', waitForPlayerBar);
-    } else {
-      waitForPlayerBar();
-    }
-  })();
-
-  let config = {
-    deepLKey: null,
-    useTrans: true,
-    mode: true,
-    mainLang: 'original',
-    subLang: 'en',
-    uiLang: 'ja',
-    syncOffset: 0,
-    saveSyncOffset: false,
-    useSharedTranslateApi: false
-  };
-
-  // フォールバック言語
-  const LOCAL_FALLBACK_TEXTS = {
-    ja: {
-      unit_hour: "時間",
-      unit_minute: "分",
-      unit_second: "秒",
-      replay_playTime: "総再生時間",
-      replay_plays: "回再生",
-      replay_topSong: "トップソング",
-      replay_topArtist: "トップアーティスト",
-      replay_obsession: "ヘビロテ中",
-      replay_ranking: "再生数ランキング",
-      replay_today: "今日",
-      replay_week: "今週",
-      replay_all: "全期間",
-      replay_empty: "まだ再生データがありません...",
-      replay_no_data_sub: "曲を聴くとここに表示されます",
-      replay_reset_confirm: "本当に再生履歴を全て削除しますか？\nこの操作は取り消せません。",
-      replay_vibe: "あなたの雰囲気",
-      replay_lyrics_heard: "累計行数",
-      settings_title: "設定",
-      settings_ui_lang: "UI言語 / Language",
-      settings_trans: "歌詞翻訳機能を使う",
-      settings_shared_trans: "共有翻訳を使う（APIキー不要）",
-      settings_main_lang: "メイン言語 (大きく表示)",
-      settings_sub_lang: "サブ言語 (小さく表示)",
-      settings_save: "保存",
-      settings_reset: "リセット",
-      settings_saved: "設定を保存しました",
-      settings_sync_offset: "歌詞同期オフセット",
-      settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
-      settings_fast_mode: "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)"
-    },
-    en: {
-      unit_hour: "hours",
-      unit_minute: "minutes",
-      unit_second: "seconds",
-      replay_playTime: "Total play time",
-      replay_plays: "Plays",
-      replay_topSong: "Top song",
-      replay_topArtist: "Top artist",
-      replay_obsession: "On repeat",
-      replay_ranking: "Play count ranking",
-      replay_today: "Today",
-      replay_week: "This week",
-      replay_all: "All time",
-      replay_empty: "No play data yet...",
-      replay_no_data_sub: "Play some songs to see them here",
-      replay_reset_confirm: "Are you sure you want to delete all play history?\nThis action can't be undone.",
-      replay_vibe: "Your vibe",
-      replay_lyrics_heard: "Total lines",
-      settings_title: "Settings",
-      settings_ui_lang: "UI Language / Language",
-      settings_trans: "Enable lyrics translation",
-      settings_shared_trans: "Use shared translation (no API key required)",
-      settings_main_lang: "Main language (large)",
-      settings_sub_lang: "Sub language (small)",
-      settings_save: "Save",
-      settings_reset: "Reset",
-      settings_saved: "Settings saved",
-      settings_sync_offset: "Lyrics sync offset",
-      settings_sync_offset_save: "Don't reset offset when the song changes",
-      settings_fast_mode: "Fast Load Mode (May reduce accuracy for covers)"
-    },
-    ko: {
-      unit_hour: "시간",
-      unit_minute: "분",
-      unit_second: "초",
-      replay_playTime: "총 재생 시간",
-      replay_plays: "재생 횟수",
-      replay_topSong: "톱 곡",
-      replay_topArtist: "톱 아티스트",
-      replay_obsession: "반복 재생 중",
-      replay_ranking: "재생수 랭킹",
-      replay_today: "오늘",
-      replay_week: "이번 주",
-      replay_all: "전체 기간",
-      replay_empty: "아직 재생 데이터가 없습니다...",
-      replay_no_data_sub: "곡을 들으면 여기에 표시됩니다",
-      replay_reset_confirm: "정말로 재생 기록을 모두 삭제하시겠습니까?\n이 작업은 취소할 수 없습니다.",
-      replay_vibe: "당신의 분위기",
-      replay_lyrics_heard: "누적 행 수",
-      settings_title: "설정",
-      settings_ui_lang: "UI 언어 / Language",
-      settings_trans: "가사 번역 기능 사용",
-      settings_shared_trans: "공유 번역 사용 (API 키 불필요)",
-      settings_main_lang: "메인 언어 (크게 표시)",
-      settings_sub_lang: "서브 언어 (작게 표시)",
-      settings_save: "저장",
-      settings_reset: "초기화",
-      settings_saved: "설정을 저장했습니다",
-      settings_sync_offset: "가사 동기 오프셋",
-      settings_sync_offset_save: "곡이 바뀌어도 오프셋을 초기화하지 않기",
-      settings_fast_mode: "고속 로딩 모드"
-    },
-    zh: {
-      unit_hour: "小时",
-      unit_minute: "分钟",
-      unit_second: "秒",
-      replay_playTime: "总播放时长",
-      replay_plays: "播放次数",
-      replay_topSong: "热门歌曲",
-      replay_topArtist: "热门艺人",
-      replay_obsession: "循环播放中",
-      replay_ranking: "播放次数排行",
-      replay_today: "今天",
-      replay_week: "本周",
-      replay_all: "全部时间",
-      replay_empty: "还没有播放数据...",
-      replay_no_data_sub: "听歌后会在这里显示",
-      replay_reset_confirm: "确定要删除所有播放记录吗？\n此操作无法撤销。",
-      replay_vibe: "你的氛围",
-      replay_lyrics_heard: "累计行数",
-      settings_title: "设置",
-      settings_ui_lang: "UI 语言 / Language",
-      settings_trans: "启用歌词翻译",
-      settings_shared_trans: "使用共享翻译（无需 API 密钥）",
-      settings_main_lang: "主语言（大号显示）",
-      settings_sub_lang: "副语言（小号显示）",
-      settings_save: "保存",
-      settings_reset: "重置",
-      settings_saved: "已保存设置",
-      settings_sync_offset: "歌词同步偏移",
-      settings_sync_offset_save: "切歌时不重置偏移",
-      settings_fast_mode: "快速加载模式"
-    }
-  }; 
-  
-  
-  let UI_TEXTS = null;
-
-
-  const t = (key) => {
-    const lang = config.uiLang || 'ja';
-
-
-    const remoteTable =
-      (UI_TEXTS && UI_TEXTS[lang]) ||
-      (UI_TEXTS && UI_TEXTS['ja']) ||
-      null;
-
-    const localLangTable = LOCAL_FALLBACK_TEXTS[lang] || {};
-    const localJaTable = LOCAL_FALLBACK_TEXTS['ja'] || {};
-
-    if (remoteTable && remoteTable[key]) return remoteTable[key];
-    if (localLangTable && localLangTable[key]) return localLangTable[key];
-    if (localJaTable && localJaTable[key]) return localJaTable[key];
-    return key;
-  };
-
-
-
-
-  const REMOTE_TEXTS_URL =
-    'https://raw.githubusercontent.com/naikaku1/YTM-Modern-UI/main/src/lang/ui.json';
-
-  let remoteTextsLoaded = false;
-
-  // 言語コード
-  function getLangDisplayName(code) {
-    if (UI_TEXTS && UI_TEXTS[code]) {
-      const metaName = UI_TEXTS[code].lang_name || UI_TEXTS[code].__name;
-      if (metaName) return metaName;
-    }
-    if (code === 'ja') return '日本語';
-    if (code === 'en') return 'English';
-    if (code === 'ko') return '한국어';
-    return code;
-  }
-
-  function mergeRemoteTexts(remote) {
-    if (!remote || typeof remote !== 'object') return;
-    UI_TEXTS = remote;
-    remoteTextsLoaded = true;
-    refreshUiLangGroup();
-  }
-
-
-
-  let uiLangEtcClickSetup = false;
-
-  function refreshUiLangGroup() {
-    const group = document.getElementById('ui-lang-group');
-    if (!group) return;
-
-    const current = config.uiLang || 'ja';
-    group.innerHTML = '';
-
-
-    const langs = UI_TEXTS
-      ? Object.keys(UI_TEXTS)
-      : Object.keys(LOCAL_FALLBACK_TEXTS);
-
-    if (!langs.length) return;
-
-    const MAX_DIRECT = 3; 
-    const directLangs = langs.slice(0, MAX_DIRECT);
-    const hasMore = langs.length > MAX_DIRECT;
-
-
-    directLangs.forEach((code) => {
-      const btn = document.createElement('button');
-      btn.className = 'ytm-lang-pill';
-      btn.dataset.value = code;
-      btn.textContent = getLangDisplayName(code);
-      group.appendChild(btn);
-    });
-
-
-    if (hasMore) {
-      const etcBtn = document.createElement('button');
-      etcBtn.className = 'ytm-lang-pill ytm-lang-pill-etc';
-      etcBtn.dataset.value = '__etc__';
-      etcBtn.textContent = 'etc...';
-      group.appendChild(etcBtn);
-
-
-      let menu = document.getElementById('ui-lang-etc-menu');
-      if (!menu) {
-        menu = document.createElement('div');
-        menu.id = 'ui-lang-etc-menu';
-        menu.className = 'ytm-lang-etc-menu';
-        menu.style.position = 'fixed';
-        menu.style.zIndex = '2147483647';
-        menu.style.maxHeight = '260px';
-        menu.style.overflowY = 'auto';
-        menu.style.borderRadius = '8px';
-        menu.style.padding = '6px';
-        menu.style.background = 'rgba(0,0,0,0.9)';
-        menu.style.border = '1px solid rgba(255,255,255,0.2)';
-        menu.style.minWidth = '160px';
-        menu.style.display = 'none';
-        document.body.appendChild(menu);
-      }
-
-
-      menu.innerHTML = '';
-      langs.forEach((code) => {
-        const item = document.createElement('button');
-        item.className = 'ytm-lang-etc-item';
-        item.textContent = getLangDisplayName(code);
-        item.dataset.code = code;
-        item.style.display = 'block';
-        item.style.width = '100%';
-        item.style.textAlign = 'left';
-        item.style.border = 'none';
-        item.style.background = 'transparent';
-        item.style.padding = '4px 6px';
-        item.style.cursor = 'pointer';
-        item.style.color = '#fff';
-        item.style.fontSize = '12px';
-
-        if (code === current) {
-          item.style.fontWeight = '600';
-          item.style.background = 'rgba(255,255,255,0.08)';
-        }
-
-        item.addEventListener('click', () => {
-          config.uiLang = code;
-
-          // if (storage && storage.set) {
-          //   storage.set('ytm_ui_lang', code);
-          // }
-          renderSettingsPanel(); //設定パネルを即時変更
-          menu.style.display = 'none';
-          refreshUiLangGroup(); // 選択後にラベルやアクティブ状態を更新
-        });
-
-        menu.appendChild(item);
-      });
-
-      // etc ボタンでメニュー開閉
-      etcBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const rect = etcBtn.getBoundingClientRect();
-        menu.style.left = `${rect.left}px`;
-        menu.style.top = `${rect.bottom + 4}px`;
-        menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
-      });
-
-      // 現在の言語が directLangs にない場合は etc ボタンをハイライト
-      if (!directLangs.includes(current)) {
-        etcBtn.classList.add('active');
-        etcBtn.textContent = getLangDisplayName(current);
-      }
-
-      // 外側クリックでメニューを閉じる（1回だけ設定）
-      if (!uiLangEtcClickSetup) {
-        uiLangEtcClickSetup = true;
-        document.addEventListener('click', (ev) => {
-          if (!menu) return;
-          if (ev.target === menu || menu.contains(ev.target)) return;
-          const btn = document.querySelector('.ytm-lang-pill-etc');
-          if (btn && (ev.target === btn || btn.contains(ev.target))) return;
-          menu.style.display = 'none';
-        }, true);
-      }
-    }
-
-    // ---- 直接ボタンの active 切り替え＆クリック処理 ----
-    const activeForDirect = directLangs.includes(current) ? current : '';
-    setupLangPills('ui-lang-group', activeForDirect, (v) => {
-      if (!v || v === '__etc__') return; // etc はここでは何もしない
-      config.uiLang = v;
-      renderSettingsPanel(); //設定パネルを即時変更
-    });
-  }
-
-
-  // GitHub から TEXTS を読む
-  async function loadRemoteTextsFromGithub() {
-    try {
-      const res = await fetch(REMOTE_TEXTS_URL, { cache: 'no-store' });
-      if (!res.ok) {
-        console.warn('[UI TEXTS] HTTP error:', res.status);
-        return;
-      }
-      const raw = await res.text();
-
-      let obj = null;
-      try {
-        // ui.json は純粋な JSON
-        obj = JSON.parse(raw);
-      } catch (e) {
-        console.warn('[UI TEXTS] JSON.parse failed for ui.json', e);
-        return;
-      }
-
-      mergeRemoteTexts(obj);
-      console.log('[UI TEXTS] remote languages loaded:', Object.keys(obj));
-    } catch (e) {
-      console.warn('[UI TEXTS] failed to load remote texts:', e);
-    }
-  }
-
-  const chrome = EXT;
-
-
-  const NO_LYRICS_SENTINEL = '__NO_LYRICS__';
-
-  // ===================== CloudSync: Daily Replay クラウド同期 =====================
-  const CloudSync = (() => {
-    if (!EXT || !EXT.runtime) {
-      return {
-        init() { },
-      };
-    }
-
-    let statusEl = null;
-    let tokenInputEl = null;
-    let syncButtonEl = null;
-    let panelRoot = null;
-
-    function setStatus(text) {
-      if (statusEl) {
-        statusEl.textContent = text;
-        statusEl.title = text;
-      }
-    }
-
-    function createPanel() {
-      const existing = document.getElementById('dr-cloud-sync-panel');
-      if (existing) {
-        panelRoot = existing;
-        statusEl = document.querySelector('#dr-cloud-sync-panel-status');
-        tokenInputEl = document.querySelector('#dr-cloud-sync-token-input');
-        syncButtonEl = document.querySelector('#dr-cloud-sync-sync-btn');
-        return;
-      }
-
-      const root = document.createElement('div');
-      root.id = 'dr-cloud-sync-panel';
-      panelRoot = root;
-      root.style.position = 'fixed';
-      root.style.zIndex = '2147483647';
-      root.style.right = '16px';
-      root.style.bottom = '16px';
-      root.style.width = '280px';
-      root.style.maxWidth = '90vw';
-      root.style.borderRadius = '12px';
-      root.style.background = 'rgba(10, 10, 15, 0.96)';
-      root.style.border = '1px solid rgba(255, 255, 255, 0.12)';
-      root.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.6)';
-      root.style.color = '#f5f5ff';
-      root.style.fontFamily =
-        'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-      root.style.fontSize = '12px';
-      root.style.padding = '10px 12px';
-
-      const titleRow = document.createElement('div');
-      titleRow.style.display = 'flex';
-      titleRow.style.alignItems = 'center';
-      titleRow.style.justifyContent = 'space-between';
-      titleRow.style.marginBottom = '6px';
-
-      const title = document.createElement('div');
-      title.textContent = 'Daily Replay クラウド同期';
-      title.style.fontSize = '13px';
-      title.style.fontWeight = '600';
-
-      const closeBtn = document.createElement('button');
-      closeBtn.textContent = '×';
-      closeBtn.style.border = 'none';
-      closeBtn.style.background = 'transparent';
-      closeBtn.style.color = '#aaa';
-      closeBtn.style.cursor = 'pointer';
-      closeBtn.style.fontSize = '14px';
-      closeBtn.style.lineHeight = '1';
-      closeBtn.style.Padding = '0 4px';
-      closeBtn.addEventListener('click', () => {
-        root.style.display = 'none';
-      });
-
-      titleRow.appendChild(title);
-      titleRow.appendChild(closeBtn);
-
-      const desc = document.createElement('div');
-      desc.textContent =
-        '「復活の呪文」を使って履歴をサーバーと同期します。';
-      desc.style.marginBottom = '6px';
-      desc.style.color = '#b0b4d0';
-      desc.style.lineHeight = '1.4';
-
-      const tokenLabel = document.createElement('div');
-      tokenLabel.textContent = '復活の呪文（ID）';
-      tokenLabel.style.fontSize = '11px';
-      tokenLabel.style.marginBottom = '2px';
-      tokenLabel.style.color = '#d0d4ff';
-
-      const tokenInput = document.createElement('input');
-      tokenInput.id = 'dr-cloud-sync-token-input';
-      tokenInput.type = 'text';
-      tokenInput.placeholder = '例: dr_XXXXXXXXXXXXXXXX';
-      tokenInput.style.width = '100%';
-      tokenInput.style.boxSizing = 'border-box';
-      tokenInput.style.borderRadius = '6px';
-      tokenInput.style.border = '1px solid rgba(255,255,255,0.2)';
-      tokenInput.style.background = 'rgba(5,5,10,0.9)';
-      tokenInput.style.color = '#f5f5ff';
-      tokenInput.style.padding = '4px 6px';
-      tokenInput.style.fontSize = '12px';
-      tokenInput.style.marginBottom = '4px';
-
-      const tokenHelpRow = document.createElement('div');
-      tokenHelpRow.style.display = 'flex';
-      tokenHelpRow.style.justifyContent = 'space-between';
-      tokenHelpRow.style.alignItems = 'center';
-      tokenHelpRow.style.marginBottom = '6px';
-
-      const tokenHelp = document.createElement('div');
-      tokenHelp.textContent =
-        '※ Discord ログイン後に表示される復活の呪文を入力。';
-      tokenHelp.style.fontSize = '10px';
-      tokenHelp.style.color = '#8f93b8';
-      tokenHelp.style.marginRight = '4px';
-
-      const loginLinkBtn = document.createElement('button');
-      loginLinkBtn.textContent = 'ログインページ';
-      loginLinkBtn.style.fontSize = '10px';
-      loginLinkBtn.style.borderRadius = '999px';
-      loginLinkBtn.style.border = 'none';
-      loginLinkBtn.style.padding = '4px 8px';
-      loginLinkBtn.style.cursor = 'pointer';
-      loginLinkBtn.style.background = '#5865F2';
-      loginLinkBtn.style.color = '#fff';
-      loginLinkBtn.addEventListener('click', () => {
-        openLoginPage();
-      });
-
-      tokenHelpRow.appendChild(tokenHelp);
-      tokenHelpRow.appendChild(loginLinkBtn);
-
-      const buttonRow = document.createElement('div');
-      buttonRow.style.display = 'flex';
-      buttonRow.style.gap = '6px';
-      buttonRow.style.marginBottom = '4px';
-
-      const saveBtn = document.createElement('button');
-      saveBtn.textContent = '復活の呪文を保存';
-      saveBtn.style.flex = '1';
-      saveBtn.style.borderRadius = '999px';
-      saveBtn.style.border = 'none';
-      saveBtn.style.padding = '5px 8px';
-      saveBtn.style.cursor = 'pointer';
-      saveBtn.style.background = '#4f8bff';
-      saveBtn.style.color = '#fff';
-      saveBtn.style.fontSize = '11px';
-      saveBtn.style.fontWeight = '600';
-
-      const syncBtn = document.createElement('button');
-      syncBtn.id = 'dr-cloud-sync-sync-btn';
-      syncBtn.textContent = '今すぐ同期';
-      syncBtn.style.flex = '0 0 auto';
-      syncBtn.style.borderRadius = '999px';
-      syncBtn.style.border = 'none';
-      syncBtn.style.padding = '5px 10px';
-      syncBtn.style.cursor = 'pointer';
-      syncBtn.style.background = '#1db954';
-      syncBtn.style.color = '#fff';
-      syncBtn.style.fontSize = '11px';
-      syncBtn.style.fontWeight = '600';
-      syncBtn.disabled = true;
-      syncBtn.style.opacity = '0.5';
-
-      saveBtn.addEventListener('click', () => {
-        const token = tokenInput.value.trim();
-        if (!token) {
-          setStatus('復活の呪文を入力してください。');
-          return;
-        }
-        saveRecoveryToken(token);
-      });
-
-      syncBtn.addEventListener('click', () => {
-        syncBtn.disabled = true;
-        syncBtn.style.opacity = '0.5';
-        setStatus('同期中...');
-        syncNow().finally(() => {
-          syncBtn.disabled = false;
-          syncBtn.style.opacity = '1';
-        });
-      });
-
-      const status = document.createElement('div');
-      status.id = 'dr-cloud-sync-panel-status';
-      status.textContent = '状態: 復活の呪文が未設定です。';
-      status.style.fontSize = '10px';
-      status.style.color = '#b0b4d0';
-      status.style.marginTop = '2px';
-      status.style.whiteSpace = 'pre-wrap';
-
-      root.appendChild(titleRow);
-      root.appendChild(desc);
-      root.appendChild(tokenLabel);
-      root.appendChild(tokenInput);
-      root.appendChild(tokenHelpRow);
-      buttonRow.appendChild(saveBtn);
-      buttonRow.appendChild(syncBtn);
-      root.appendChild(buttonRow);
-      root.appendChild(status);
-
-      document.body.appendChild(root);
-
-      statusEl = status;
-      tokenInputEl = tokenInput;
-      syncButtonEl = syncBtn;
-
-      // ★ パネルを初めて出したときに状態を読み込む
-      loadInitialState();
-    }
-
-    function saveRecoveryToken(token) {
-      EXT.runtime.sendMessage(
-        {
-          type: 'SAVE_RECOVERY_TOKEN',
-          token,
-        },
-        (resp) => {
-          if (!resp || !resp.ok) {
-            const errMsg = resp && resp.error ? resp.error : '保存に失敗しました。';
-            setStatus('復活の呪文の保存に失敗: ' + errMsg);
-            return;
-          }
-          setStatus('復活の呪文を保存しました。このIDに紐づいてクラウド同期されます。');
-          if (syncButtonEl) {
-            syncButtonEl.disabled = false;
-            syncButtonEl.style.opacity = '1';
-          }
-        }
-      );
-    }
-
-    function openLoginPage() {
-      EXT.runtime.sendMessage({ type: 'OPEN_LOGIN_PAGE' }, (resp) => {
-        if (!resp || !resp.ok) {
-          const errMsg = resp && resp.error ? resp.error : 'ログインページを開けませんでした。';
-          setStatus('ログインページの起動エラー: ' + errMsg);
-          return;
-        }
-        setStatus(
-          'ブラウザでログインページを開きました。ログイン後に復活の呪文をここに貼り付けてください。'
-        );
-      });
-    }
-
-    function getLocalHistory() {
-      return new Promise((resolve) => {
-        if (!EXT.storage || !EXT.storage.local) {
-          resolve([]);
-          return;
-        }
-        EXT.storage.local.get(ReplayManager.HISTORY_KEY, (items) => {
-          const value = items && items[ReplayManager.HISTORY_KEY];
-          if (Array.isArray(value)) {
-            resolve(value);
-          } else {
-            resolve([]);
-          }
-        });
-      });
-    }
-
-    function setLocalHistory(history) {
-      return new Promise((resolve) => {
-        if (!EXT.storage || !EXT.storage.local) {
-          resolve();
-          return;
-        }
-        EXT.storage.local.set({ [ReplayManager.HISTORY_KEY]: history }, () => resolve());
-      });
-    }
-
-    async function syncNow() {
-      try {
-        const history = await getLocalHistory();
-        const resp = await new Promise((resolve) => {
-          EXT.runtime.sendMessage(
-            {
-              type: 'SYNC_HISTORY',
-              history,
-            },
-            (response) => resolve(response)
-          );
-        });
-
-        if (!resp || !resp.ok) {
-          const errMsg = resp && resp.error ? resp.error : '同期エラー';
-          setStatus('同期に失敗しました: ' + errMsg);
-          return { ok: false, error: errMsg, raw: resp || null };
-        }
-
-        const mergedHistory = Array.isArray(resp.mergedHistory)
-          ? resp.mergedHistory
-          : Array.isArray(resp.history)
-            ? resp.history
-            : null;
-
-        if (mergedHistory) {
-          await setLocalHistory(mergedHistory);
-        }
-
-        const lastSyncAtMs = resp.lastSyncAt || Date.now();
-        const lastSyncDate = new Date(lastSyncAtMs);
-        const serverCount =
-          mergedHistory && Array.isArray(mergedHistory)
-            ? mergedHistory.length
-            : resp.serverCount || '?';
-
-        setStatus(
-          `同期完了: ローカル ${history.length} 件 → サーバー ${serverCount} 件\n最終同期: ${lastSyncDate.toLocaleString()}`
-        );
-
-        return {
-          ok: true,
-          mergedHistory: mergedHistory || null,
-          lastSyncAt: lastSyncAtMs,
-          serverCount,
-        };
-      } catch (e) {
-        console.error('[DailyReplay Cloud] sync error', e);
-        const msg = e && e.message ? e.message : String(e);
-        setStatus(
-          '同期中にエラーが発生しました: ' + msg
-        );
-        return { ok: false, error: msg, raw: null };
-      }
-    }
-
-    function loadInitialState() {
-      EXT.runtime.sendMessage({ type: 'GET_CLOUD_STATE' }, (resp) => {
-        if (!resp || !resp.ok || !resp.state) {
-          setStatus(
-            '状態の取得に失敗しました。復活の呪文を設定すると同期できます。'
-          );
-          return;
-        }
-        const state = resp.state;
-        if (tokenInputEl && state.recoveryToken) {
-          tokenInputEl.value = state.recoveryToken;
-        }
-
-        if (syncButtonEl) {
-          const hasToken = !!state.recoveryToken;
-          syncButtonEl.disabled = !hasToken;
-          syncButtonEl.style.opacity = hasToken ? '1' : '0.5';
-        }
-
-        const lastSyncAt = state.lastSyncAt ? new Date(state.lastSyncAt) : null;
-        const lastSyncText = lastSyncAt ? lastSyncAt.toLocaleString() : '未同期';
-
-        setStatus(
-          state.recoveryToken
-            ? `状態: 復活の呪文が設定されています。\n最終同期: ${lastSyncText}`
-            : '状態: 復活の呪文が未設定です。ログインして発行されたIDを入力してください。'
-        );
-      });
-    }
-
-    // ★ 起動時にパネルを出さず、バックグラウンドで静かに同期だけ行う
-    function init() {
-      if (window.__drCloudSyncInitialized) return;
-      window.__drCloudSyncInitialized = true;
-
-      const startAutoSync = () => {
-        // 起動時自動同期（トークンが無いときはサーバー側で NO_TOKEN になり、トーストも出さない）
-        syncNow()
-          .then((result) => {
-            if (!result || !result.ok) return;
-            // 同期に成功したときだけ右上トースト
-            if (typeof showToast === 'function') {
-              showToast('Daily Replay のクラウド同期が完了しました');
-            }
-          })
-          .catch((e) => {
-            console.warn('[DailyReplay Cloud] auto sync failed', e);
-          });
-      };
-
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startAutoSync);
-      } else {
-        startAutoSync();
-      }
-    }
-
-    // Cloud ボタンから開くときだけパネルを生成・表示
-    function openPanel() {
-      createPanel();
-      if (panelRoot) {
-        panelRoot.style.display = 'block';
-      }
-    }
-
-    return { init, openPanel, syncNow };
-  })();
-
-  // ===================== ここから既存 Immersion ロジック =====================
-
-  let currentKey = null;
-  let lyricsData = [];
-  let hasTimestamp = false;
-  let dynamicLines = null;
-  // duet: raw sub vocal LRC (sub.txt) - only lines to show on the right
-  let duetSubLyricsRaw = '';
-  // duet: dynamic lines for sub.txt (1文字追尾用)
-  let duetSubDynamicLines = null;
-  // keep last raw lyrics text so we can re-render when sub lyrics arrive later
-  let lastRawLyricsText = null;
-
-  // dynamicLyrics helper: time->line map (rebuild when reference changes)
-  let _dynMapSrc = null;
-  let _dynMap = null;
-  let _duetExcludedTimes = new Set();
-  let lyricsCandidates = null;
-  let selectedCandidateId = null;
-  let lastActiveIndex = -1;
-  let lastTimeForChars = -1;
-  let lyricRafId = null;
-
-  let timeOffset = 0;
-
-  let isFirstSongDetected = true;
-
-  let shareMode = false;
-  let shareStartIndex = null;
-  let shareEndIndex = null;
-  let isFallbackLyrics = false;
-
-  let lyricsRequests = null;
-  let lyricsConfig = null;
-
-  const ui = {
-    bg: null,
-    wrapper: null,
-    title: null, artist: null, artwork: null,
-    lyrics: null, input: null, settings: null,
-    btnArea: null, uploadMenu: null, deleteDialog: null,
-    replayPanel: null,
-    queuePanel: null,
-    settingsBtn: null,
-    lyricsBtn: null,
-    shareBtn: null
-  };
-
-  let hideTimer = null;
-  let uploadMenuGlobalSetup = false;
-  let deleteDialogGlobalSetup = false;
-  let settingsOutsideClickSetup = false;
-  let toastTimer = null;
-  let moviemode = null;
-  let movieObserver = null;
-  let hoverPreviewCandidateId = null;
-  let hoverPreviewMouseX = 0;
-  let hoverPreviewMouseY = 0;
-  let hoverPreviewRafId = null;
-  let hoverPreviewLoading = false;
-  let hoverPreviewAnchorEl = null;
-
-  const handleInteraction = () => {
-    const targets = [];
-    const title = ui.title;
-    const artist = ui.artist;
-    const playerBar = document.querySelector("ytmusic-player-bar");
-    const switcher = document.querySelector("ytmusic-av-toggle");
-    if (title) targets.push(title);
-    if (artist) targets.push(artist);
-    if (playerBar) targets.push(playerBar);
-    if (switcher) targets.push(switcher);
-    if (ui.btnArea) targets.push(ui.btnArea);
-    targets.forEach(element => {
-      element.classList.remove('inactive');
-    });
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      const isSettingsActive = ui.settings?.classList.contains('active');
-      const isReplayActive = ui.replayPanel?.classList.contains('active');
-      const isQueueActive = ui.queuePanel?.matches(':hover');
-      if (!isSettingsActive && !isReplayActive && !isQueueActive && !targets.some(target => target?.matches(':hover'))) {
-        targets.forEach(element => {
-          element.classList.add('inactive');
-        });
-      }
-    }, 1500);
-  };
-  const storage = {
-    _api: chrome?.storage?.local,
-    get: (k) => new Promise(r => {
-      if (!storage._api) return r(null);
-      storage._api.get([k], res => {
-        const val = res ? res[k] : undefined;
-        r(val !== undefined ? val : null);
-      });
-    }),
- 
-    set: (k, v) => new Promise(resolve => {
-      if (storage._api) {
-        storage._api.set({ [k]: v }, resolve);
-      } else {
-        resolve();
-      }
-    }),
-
-    remove: (k) => new Promise(resolve => {
-      if (storage._api) {
-        storage._api.remove(k, resolve);
-      } else {
-        resolve();
-      }
-    }),
-    clear: () => confirm('全データを削除しますか？') && storage._api?.clear(() => location.reload())
-  };
-  const ReplayManager = {
-    HISTORY_KEY: 'ytm_local_history',
-    currentVideoId: null,
-    hasRecordedCurrent: false,
-    currentPlayTime: 0,
-    lastSaveTime: 0,
-
-    currentLyricLines: 0,
-    recordedLyricLines: 0,
-
-    formatDuration: function (seconds) {
-      if (!seconds) return `0${t('unit_second')}`;
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = Math.floor(seconds % 60);
-      const uH = t('unit_hour');
-      const uM = t('unit_minute');
-      const uS = t('unit_second');
-      const sp = config.uiLang === 'ja' ? '' : ' ';
-      if (h > 0) return `${h}${uH}${sp}${m}${uM}${sp}${s}${uS}`;
-      if (m > 0) return `${m}${uM}${sp}${s}${uS}`;
-      return `${s}${uS}`;
-    },
-
-    incrementLyricCount: function () {
-      this.currentLyricLines++;
-    },
-
-    exportHistory: async function () {
-      const history = await storage.get(this.HISTORY_KEY) || [];
-      if (history.length === 0) {
-        alert('保存する履歴データがありません。');
-        return;
-      }
-      const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      a.download = `ytm_history_${date}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
-
-    importHistory: function () {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.json';
-      input.onchange = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          try {
-            const data = JSON.parse(ev.target.result);
-            if (Array.isArray(data)) {
-              if (confirm('履歴を復元しますか？\n[OK] 現在の履歴に結合 (マージ)\n[キャンセル] キャンセル')) {
-                const current = await storage.get(this.HISTORY_KEY) || [];
-                const existingIds = new Set(current.map(i => i.id + '_' + i.timestamp));
-                const newData = data.filter(i => !existingIds.has(i.id + '_' + i.timestamp));
-                const merged = current.concat(newData);
-                merged.sort((a, b) => a.timestamp - b.timestamp);
-                await storage.set(this.HISTORY_KEY, merged);
-                alert('履歴を復元しました！');
-                this.renderUI();
-              }
-            } else {
-              alert('無効なファイル形式です。');
-            }
-          } catch (err) {
-            console.error(err);
-            alert('ファイルの読み込みに失敗しました。');
-          }
-        };
-        reader.readAsText(file);
-      };
-      input.click();
-    },
-
-    check: async function () {
-      const video = document.querySelector('video');
-      if (!video) return;
-      const vid = getCurrentVideoId();
-      if (!vid) return;
-
-      if (vid !== this.currentVideoId) {
-        this.currentVideoId = vid;
-        this.hasRecordedCurrent = false;
-        this.currentPlayTime = 0;
-        this.lastSaveTime = 0;
-        this.currentLyricLines = 0;
-        this.recordedLyricLines = 0;
-        return;
-      }
-
-      if (!video.paused) {
-        this.currentPlayTime++;
-        const isPlayed = this.currentPlayTime > 30 || (video.duration > 10 && this.currentPlayTime / video.duration > 0.4);
-
-        if (isPlayed) {
-          if (!this.hasRecordedCurrent) {
-            await this.recordNewPlay();
-            this.hasRecordedCurrent = true;
-          } else if (this.currentPlayTime - this.lastSaveTime >= 5) {
-            await this.updateDuration();
-            this.lastSaveTime = this.currentPlayTime;
-          }
-        }
-      }
-    },
-
-    recordNewPlay: async function () {
-      const meta = getMetadata();
-      if (!meta) return;
-
-      this.recordedLyricLines = this.currentLyricLines;
-
-      const record = {
-        id: this.currentVideoId,
-        title: meta.title,
-        artist: meta.artist,
-        src: meta.src,
-        duration: this.currentPlayTime,
-        lyricLines: this.currentLyricLines,
-        timestamp: Date.now()
-      };
-
-      let history = await storage.get(this.HISTORY_KEY) || [];
-      if (history.length > 10000) history = history.slice(-10000);
-      history.push(record);
-      await storage.set(this.HISTORY_KEY, history);
-
-      if (ui.replayPanel && ui.replayPanel.classList.contains('active')) {
-        this.renderUI();
-      }
-    },
-
-    updateDuration: async function () {
-      let history = await storage.get(this.HISTORY_KEY) || [];
-      if (history.length === 0) return;
-
-      const lastIndex = history.length - 1;
-      if (history[lastIndex].id === this.currentVideoId) {
-        history[lastIndex].duration = this.currentPlayTime;
-        history[lastIndex].lyricLines = this.currentLyricLines;
-
-        await storage.set(this.HISTORY_KEY, history);
-        if (ui.replayPanel && ui.replayPanel.classList.contains('active')) {
-          this.renderUI();
-        }
-      }
-    },
-
-    getStats: async function (range = 'day') {
-      const history = await storage.get(this.HISTORY_KEY) || [];
-      const now = Date.now();
-      let threshold = 0;
-      if (range === 'day') {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        threshold = today.getTime();
-      } else if (range === 'week') {
-        threshold = now - (7 * 24 * 60 * 60 * 1000);
-      }
-
-      const filtered = history.filter(h => h.timestamp >= threshold);
-
-      const countMap = {};
-      const artistMap = {};
-      const uniqueArtists = new Set();
-      let totalSeconds = 0;
-      let totalLyrics = 0;
-      const hourCounts = new Array(24).fill(0);
-
-      filtered.forEach(h => {
-        const key = h.title + '///' + h.artist;
-        if (!countMap[key]) countMap[key] = { ...h, count: 0, totalDuration: 0 };
-
-        countMap[key].count++;
-        const duration = typeof h.duration === 'number' ? h.duration : 0;
-        countMap[key].totalDuration += duration;
-
-        if (!artistMap[h.artist]) {
-          artistMap[h.artist] = { count: 0, src: h.src };
-        } else {
-          artistMap[h.artist].count++;
-          if (h.src) artistMap[h.artist].src = h.src;
-        }
-
-        uniqueArtists.add(h.artist);
-        totalSeconds += duration;
-
-        if (h.lyricLines && typeof h.lyricLines === 'number') {
-          totalLyrics += h.lyricLines;
-        }
-
-        const hour = new Date(h.timestamp).getHours();
-        hourCounts[hour]++;
-      });
-
-      const topSongs = Object.values(countMap).sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        return b.totalDuration - a.totalDuration;
-      });
-
-      const topArtists = Object.keys(artistMap)
-        .map(name => ({
-          name,
-          count: artistMap[name].count,
-          src: artistMap[name].src
-        }))
-        .sort((a, b) => b.count - a.count);
-
-      const mostPlayedArtist = topArtists[0] || null;
-      const mostPlayedSong = topSongs[0] || null;
-
-      const totalPlays = filtered.length;
-      const maxHourVal = Math.max(...hourCounts);
-      const peakHour = hourCounts.indexOf(maxHourVal);
-      const totalHours = totalSeconds / 3600;
-      const today = new Date(Date.now());
-      const dayOfWeek = today.getDay();
-
-      let vibeLabel = "分  中...";
-      let topArtistShare = "0%";
-
-      if (totalPlays > 0) {
-        const topArtistRatio = mostPlayedArtist ? (mostPlayedArtist.count / totalPlays) : 0;
-        const topSongRatio = mostPlayedSong ? (mostPlayedSong.count / totalPlays) : 0;
-        const diversityRatio = uniqueArtists.size / totalPlays;
-
-        topArtistShare = Math.round(topArtistRatio * 100) + "%";
-
-        if (totalPlays < 5) {
-          vibeLabel = "音楽探しの途中";
-        }
-        else if (topArtistRatio >= 0.6) {
-          vibeLabel = `${mostPlayedArtist.name} 一筋`;
-        }
-        else if (topSongRatio >= 0.5) {
-          vibeLabel = "一点集中リピート";
-        }
-        else if (diversityRatio >= 0.8) {
-          vibeLabel = "幅広く開拓中";
-        }
-        else if (totalHours >= 4) {
-          vibeLabel = "耐久リスニングマスター";
-        }
-        else if (dayOfWeek === 5) {
-          vibeLabel = "💃 解放のフライデー";
-        }
-        else if (dayOfWeek === 6) {
-          vibeLabel = "🥳 週末お祭りモード";
-        }
-        else if (dayOfWeek === 0) {
-          vibeLabel = "🧘‍♂️ 明日への充電";
-        }
-        else {
-          if (peakHour >= 4 && peakHour < 9) { vibeLabel = "早起きスタイル"; }
-          else if (peakHour >= 9 && peakHour < 12) { vibeLabel = "午前中の集中"; }
-          else if (peakHour >= 12 && peakHour < 17) { vibeLabel = "午後ワーク"; }
-          else if (peakHour >= 17 && peakHour < 23) { vibeLabel = "夜型リスナー"; }
-          else { vibeLabel = "深夜の没頭"; }
-        }
-      } else {
-        vibeLabel = "No Data";
-      }
-
-      return {
-        totalPlays,
-        totalTime: this.formatDuration(totalSeconds),
-        totalLyrics: totalLyrics.toLocaleString(),
-        vibeLabel,
-        topArtistShare,
-        peakHour,
-        topSongs: topSongs.slice(0, 50),
-        topArtists: topArtists.slice(0, 10),
-        mostPlayedSong,
-        mostPlayedArtist
-      };
-    },
-
-    renderUI: async function () {
-      if (!ui.replayPanel) return;
-      const container = ui.replayPanel.querySelector('.ytm-replay-content');
-
-      const range = ui.replayPanel.dataset.range || 'day';
-      const stats = await this.getStats(range);
-
-      const pills = ui.replayPanel.querySelectorAll('.ytm-lang-pill');
-      if (pills[0]) pills[0].textContent = t('replay_today');
-      if (pills[1]) pills[1].textContent = t('replay_week');
-      if (pills[2]) pills[2].textContent = t('replay_all');
-
-      let footerArea = document.getElementById('replay-footer-area');
-
-      const oldBtn1 = document.getElementById('replay-reset-action');
-      const oldBtn2 = document.getElementById('replay-export-btn');
-      const oldBtn3 = document.getElementById('replay-import-btn');
-      if (oldBtn1 && !oldBtn1.closest('.replay-footer-area')) oldBtn1.remove();
-      if (oldBtn2) oldBtn2.remove();
-      if (oldBtn3) oldBtn3.remove();
-
-      if (!footerArea) {
-        footerArea = createEl('div', 'replay-footer-area', 'replay-footer-area');
-        ui.replayPanel.appendChild(footerArea);
-      }
-
-      footerArea.innerHTML = `
-        <button id="replay-import-btn" class="replay-footer-btn">📂 Restore</button>
-        <button id="replay-export-btn" class="replay-footer-btn">💾 Backup</button>
-        <button id="replay-cloudsync-btn" class="replay-footer-btn">☁ Cloud</button>
-        <button id="replay-reset-action" class="replay-footer-btn" style="color:#ff6b6b; border-color:rgba(255,107,107,0.3);">🗑️ Reset</button>
-      `;
-
-      document.getElementById('replay-reset-action').onclick = async () => {
-        if (confirm(t('replay_reset_confirm'))) {
-          await storage.remove(ReplayManager.HISTORY_KEY);
-          ReplayManager.renderUI();
-        }
-      };
-      document.getElementById('replay-export-btn').onclick = () => this.exportHistory();
-      document.getElementById('replay-import-btn').onclick = () => this.importHistory();
-
-      const cloudBtn = document.getElementById('replay-cloudsync-btn');
-      if (cloudBtn) {
-        cloudBtn.onclick = () => {
-          CloudSync.init();
-          if (CloudSync.openPanel) {
-            CloudSync.openPanel();
-          }
-        };
-      }
-
-
-      document.getElementById('replay-reset-action').onclick = async () => {
-        if (confirm(t('replay_reset_confirm'))) {
-          await storage.remove(ReplayManager.HISTORY_KEY);
-          ReplayManager.renderUI();
-        }
-      };
-      document.getElementById('replay-export-btn').onclick = () => this.exportHistory();
-      document.getElementById('replay-import-btn').onclick = () => this.importHistory();
-
-      if (stats.totalPlays === 0) {
-        container.innerHTML = `<div class="replay-empty"><div style="font-size:40px; margin-bottom:10px;">🎧</div><div>${t('replay_empty')}</div><div style="font-size:12px; opacity:0.6; margin-top:5px;">${t('replay_no_data_sub')}</div></div>`;
-        return;
-      }
-
-      const heroImage = stats.mostPlayedSong?.src || '';
-
-      const artistBgStyle = `background: linear-gradient(135deg, rgba(50,100,255,0.1), rgba(255,255,255,0.03));`;
-
-      let topArtistsSubHtml = '';
-      if (stats.topArtists.length > 1) {
-        topArtistsSubHtml = `<div style="margin-top:auto; padding-top:10px; border-top:1px solid rgba(255,255,255,0.1); font-size:12px; font-weight:600; color:rgba(255,255,255,0.9);">`;
-        if (stats.topArtists[1]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:4px; align-items:center;"><span style="opacity:0.9;">#2 ${stats.topArtists[1].name}</span><span style="opacity:0.7;">${stats.topArtists[1].count}回</span></div>`;
-        if (stats.topArtists[2]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="opacity:0.9;">#3 ${stats.topArtists[2].name}</span><span style="opacity:0.7;">${stats.topArtists[2].count}回</span></div>`;
-        topArtistsSubHtml += `</div>`;
-      }
-
-      let html = `
-        <div class="bento-grid">
-          
-          <div class="bento-item hero-stat-time">
-            <div class="bento-label">${t('replay_playTime')}</div>
-            <div class="bento-value-huge">${stats.totalTime}</div>
-            <div class="bento-sub">${stats.totalPlays} ${t('replay_plays')}</div>
-          </div>
-
-          <div class="bento-item hero-song" style="background-image: url('${heroImage}');">
-            <div class="bento-overlay">
-              <div class="bento-label">${t('replay_topSong')}</div>
-              <div class="bento-song-title">${stats.mostPlayedSong?.title}</div>
-              <div class="bento-song-artist">${stats.mostPlayedSong?.artist}</div>
-              <div class="bento-badge">${stats.mostPlayedSong?.count} ${t('replay_plays')}</div>
-            </div>
-          </div>
-
-          <div class="bento-item hero-vibe">
-            <div class="bento-label">${t('replay_vibe')}</div>
-            <div class="bento-vibe-text" style="font-size:24px; font-weight:900; margin-top:10px; line-height:1.2; word-break:break-all;">${stats.vibeLabel}</div>
-          </div>
-
-          <div class="bento-item hero-lyrics">
-            <div class="bento-label">${t('replay_lyrics_heard')}</div>
-            <div class="bento-value-huge" style="font-size: 42px;">${stats.totalLyrics}</div>
-            <div class="bento-sub">行</div>
-          </div>
-
-          <div class="bento-item hero-artist" style="${artistBgStyle} position:relative; overflow:hidden;">
-            <div style="position:relative; z-index:2; height:100%; display:flex; flex-direction:column; color:#fff; padding-bottom:5px;">
-              <div class="bento-label" style="color:rgba(255,255,255,0.7);">${t('replay_topArtist')}</div>
-              
-              <div class="bento-artist-name" style="font-size:28px; font-weight:900; margin: 5px 0 10px 0; color:#fff; line-height:1.1; flex-shrink: 0; min-height: 30px;">
-                ${stats.mostPlayedArtist?.name || 'N/A'}
-              </div>
-              
-              <div class="bento-badge" style="font-size:11px; padding:4px 10px; margin-bottom:10px; align-self:flex-start; background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.1);">
-                総再生の ${stats.topArtistShare}
-              </div>
-
-              ${topArtistsSubHtml}
-            </div>
-          </div>
-
-          <div class="bento-item ranking-list-container">
-            <div class="bento-label">${t('replay_ranking')}</div>
-            <div class="replay-list">`;
-
-      stats.topSongs.forEach((song, idx) => {
-        const timeStr = this.formatDuration(song.totalDuration);
-        html += `
-          <div class="replay-item">
-            <div class="replay-rank">${idx + 1}</div>
-            <div class="replay-img">${song.src ? `<img src="${song.src}" crossorigin="anonymous">` : ''}</div>
-            <div class="replay-info">
-              <div class="replay-title">${song.title}</div>
-              <div class="replay-artist">${song.artist}</div>
-            </div>
-            <div class="replay-count">
-              <div class="replay-count-val">${song.count}${config.uiLang === 'ja' ? '回' : ''}</div>
-              <div class="replay-time-val">${timeStr}</div>
-            </div>
-          </div>`;
-      });
-      html += `</div></div></div>`;
-      container.innerHTML = html;
-    },
-
-    init: function () {
-      setInterval(() => this.check(), 1000);
-    }
-  };
-
-
-  const QueueManager = {
-    observer: null,
-
-
-    // ===== Next-song lyrics prefetch (always) =====
-    _prefetchLastAt: new Map(),
-    _prefetchInFlight: new Set(),
-    PREFETCH_DEDUP_MS: 6000,
-
-    _extractVideoIdFromQueueItem: function (queueItem) {
-      try {
-        const a =
-          queueItem.querySelector('a[href*="watch"]') ||
-          queueItem.querySelector('a[href*="youtu"]') ||
-          queueItem.querySelector('a');
-        const href = a ? (a.href || a.getAttribute('href')) : null;
-        if (!href) return null;
-        const u = new URL(href, location.origin);
-        // /watch?v=...
-        const v = u.searchParams.get('v');
-        if (v) return v;
-        // youtu.be/<id>
-        if (u.hostname.includes('youtu.be')) {
-          const parts = (u.pathname || '').split('/').filter(Boolean);
-          return parts[0] || null;
-        }
-      } catch (e) { }
-      return null;
-    },
-
-    _prefetchLyrics: function (meta) {
-      const title = (meta && meta.title) ? String(meta.title).trim() : '';
-      const artist = (meta && meta.artist) ? String(meta.artist).trim() : '';
-      if (!title) return;
-
-      const key = `${title}///${artist}`;
-      const now = Date.now();
-
-      const last = this._prefetchLastAt.get(key) || 0;
-      if (now - last < this.PREFETCH_DEDUP_MS) return;
-      if (this._prefetchInFlight.has(key)) return;
-
-      this._prefetchLastAt.set(key, now);
-      this._prefetchInFlight.add(key);
-
-      const videoId = meta && meta.videoId ? meta.videoId : null;
-      const youtubeUrl = meta && meta.youtubeUrl ? meta.youtubeUrl : (videoId ? `https://youtu.be/${videoId}` : null);
-
-      console.log('[Queue] Prefetch(next) lyrics:', title, '/', artist);
-
-      chrome.runtime.sendMessage({
-        type: 'GET_LYRICS',
-        payload: {
-          track: title,
-          artist: artist,
-          youtube_url: youtubeUrl,
-          video_id: videoId,
-        }
-      }, (res) => {
-        this._prefetchInFlight.delete(key);
-
-        // Don't overwrite existing good cache on transient failures
-        if (!res || !res.success) return;
-
-        const lyr = (res.lyrics || '');
-        if (typeof lyr === 'string' && lyr.trim()) {
-          storage.set(key, {
-            lyrics: lyr,
-            dynamicLines: res.dynamicLines || null,
-            candidates: res.candidates || null,
-            fetchedAt: Date.now(),
-          }).then(() => {
-            // Refresh highlight instantly if the panel is open
-            if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-              this.syncQueue();
-            }
-          });
-        } else {
-          // Remember "no lyrics" result so Up Next can show an orange hint.
-          // But don't overwrite already cached real lyrics.
-          storage.get(key).then((cached0) => {
-            const existing = cached0 && typeof cached0.lyrics === 'string' ? cached0.lyrics : '';
-            const hasReal = existing && existing.trim() && existing !== NO_LYRICS_SENTINEL;
-            if (hasReal) return;
-            return storage.set(key, {
-              lyrics: NO_LYRICS_SENTINEL,
-              dynamicLines: null,
-              candidates: res.candidates || null,
-              noLyrics: true,
-              fetchedAt: Date.now(),
-            });
-          }).then(() => {
-            // Refresh highlight instantly if the panel is open
-            if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-              this.syncQueue();
-            }
-          });
-        }
-      });
-    },
-
-    _applyLoadedLyricsHighlight: function (row, key) {
-      if (!row || !key) return;
-      storage.get(key).then(cached => {
-        if (!row.isConnected) return;
-        const lyr = cached && typeof cached.lyrics === 'string' ? cached.lyrics : '';
-        const noLyrics = (cached && cached.noLyrics) || (lyr === NO_LYRICS_SENTINEL);
-        const hasLyrics = (typeof lyr === 'string' && lyr.trim() && lyr !== NO_LYRICS_SENTINEL);
-
-        if (hasLyrics) {
-          // Slight glowing yellow-green border (lyrics ready)
-          row.dataset.lyricsLoaded = '1';
-          row.dataset.lyricsMissing = '';
-          row.style.border = '1px solid rgba(190, 255, 110, 0.65)';
-          row.style.boxShadow = '0 0 0 1px rgba(190, 255, 110, 0.20), 0 0 14px rgba(190, 255, 110, 0.14)';
-          row.style.borderRadius = row.style.borderRadius || '12px';
-          return;
-        }
-
-        if (noLyrics) {
-          // Orange border (no lyrics found)
-          row.dataset.lyricsLoaded = '';
-          row.dataset.lyricsMissing = '1';
-          row.style.border = '1px solid rgba(255, 170, 60, 0.70)';
-          row.style.boxShadow = '0 0 0 1px rgba(255, 170, 60, 0.22), 0 0 14px rgba(255, 170, 60, 0.16)';
-          row.style.borderRadius = row.style.borderRadius || '12px';
-          return;
-        }
-      });
-    },
-    init: function () {
-      if (ui.queuePanel) return;
-      const trigger = createEl('div', 'ytm-queue-trigger');
-      document.body.appendChild(trigger);
-      const panel = createEl('div', 'ytm-queue-panel', '', `
-        <div class="queue-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-          <h3 style="margin:0;line-height:1.1;">Up Next</h3>
-          <button class="queue-pin" type="button" title="Pin" aria-label="Pin Up Next" style="
-            cursor:pointer;
-            padding:6px 8px;
-            border-radius:10px;
-            border:1px solid rgba(255,255,255,0.18);
-            background:rgba(255,255,255,0.06);
-            color:inherit;
-            font-size:14px;
-            line-height:1;
-            user-select:none;
-          ">📌</button>
-        </div>
-        <div class="queue-list-content">
-            <div class="lyric-loading">Loading...</div>
-        </div>
-      `);
-      document.body.appendChild(panel);
-      ui.queuePanel = panel;
-
-      const PIN_KEY = 'ytm_queue_pinned';
-      const pinBtn = panel.querySelector('.queue-pin');
-
-      const applyPinnedUI = (pinned) => {
-        if (!pinBtn) return;
-        if (pinned) {
-          pinBtn.dataset.pinned = '1';
-          pinBtn.textContent = '📍';
-          pinBtn.style.background = 'rgba(255,255,255,0.14)';
-          pinBtn.style.border = '1px solid rgba(190, 255, 110, 0.55)';
-          pinBtn.style.boxShadow = '0 0 0 1px rgba(190,255,110,0.18), 0 0 10px rgba(190,255,110,0.12)';
-          pinBtn.style.transform = 'translateZ(0)';
-        } else {
-          pinBtn.dataset.pinned = '';
-          pinBtn.textContent = '📌';
-          pinBtn.style.background = 'rgba(255,255,255,0.06)';
-          pinBtn.style.border = '1px solid rgba(255,255,255,0.18)';
-          pinBtn.style.boxShadow = 'none';
-        }
-      };
-
-      // Load persisted pin state
-      storage.get(PIN_KEY).then((v) => {
-        this.pinned = !!v;
-        applyPinnedUI(this.pinned);
-        if (this.pinned) openPanel();
-      });
-
-      if (pinBtn) {
-        pinBtn.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          this.pinned = !this.pinned;
-          storage.set(PIN_KEY, this.pinned);
-          applyPinnedUI(this.pinned);
-          if (this.pinned) {
-            openPanel();
-          } else {
-            // If unpinned and not hovered, close immediately
-            setTimeout(() => {
-              try {
-                if (!panel.matches(':hover') && !trigger.matches(':hover')) {
-                  panel.classList.remove('visible');
-                }
-              } catch (e) { }
-            }, 0);
-          }
-        });
-      }
-
-
-      let leaveTimer = null;
-      const openPanel = () => {
-        clearTimeout(leaveTimer);
-        panel.classList.add('visible');
-        this.syncQueue();
-      };
-      const closePanel = () => {
-        if (this.pinned) return;
-        leaveTimer = setTimeout(() => {
-          panel.classList.remove('visible');
-        }, 300);
-      };
-
-      trigger.addEventListener('mouseenter', openPanel);
-      panel.addEventListener('mouseenter', () => clearTimeout(leaveTimer));
-      panel.addEventListener('mouseleave', closePanel);
-      trigger.addEventListener('mouseleave', () => {
-        setTimeout(() => {
-          if (!panel.matches(':hover')) closePanel();
-        }, 100);
-      });
-
-      this.startObserver();
-    },
-
-    onSongChanged: function () {
-      this.syncQueue();
-      [500, 1000, 2000, 3000].forEach(ms => {
-        setTimeout(() => {
-          if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-            this.syncQueue();
-          }
-        }, ms);
-      });
-    },
-
-    startObserver: function () {
-      const originalQueue = document.querySelector('ytmusic-player-queue');
-      if (originalQueue && !this.observer) {
-        this.observer = new MutationObserver(() => {
-          if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-            this.syncQueue();
-          }
-        });
-        this.observer.observe(originalQueue, {
-          childList: true,
-          subtree: true,
-          attributes: true
-        });
-      }
-    },
-
-    syncQueue: function () {
-      if (!ui.queuePanel) return;
-      if (!this.observer) this.startObserver();
-
-      const container = ui.queuePanel.querySelector('.queue-list-content');
-      const allRawItems = document.querySelectorAll('ytmusic-player-queue-item');
-
-      const visibleItems = Array.from(allRawItems).filter(item => item.offsetParent !== null);
-
-      if (visibleItems.length === 0) return;
-
-      let currentIndex = visibleItems.findIndex(item => item.hasAttribute('selected'));
-      if (currentIndex === -1) currentIndex = 0;
-
-      const targetItems = visibleItems.slice(currentIndex);
-
-      container.innerHTML = '';
-      const seenKeys = new Set();
-
-      targetItems.forEach((item, idx) => {
-        const titleEl = item.querySelector('.song-title');
-        const artistEl = item.querySelector('.byline');
-        const imgEl = item.querySelector('.thumbnail img');
-
-        const isPlaying = (idx === 0);
-
-        if (!titleEl) return;
-
-        const title = titleEl.textContent.trim();
-        const artist = artistEl ? artistEl.textContent.trim() : '';
-
-
-        if (idx === 1) {
-          const videoId = this._extractVideoIdFromQueueItem(item);
-          const youtubeUrl = videoId ? `https://youtu.be/${videoId}` : null;
-          this._prefetchLyrics({ title, artist, videoId, youtubeUrl });
-        }
-
-
-        const uniqueKey = `${title}///${artist}`;
-        if (seenKeys.has(uniqueKey)) return;
-        seenKeys.add(uniqueKey);
-
-        let src = '';
-        if (imgEl && imgEl.src && !imgEl.src.startsWith('data:')) {
-          src = imgEl.src;
-        }
-
-        const row = createEl('div', '', `queue-item ${isPlaying ? 'current' : ''}`);
-
-        const imgHtml = src
-          ? `<img src="${src}" loading="lazy">`
-          : `<div style="display:flex;justify-content:center;align-items:center;width:100%;height:100%;background:#333;font-size:18px;">🎵</div>`;
-
-        const indicatorHtml = isPlaying
-          ? `<div class="queue-playing-indicator"><i></i><i></i><i></i></div>`
-          : '';
-
-        row.innerHTML = `
-          <div class="queue-img">
-            ${imgHtml}
-            ${indicatorHtml}
-          </div>
-          <div class="queue-info">
-            <div class="queue-title">${title}</div>
-            <div class="queue-artist">${artist}</div>
-          </div>
-        `;
-
-        row.onclick = (e) => {
-          e.stopPropagation();
-          const playButton = item.querySelector('.play-button') || item.querySelector('ytmusic-play-button-renderer');
-          if (playButton) {
-            playButton.click();
-          } else {
-            item.click();
-          }
-          setTimeout(() => this.syncQueue(), 500);
-        };
-
-        container.appendChild(row);
-
-        this._applyLoadedLyricsHighlight(row, uniqueKey);
-      });
-    }
-  };
-
-
-  const PipManager = {
-    async start() {
-      if (document.pictureInPictureElement) return;
-
-
-      try {
-        this.pipWindow = await documentPictureInPicture.requestWindow({
-          width: 380,
-          height: 600,
-        });
-      } catch (e) {
-        console.error('PiP failed:', e);
-        return;
-      }
-
-      const pipDoc = this.pipWindow.document;
-
-    
-      [...document.styleSheets].forEach((styleSheet) => {
-        try {
-          if (styleSheet.href) {
-            const link = pipDoc.createElement('link');
-            link.rel = 'stylesheet';
-            link.type = styleSheet.type;
-            link.media = styleSheet.media;
-            link.href = styleSheet.href;
-            pipDoc.head.appendChild(link);
-          }
-        } catch (e) { }
-      });
-      
-      
-      
-const forceStyle = pipDoc.createElement('style');
-      forceStyle.textContent = `
-        /* 画面全体：SF Proへのこだわりと背景の固定 */
-        html, body {
-          margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000;
-          position: fixed; inset: 0;
-          font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-          color: #fff; cursor: default;
-          -webkit-font-smoothing: antialiased;
-        }
-        
-        #pip-container {
-          position: absolute; inset: 0; overflow: hidden;
-          isolation: isolate; 
-        }
-        
-        /* 背景レイヤー：明るさを0.8まで上げ、ブラーを滑らかに */
-        #pip-bg-layer {
-          position: absolute; inset: -20%;
-          background-size: cover; background-position: center;
-          filter: blur(80px) saturate(1.4) brightness(0.8);
-          z-index: -3; transition: background-image 1.2s ease;
-        }
-        
-        #pip-noise-layer {
-          position: absolute; inset: 0; z-index: -2; opacity: 0.04; pointer-events: none;
-          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-        }
-        
-        /* ヘッダー：アートワークと文字の階層を明確に */
-        .pip-header {
-            position: absolute; top: 0; left: 0; width: 100%;
-            display: flex; flex-direction: row; align-items: center; gap: 14px;
-            padding: 28px 24px 10px 24px; box-sizing: border-box;
-            z-index: 10; pointer-events: none;
-        }
-        .artwork-box {
-            width: 52px; height: 52px; flex-shrink: 0; 
-            border-radius: 8px; overflow: hidden; 
-            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-            pointer-events: auto;
-        }
-        .artwork-box img { width: 100%; height: 100%; object-fit: cover; }
-        .info-box { 
-            flex-grow: 1; text-align: left; 
-            display: flex; flex-direction: column; justify-content: center; 
-            pointer-events: auto; overflow: hidden;
-        }
-        #pip-title {
-            font-size: 16px; font-weight: 700; margin-bottom: 1px;
-            display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
-        }
-        #pip-artist {
-            font-size: 14px; color: rgba(255,255,255,0.5); font-weight: 500;
-            display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
-        }
-
-        /* 歌詞エリア：マスクのグラデーションをより滑らかに */
-        #pip-lyrics-container {
-            position: absolute; inset: 0;
-            overflow-y: auto; text-align: left;
-            padding: 120px 24px 160px 24px; 
-            box-sizing: border-box;
-            mask-image: linear-gradient(to bottom, transparent 0%, transparent 70px, black 120px, black 70%, transparent 100%);
-            -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 70px, black 120px, black 70%, transparent 100%);
-            -ms-overflow-style: none; scrollbar-width: none;
-            z-index: 5; overscroll-behavior: contain;
-        }
-#pip-lyrics-container::-webkit-scrollbar { display: none; }
-
-        /* ロード中の表示を中央に配置 */
-        .lyric-loading {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            font-weight: 700;
-            color: rgba(255, 255, 255, 0.2);
-            z-index: 1;
-            pointer-events: none;
-        }
-        
-        .lyric-line {
-      
-          font-size: 26px !important; 
-          font-weight: 800 !important;
-          letter-spacing: -0.015em !important;
-          margin-bottom: 16px !important; 
-          line-height: 1.35 !important;
-          
-          color: rgba(255, 255, 255, 0.25) !important; 
-          filter: blur(1.5px) !important;
-          transform: scale(0.85) !important; 
-          transform-origin: left center !important; 
-          
-          transition: transform 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.2), 
-                      color 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), 
-                      filter 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) !important; 
-          
-          cursor: pointer !important;
-          text-align: left !important; 
-          width: 100% !important;
-          text-shadow: none !important; 
-        }
-        
-        .lyric-line:hover { 
-          color: rgba(255, 255, 255, 0.6) !important; 
-        }
-
-        .lyric-line.active {
-            color: #fff !important; 
-            transform: scale(1) !important; 
-            filter: blur(0px) !important; 
-            text-shadow: 0 0 20px rgba(255, 255, 255, 0.2) !important; 
-        }
-        .lyric-line.active .lyric-char { display: inline-block; transition: opacity 0.2s linear; }
-        .lyric-line.active .lyric-char.char-pending { opacity: 0.25 !important; }
-        .lyric-line.active .lyric-char.char-active { opacity: 1 !important; }
-        
-        .lyric-translation { font-size: 0.6em; opacity: 0.5; font-weight: 600; margin-top: 4px; display: block; }
-        
-        body.ytm-no-timestamp .lyric-line { 
-          color: #fff !important; 
-          transform: scale(1) !important; 
-          opacity: 1 !important; 
-          cursor: default !important; 
-          filter: blur(0px) !important; 
-          text-shadow: 0 0 10px rgba(0, 0, 0, 0.3) !important; 
-        }
-
-        .lyric-line {
-          text-wrap: balance !important;
-          word-break: keep-all !important;     
-          overflow-wrap: break-word !important; 
-        }
-        .lyric-phrase {
-          display: inline-block !important;       
-          margin: 0 1px !important;           
-        }
-        
-        .controls-box { 
-            position: absolute; bottom: 0; left: 0; width: 100%;
-            display: flex; align-items: center; justify-content: center; gap: 36px; 
-            padding: 30px 0 50px 0; box-sizing: border-box;
-            z-index: 20; 
-            background: linear-gradient(to top, rgba(0,0,0,0.15) 0%, transparent 100%);
-            pointer-events: none; 
-        }
-        .control-btn {
-            pointer-events: auto;
-            background: rgba(255, 255, 255, 0.1); border: none;
-            border-radius: 50%; 
-            backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; color: #fff; transition: all 0.2s ease;
-        }
-        .control-btn:hover { background: rgba(255, 255, 255, 0.2); transform: scale(1.05); }
-        .control-btn:active { transform: scale(0.92); background: rgba(255, 255, 255, 0.3); }
-        .control-btn svg { fill: currentColor; pointer-events: none; }
-        
-        .main-btn { width: 52px; height: 52px; }
-        .main-btn svg { width: 32px; height: 32px; }
-        .sub-btn { width: 42px; height: 42px; }
-        .sub-btn svg { width: 20px; height: 20px; }
-        
-        .top-right-btn { width: 36px; height: 36px; flex-shrink: 0; background: rgba(255, 255, 255, 0.1); }
-        .top-right-btn svg { width: 18px; height: 18px; }
-        .top-right-btn.liked { color: #ffffff; }
-      `;
-      
-            
-            
-            pipDoc.head.appendChild(forceStyle);
-      pipDoc.body.className = 'ytm-pip-mode';
-      if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
-
-      const artworkUrl = ui.artwork.querySelector('img')?.src || '';
-      
-pipDoc.body.innerHTML = `
-        <div id="pip-container">
-            <div id="pip-bg-layer" style="background-image: url('${artworkUrl}')"></div>
-            <div id="pip-noise-layer"></div>
-            
-            <div class="pip-header">
-                <div class="artwork-box">
-                    <img id="pip-img" src="${artworkUrl}" alt="">
-                </div>
-                <div class="info-box">
-                    <div id="pip-title">${ui.title.textContent}</div>
-                    <div id="pip-artist">${ui.artist.textContent}</div>
-                </div>
-                <button id="pip-like-btn" class="control-btn top-right-btn">
-                    <svg viewBox="0 0 24 24"><path id="pip-like-icon-path" d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z"/></svg>
-                </button>
-            </div>
-
-            <div id="pip-lyrics-container"></div>
-            
-            <div class="controls-box">
-                <button id="pip-prev-btn" class="control-btn sub-btn">
-                    <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-                </button>
-                <button id="pip-play-pause-btn" class="control-btn main-btn">
-                    <svg id="pip-play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    <svg id="pip-pause-icon" viewBox="0 0 24 24" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                </button>
-                <button id="pip-next-btn" class="control-btn sub-btn">
-                    <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-                </button>
-            </div>
-        </div>
-      `;
-
-      this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
-      this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
-
-      const likeBtn = pipDoc.getElementById('pip-like-btn');
-      const prevBtn = pipDoc.getElementById('pip-prev-btn'); // ★ 追加
-      const playBtn = pipDoc.getElementById('pip-play-pause-btn');
-      const nextBtn = pipDoc.getElementById('pip-next-btn');
-
-      likeBtn.addEventListener('click', () => {
-        const likeWrapper = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like');
-        if (likeWrapper) {
-          const btn = likeWrapper.querySelector('button') || likeWrapper.querySelector('tp-yt-paper-icon-button') || likeWrapper;
-          btn.click();
-          setTimeout(() => PipManager.updateLikeState(pipDoc), 200);
-        }
-      });
-
-      prevBtn.addEventListener('click', () => {
-        const prevWrapper = document.querySelector('ytmusic-player-bar .previous-button') || document.querySelector('ytmusic-player-bar [aria-label="前へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Previous track"]');
-        if (prevWrapper) {
-          const btn = prevWrapper.querySelector('button') || prevWrapper.querySelector('tp-yt-paper-icon-button') || prevWrapper;
-          btn.click();
-        }
-      });
-
-      playBtn.addEventListener('click', () => {
-        const wrapper = document.querySelector('ytmusic-player-bar #play-pause-button') || document.querySelector('ytmusic-player-bar .play-pause-button');
-        if (wrapper) {
-          const btn = wrapper.querySelector('button') || wrapper.querySelector('tp-yt-paper-icon-button') || wrapper;
-          btn.click();
-        } else {
-          const v = document.querySelector('video');
-          if (v) v.paused ? v.play() : v.pause();
-        }
-      });
-
-      nextBtn.addEventListener('click', () => {
-        const nextWrapper = document.querySelector('ytmusic-player-bar .next-button') || document.querySelector('ytmusic-player-bar [aria-label="次へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Next track"]');
-        if (nextWrapper) {
-          const btn = nextWrapper.querySelector('button') || nextWrapper.querySelector('tp-yt-paper-icon-button') || nextWrapper;
-          btn.click();
-        }
-      });
-
-      PipManager.updateLikeState(pipDoc);
-      
-      const videoEl = document.querySelector('video');
-      PipManager.updatePlayState(videoEl ? videoEl.paused : true);
-
-      this.pipLyricsContainer.addEventListener('click', (e) => {
-        const target = e.target.closest('.lyric-line');
-        if (!target) return;
-        const timeStr = target.dataset.startTime;
-        if (timeStr) {
-          const time = parseFloat(timeStr);
-          if (!isNaN(time)) {
-            const v = document.querySelector('video');
-            if (v) v.currentTime = time + timeOffset;
-          }
-        }
-      });
-
-      startLyricRafLoop();
-
-      this.pipWindow.addEventListener('pagehide', () => {
-        this.pipWindow = null;
-        this.pipLyricsContainer = null;
-        startLyricRafLoop();
-      });
-    },
-
-    pipWindow: null,
-    pipLyricsContainer: null,
-
-    toggle: async function () {
-      if (this.pipWindow) {
-        this.pipWindow.close();
-        return;
-      }
-      await this.start();
-    },
-
-    updateLikeState: function (targetDoc) {
-      const doc = targetDoc || (this.pipWindow ? this.pipWindow.document : null);
-      if (!doc) return;
-      const likeBtn = doc.getElementById('pip-like-btn');
-      if (!likeBtn) return;
-
-      let isLiked = false;
-      const likeButtonElement = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like button');
-
-      if (likeButtonElement) {
-        isLiked = likeButtonElement.getAttribute('aria-pressed') === 'true';
-      } else {
-        const ytmLikeRenderer = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer');
-        if (ytmLikeRenderer && ytmLikeRenderer.hasAttribute('like-status')) {
-          isLiked = ytmLikeRenderer.getAttribute('like-status') === 'LIKE';
-        }
-      }
-
-      // 星のアイコンのパス定義
-      const STAR_OUTLINE = "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z";
-      const STAR_FILLED = "M12 17.27L18.18 21l-1.63-7.03L22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
-
-      const likeIconPath = doc.getElementById('pip-like-icon-path');
-      if (likeIconPath) {
-        likeIconPath.setAttribute('d', isLiked ? STAR_FILLED : STAR_OUTLINE);
-      }
-
-      if (isLiked) {
-        likeBtn.classList.add('liked');
-      } else {
-        likeBtn.classList.remove('liked');
-      }
-    },
-
-    updateMeta: function (title, artist) {
-      if (!this.pipWindow) return;
-      const pipDoc = this.pipWindow.document;
-      const tEl = pipDoc.getElementById('pip-title');
-      const aEl = pipDoc.getElementById('pip-artist');
-      const iEl = pipDoc.getElementById('pip-img');
-      const bgEl = pipDoc.getElementById('pip-bg-layer');
-      if (tEl) tEl.textContent = title;
-      if (aEl) aEl.textContent = artist;
-      if (ui.artwork.querySelector('img')) {
-        const src = ui.artwork.querySelector('img').src;
-        if (iEl) iEl.src = src;
-        if (bgEl) bgEl.style.backgroundImage = `url(${src})`;
-      }
-      this.updateLikeState(pipDoc);
-    },
-
-    resetLyrics: function () {
-      if (this.pipWindow && this.pipLyricsContainer) {
-        // 余計なスタイルを消して、クラスだけで制御
-        this.pipLyricsContainer.innerHTML = '<div class="lyric-loading">Loading...</div>';
-      }
-    },
-
-    updatePlayState: function (isPaused) {
-      if (!this.pipWindow) return;
-      const playIcon = this.pipWindow.document.getElementById('pip-play-icon');
-      const pauseIcon = this.pipWindow.document.getElementById('pip-pause-icon');
-      if (playIcon && pauseIcon) {
-        if (isPaused) {
-          playIcon.style.display = 'block';
-          pauseIcon.style.display = 'none';
-        } else {
-          playIcon.style.display = 'none';
-          pauseIcon.style.display = 'block';
-        }
-      }
-    }
-    
-    
-  };
   const resolveDeepLTargetLang = (lang) => {
     switch ((lang || '').toLowerCase()) {
       case 'en': case 'en-us': case 'en-gb': return 'EN';
@@ -3019,62 +820,6 @@ pipDoc.body.innerHTML = `
       album: parts[1] || '',
       src: null
     };
-  };
-  // ===================== Discord Presence (Localhost) =====================
-  const DISCORD_PRESENCE_THROTTLE_MS = 1200;
-  let __lastPresence = { line1: '', line2: '', ts: 0 };
-
-  const _normPresence = (s, maxLen = 128) => {
-    const t = (s ?? '').toString().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!t) return '';
-    return t.length > maxLen ? (t.slice(0, maxLen - 1) + '…') : t;
-  };
-
-  const _buildPresenceLine1 = (meta) => {
-    if (!meta) return '';
-    const parts = [meta.artist, meta.album, meta.title]
-      .map(v => (v ?? '').toString().trim())
-      .filter(Boolean);
-    return parts.join(' - ');
-  };
-
-//歌詞送信ロジック
-  const sendDiscordPresence = (meta, lyricLine) => {
-    try {
-      if (!meta) return;
-      const line1 = _normPresence(_buildPresenceLine1(meta), 128);
-      const line2 = _normPresence(lyricLine || '', 128);
-      const now = Date.now();
-
-      // Don't spam: send only if content changed OR enough time passed
-      if (line1 === __lastPresence.line1 && line2 === __lastPresence.line2 && (now - __lastPresence.ts) < DISCORD_PRESENCE_THROTTLE_MS) {
-        return;
-      }
-      __lastPresence = { line1, line2, ts: now };
-
-      chrome.runtime.sendMessage({
-        type: 'DISCORD_PRESENCE_UPDATE',
-        payload: {
-          line1,
-          line2,
-          url: getCurrentVideoUrl(),
-          meta: {
-            title: meta.title || '',
-            artist: meta.artist || '',
-            album: meta.album || '',
-            src: meta.src || null
-          }
-        }
-      });
-    } catch (e) {
-      // ignore
-    }
-  };
-
-  const clearDiscordPresence = () => {
-    try {
-      chrome.runtime.sendMessage({ type: 'DISCORD_PRESENCE_CLEAR' });
-    } catch (e) { }
   };
 
 
@@ -4646,7 +2391,191 @@ function renderSettingsPanel() {
     };
   }
 
+  // ===================== Artist Seamless Switch =====================
+  const SWITCH_NOISE_KEYWORDS = [
+    '歌ってみた', '弾いてみた', '弾いてみたけど', '踊ってみた', '叩いてみた',
+    '歌われてみた', '演奏してみた', '演奏動画',
+    'cover', 'covered', 'karaoke', 'カラオケ',
+    'acoustic', 'live', 'remix', 'piano',
+    'arrange', 'off vocal', 'instrumental', 'full chorus', 'short ver'
+  ];
+
+  function _switchQueryForMeta(meta) {
+    // Search title only — not title+artist, so we get all versions
+    return (meta?.title || '').trim();
+  }
+
+  function _filterSwitchResults(items, meta) {
+    const titleLower = (meta?.title || '').toLowerCase();
+    return items.filter(item => {
+      const t = (item.title || '').toLowerCase();
+      const ch = (item.channel || '').toLowerCase();
+      // Keep items whose title shares words with the song title (looser check)
+      const titleWords = titleLower.split(/\s+/).filter(w => w.length > 1);
+      const hasTitle = titleWords.some(w => t.includes(w));
+      if (!hasTitle) return false;
+      // Exclude noise keywords
+      for (const kw of SWITCH_NOISE_KEYWORDS) {
+        if (t.includes(kw) || ch.includes(kw)) return false;
+      }
+      return true;
+    });
+  }
+
+  async function searchYTMAlternatives(meta) {
+    const q = _switchQueryForMeta(meta);
+    if (!q) return [];
+    // Use YouTube Music's InnerTube API — same endpoint the web app itself uses
+    try {
+      const resp = await fetch('https://music.youtube.com/youtubei/v1/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-YouTube-Client-Name': '67', 'X-YouTube-Client-Version': '1.20240101.01.00' },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: 'WEB_REMIX',
+              clientVersion: '1.20240101.01.00',
+              hl: 'ja',
+              gl: 'JP',
+            }
+          },
+          query: q
+          // No params = search all types (songs, videos, albums, etc.)
+        })
+      });
+      if (!resp.ok) { console.warn('[Switch] InnerTube API error:', resp.status); return []; }
+      const data = await resp.json();
+
+      const results = [];
+      const walk = (obj, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth > 30) return;
+        if (obj.musicResponsiveListItemRenderer) {
+          const r = obj.musicResponsiveListItemRenderer;
+          const videoId =
+            r.playlistItemData?.videoId ||
+            r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId ||
+            r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.find(x => x.navigationEndpoint?.watchEndpoint)?.navigationEndpoint?.watchEndpoint?.videoId;
+          const title    = r.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text || '';
+          const subtitle = (r.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map(x => x.text).join('');
+          const thumbs   = r.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+          const thumb    = thumbs.length ? thumbs[thumbs.length - 1].url : '';
+          if (videoId && title) results.push({ videoId, title, channel: subtitle, thumb });
+          return; // don't descend into an item we already parsed
+        }
+        for (const key of Object.keys(obj)) {
+          const val = obj[key];
+          if (Array.isArray(val)) val.forEach(v => walk(v, depth + 1));
+          else if (val && typeof val === 'object') walk(val, depth + 1);
+        }
+      };
+      walk(data);
+      const seen = new Set();
+      return results.filter(r => { if (seen.has(r.videoId)) return false; seen.add(r.videoId); return true; });
+    } catch (e) {
+      console.error('[Switch] Search failed:', e);
+      return [];
+    }
+  }
+
+
+  function setupSwitchPanel(triggerBtn) {
+    // Toggle: close if already open
+    const existing = document.getElementById('ytm-switch-panel');
+    if (existing) { existing.remove(); return; }
+
+    const meta = getMetadata();
+    if (!meta || !meta.title) { showToast('曲名情報を取得できませんでした'); return; }
+
+    const panel = document.createElement('div');
+    panel.id = 'ytm-switch-panel';
+    panel.className = 'ytm-switch-panel';
+    panel.innerHTML = `
+      <div class="ytm-switch-header">
+        <span>🔄 代替バージョンを検索: ${escHtml(meta.title)}</span>
+        <button class="ytm-switch-close" id="ytm-switch-close">✕</button>
+      </div>
+      <div class="ytm-switch-list" id="ytm-switch-list">
+        <div class="ytm-switch-loading">検索中…</div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    // Position panel ABOVE the trigger button
+    if (triggerBtn) {
+      const rect = triggerBtn.getBoundingClientRect();
+      const panelWidth = 360;
+      let left = rect.left + rect.width / 2 - panelWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+      panel.style.position = 'fixed';
+      panel.style.left = `${left}px`;
+      panel.style.bottom = `${window.innerHeight - rect.top + 10}px`;
+      panel.style.top = 'auto';
+      panel.style.right = 'auto';
+    }
+
+    document.getElementById('ytm-switch-close').onclick = () => panel.remove();
+    setTimeout(() => {
+      document.addEventListener('click', function outsideClick(ev) {
+        if (!panel.contains(ev.target) && !ev.target.closest('#ytm-switch-btn')) {
+          panel.remove();
+          document.removeEventListener('click', outsideClick, true);
+        }
+      }, true);
+    }, 100);
+
+    searchYTMAlternatives(meta).then(rawResults => {
+      const results = _filterSwitchResults(rawResults, meta);
+      const listEl = document.getElementById('ytm-switch-list');
+      if (!listEl) return;
+
+      if (!results.length) {
+        // Show all unfiltered results if filter removed everything
+        const fallback = rawResults.slice(0, 10);
+        if (!fallback.length) {
+          listEl.innerHTML = '<div class="ytm-switch-loading">候補が見つかりませんでした</div>';
+          return;
+        }
+        listEl.innerHTML = '<div class="ytm-switch-loading" style="font-size:10px;opacity:0.6;padding:6px 10px">フィルターを緩めて表示しています</div>';
+        renderSwitchItems(listEl, fallback, false);
+        return;
+      }
+      listEl.innerHTML = '';
+      renderSwitchItems(listEl, results, true);
+    });
+  }
+
+  function renderSwitchItems(listEl, items, clearFirst) {
+    if (clearFirst) listEl.innerHTML = '';
+    const video = document.querySelector('video');
+    const currentTime = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+
+    items.forEach(item => {
+      const row = document.createElement('button');
+      row.className = 'ytm-switch-item';
+      row.innerHTML = `
+        ${item.thumb ? `<img class="ytm-switch-thumb" src="${escHtml(item.thumb)}" alt="">` : '<div class="ytm-switch-thumb"></div>'}
+        <div class="ytm-switch-info">
+          <div class="ytm-switch-title">${escHtml(item.title)}</div>
+          <div class="ytm-switch-channel">${escHtml(item.channel)}</div>
+        </div>
+      `;
+      row.onclick = () => {
+        document.getElementById('ytm-switch-panel')?.remove();
+        const t = Math.floor(currentTime);
+        const url = `https://music.youtube.com/watch?v=${item.videoId}&t=${t}s`;
+        location.href = url;
+      };
+      listEl.appendChild(row);
+    });
+  }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   function initLayout() {
+
     if (document.getElementById('ytm-custom-wrapper')) {
       ui.wrapper = document.getElementById('ytm-custom-wrapper');
       ui.bg = document.getElementById('ytm-custom-bg');
@@ -4703,8 +2632,14 @@ function renderSettingsPanel() {
       }
     };
 
+    const switchBtnConfig = {
+      txt: '',
+      cls: 'icon-btn ytm-switch-icon-btn',
+      click: (ev) => setupSwitchPanel(ev.currentTarget)
+    };
+
     // ボタン配列に追加
-    btns.push(lyricsBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig,  settingsBtnConfig);
+    btns.push(lyricsBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
 
     btns.forEach(b => {
       const btn = createEl('button', '', `ytm-glass-btn ${b.cls || ''}`, b.txt);
@@ -4717,7 +2652,14 @@ function renderSettingsPanel() {
       if (b === shareBtnConfig) {
         ui.shareBtn = btn;
       }
-      
+      if (b === switchBtnConfig) {
+        btn.id = 'ytm-switch-btn';
+        // Use the custom icon image
+        try {
+          const iconUrl = chrome.runtime.getURL('src/assets/icons/ArtistChange.png');
+          btn.innerHTML = `<img src="${iconUrl}" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" alt="ArtistChange">`;
+        } catch(_) { btn.textContent = '🔄'; }
+      }
       if (b === settingsBtnConfig) ui.settingsBtn = btn;
     });
 
@@ -5380,24 +3322,7 @@ const optimizeLineBreaks = (text) => {
       }
       if (i === lyricsData.length - 1) idx = i;
     }
-    // Discord presence: reflect the lyric at the current playback position (seek-safe)
-    try {
-      const metaNow = getMetadata();
-      let lyricText = '';
-      if (idx >= 0 && idx < lyricsData.length) {
-        lyricText = (lyricsData[idx]?.text || '').trim();
-      }
-      // Fallback to DOM text (in case rendered text differs)
-      if (!lyricText && ui.lyrics) {
-        const rowsMain = ui.lyrics.querySelectorAll('.lyric-line');
-        if (rowsMain && rowsMain.length && idx >= 0 && idx < rowsMain.length) {
-          const row = rowsMain[idx];
-          const mainEl = row.querySelector('.lyric-main') || row;
-          lyricText = (mainEl && mainEl.textContent ? mainEl.textContent : '').trim();
-        }
-      }
-      sendDiscordPresence(metaNow, lyricText);
-    } catch (e) { }
+
 
 
     const targets = [];
@@ -5765,8 +3690,6 @@ const optimizeLineBreaks = (text) => {
     const isPlayerOpen = layout?.hasAttribute('player-page-open');
     if (!config.mode || !isPlayerOpen) {
       document.body.classList.remove('ytm-custom-layout');
-      // Discord presence: clear when not in player-page
-      clearDiscordPresence();
       return;
     }
     document.body.classList.add('ytm-custom-layout');
@@ -5853,8 +3776,6 @@ const optimizeLineBreaks = (text) => {
         PipManager.resetLyrics(); // ここで歌詞を一旦消す
       }
 
-      // Discord presence: set line1 immediately (lyrics line2 will update during playback)
-      sendDiscordPresence(meta, '');
       refreshCandidateMenu();
       refreshLockMenu();
       if (ui.lyrics) ui.lyrics.scrollTop = 0;
@@ -5970,6 +3891,7 @@ trySetArtistLink();
     });
 
 
+
     observer.observe(targetNode, {
       attributes: true,
       childList: true,
@@ -5982,11 +3904,3 @@ trySetArtistLink();
     tick();
   };
 
-
-  setupObserver();
-
-
-
-  startLyricRafLoop();
-  hoverTimeInfoSetup();
-})();

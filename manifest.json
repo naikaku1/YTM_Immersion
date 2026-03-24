@@ -23,7 +23,8 @@
     "https://api.github.com/*"
   ],
   "background": {
-    "service_worker": "src/js/background.js"
+    "service_worker": "src/js/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -31,25 +32,12 @@
         "https://music.youtube.com/*"
       ],
       "js": [
-        "src/js/modules/core/constants.js",
-        "src/js/modules/core/config.js",
-        "src/js/modules/core/state.js",
-        "src/js/modules/services/storage.js",
-        "src/js/modules/services/i18n.js",
-        "src/js/modules/features/progressHandle.js",
-        "src/js/modules/features/replayManager.js",
-        "src/js/modules/features/queueManager.js",
-        "src/js/modules/features/pipManager.js",
-        "src/js/modules/services/cloudSync.js",
-        "src/js/modules/lyrics/lyricsParser.js",
-        "src/js/modules/services/translation.js",
-        "src/js/modules/ui/uiRendering.js",
-        "src/js/modules/ui/uiManager.js",
-        "src/js/modules/lyrics/lyricsLoader.js",
-        "src/js/modules/core/events.js",
-        "src/js/modules/features/discordPresence.js",
-        "src/js/modules/features/share.js",
-        "src/js/modules/features/movieMode.js",
+        "src/js/module/namespace.js",
+        "src/js/module/cloud-sync.js",
+        "src/js/module/replay-manager.js",
+        "src/js/module/queue-manager.js",
+        "src/js/module/pip-manager.js",
+        "src/js/module/lyrics-ui.js",
         "src/js/content.js"
       ],
       "css": [
@@ -61,7 +49,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/assets/fonts/*.woff2"
+        "src/assets/fonts/*.woff2",
+        "src/assets/icons/*.png"
       ],
       "matches": [
         "<all_urls>"

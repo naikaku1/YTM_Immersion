@@ -1185,8 +1185,17 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: none;
-  overflow: visible;
+  max-height: 130px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.ytm-upload-menu-candidate-list::-webkit-scrollbar {
+  width: 6px;
+}
+.ytm-upload-menu-candidate-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
 }
 
 .ytm-upload-menu-item-candidate {
@@ -2433,3 +2442,113 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ===================== Artist Seamless Switch Panel ===================== */
+#ytm-switch-panel {
+  position: fixed;
+  bottom: 100px;
+  right: 24px;
+  width: 360px;
+  max-height: 480px;
+  background: rgba(12, 12, 18, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: ytm-switch-fadein 0.18s ease-out;
+}
+
+@keyframes ytm-switch-fadein {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+.ytm-switch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255,255,255,0.85);
+}
+
+.ytm-switch-close {
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.6;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.ytm-switch-close:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+
+.ytm-switch-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+.ytm-switch-list::-webkit-scrollbar { width: 5px; }
+.ytm-switch-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+
+.ytm-switch-loading {
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.5);
+}
+
+.ytm-switch-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ytm-switch-item:hover { background: rgba(255,255,255,0.1); }
+
+.ytm-switch-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.07);
+}
+
+.ytm-switch-info { flex: 1; min-width: 0; }
+
+.ytm-switch-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ytm-switch-channel {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+

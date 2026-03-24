@@ -1,9 +1,7 @@
-/* globals chrome */
-(function () {
-  // ===================== PiP Manager =====================
   const PipManager = {
     async start() {
       if (document.pictureInPictureElement) return;
+
 
       try {
         this.pipWindow = await documentPictureInPicture.requestWindow({
@@ -17,6 +15,7 @@
 
       const pipDoc = this.pipWindow.document;
 
+    
       [...document.styleSheets].forEach((styleSheet) => {
         try {
           if (styleSheet.href) {
@@ -30,7 +29,9 @@
         } catch (e) { }
       });
       
-      const forceStyle = pipDoc.createElement('style');
+      
+      
+const forceStyle = pipDoc.createElement('style');
       forceStyle.textContent = `
         /* 画面全体：SF Proへのこだわりと背景の固定 */
         html, body {
@@ -98,7 +99,7 @@
             -ms-overflow-style: none; scrollbar-width: none;
             z-index: 5; overscroll-behavior: contain;
         }
-        #pip-lyrics-container::-webkit-scrollbar { display: none; }
+#pip-lyrics-container::-webkit-scrollbar { display: none; }
 
         /* ロード中の表示を中央に配置 */
         .lyric-loading {
@@ -115,6 +116,7 @@
         }
         
         .lyric-line {
+      
           font-size: 26px !important; 
           font-weight: 800 !important;
           letter-spacing: -0.015em !important;
@@ -201,18 +203,15 @@
         .top-right-btn.liked { color: #ffffff; }
       `;
       
-      pipDoc.head.appendChild(forceStyle);
+            
+            
+            pipDoc.head.appendChild(forceStyle);
       pipDoc.body.className = 'ytm-pip-mode';
-      
-      const hasTimestamp = window.StateModule?.StateManager.getHasTimestamp() || false;
-      if (!hasTimestamp || document.body.classList.contains('ytm-no-timestamp')) {
-        pipDoc.body.classList.add('ytm-no-timestamp');
-      }
+      if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
 
-      const ui = window.StateModule?.StateManager.getUI() || {};
-      const artworkUrl = ui.artwork?.querySelector('img')?.src || '';
+      const artworkUrl = ui.artwork.querySelector('img')?.src || '';
       
-      pipDoc.body.innerHTML = `
+pipDoc.body.innerHTML = `
         <div id="pip-container">
             <div id="pip-bg-layer" style="background-image: url('${artworkUrl}')"></div>
             <div id="pip-noise-layer"></div>
@@ -222,8 +221,8 @@
                     <img id="pip-img" src="${artworkUrl}" alt="">
                 </div>
                 <div class="info-box">
-                    <div id="pip-title">${ui.title ? ui.title.textContent : ''}</div>
-                    <div id="pip-artist">${ui.artist ? ui.artist.textContent : ''}</div>
+                    <div id="pip-title">${ui.title.textContent}</div>
+                    <div id="pip-artist">${ui.artist.textContent}</div>
                 </div>
                 <button id="pip-like-btn" class="control-btn top-right-btn">
                     <svg viewBox="0 0 24 24"><path id="pip-like-icon-path" d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z"/></svg>
@@ -248,12 +247,10 @@
       `;
 
       this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
-      if (ui.lyrics) {
-        this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
-      }
+      this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
 
       const likeBtn = pipDoc.getElementById('pip-like-btn');
-      const prevBtn = pipDoc.getElementById('pip-prev-btn'); 
+      const prevBtn = pipDoc.getElementById('pip-prev-btn'); // ★ 追加
       const playBtn = pipDoc.getElementById('pip-play-pause-btn');
       const nextBtn = pipDoc.getElementById('pip-next-btn');
 
@@ -262,7 +259,7 @@
         if (likeWrapper) {
           const btn = likeWrapper.querySelector('button') || likeWrapper.querySelector('tp-yt-paper-icon-button') || likeWrapper;
           btn.click();
-          setTimeout(() => this.updateLikeState(pipDoc), 200);
+          setTimeout(() => PipManager.updateLikeState(pipDoc), 200);
         }
       });
 
@@ -293,10 +290,10 @@
         }
       });
 
-      this.updateLikeState(pipDoc);
+      PipManager.updateLikeState(pipDoc);
       
       const videoEl = document.querySelector('video');
-      this.updatePlayState(videoEl ? videoEl.paused : true);
+      PipManager.updatePlayState(videoEl ? videoEl.paused : true);
 
       this.pipLyricsContainer.addEventListener('click', (e) => {
         const target = e.target.closest('.lyric-line');
@@ -306,35 +303,22 @@
           const time = parseFloat(timeStr);
           if (!isNaN(time)) {
             const v = document.querySelector('video');
-            const timeOffset = window.StateModule?.StateManager.getTimeOffset() || 0;
-            if (v) {
-              v.currentTime = time + timeOffset;
-              // Force immediate highlight update even if paused
-              if (window.UIRendering?.updateLyricHighlight) {
-                window.UIRendering.updateLyricHighlight(time);
-              }
-            }
+            if (v) v.currentTime = time + timeOffset;
           }
         }
       });
 
-      if (window.LyricsLoaderModule?.LyricsLoader.startLyricRafLoop) {
-        window.LyricsLoaderModule.LyricsLoader.startLyricRafLoop();
-      }
+      startLyricRafLoop();
 
       this.pipWindow.addEventListener('pagehide', () => {
         this.pipWindow = null;
         this.pipLyricsContainer = null;
-        this.isPipActive = false;
-        if (window.LyricsLoaderModule?.LyricsLoader.startLyricRafLoop) {
-          window.LyricsLoaderModule.LyricsLoader.startLyricRafLoop();
-        }
+        startLyricRafLoop();
       });
     },
 
     pipWindow: null,
     pipLyricsContainer: null,
-    isPipActive: false,
 
     toggle: async function () {
       if (this.pipWindow) {
@@ -362,6 +346,9 @@
         }
       }
 
+      // 星のアイコンのパス定義
+
+
       const STAR_OUTLINE = "M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z";
       const STAR_FILLED = "M12 17.27L18.18 21l-1.63-7.03L22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
 
@@ -377,28 +364,26 @@
       }
     },
 
-    updateMeta: function (title, artist, src) {
+    updateMeta: function (title, artist) {
       if (!this.pipWindow) return;
       const pipDoc = this.pipWindow.document;
       const tEl = pipDoc.getElementById('pip-title');
       const aEl = pipDoc.getElementById('pip-artist');
       const iEl = pipDoc.getElementById('pip-img');
       const bgEl = pipDoc.getElementById('pip-bg-layer');
-      if (tEl && title) tEl.textContent = title;
-      if (aEl && artist) aEl.textContent = artist;
-      
-      const ui = window.StateModule?.StateManager.getUI() || {};
-      const artworkSrc = src || ui.artwork?.querySelector('img')?.src;
-      
-      if (artworkSrc) {
-        if (iEl) iEl.src = artworkSrc;
-        if (bgEl) bgEl.style.backgroundImage = `url(${artworkSrc})`;
+      if (tEl) tEl.textContent = title;
+      if (aEl) aEl.textContent = artist;
+      if (ui.artwork.querySelector('img')) {
+        const src = ui.artwork.querySelector('img').src;
+        if (iEl) iEl.src = src;
+        if (bgEl) bgEl.style.backgroundImage = `url(${src})`;
       }
       this.updateLikeState(pipDoc);
     },
 
     resetLyrics: function () {
       if (this.pipWindow && this.pipLyricsContainer) {
+        // 余計なスタイルを消して、クラスだけで制御
         this.pipLyricsContainer.innerHTML = '<div class="lyric-loading">Loading...</div>';
       }
     },
@@ -416,23 +401,7 @@
           pauseIcon.style.display = 'block';
         }
       }
-    },
-    
-    close() {
-      if (this.pipWindow) {
-        this.pipWindow.close();
-      }
-      this.isPipActive = false;
-      this.pipWindow = null;
-      this.pipLyricsContainer = null;
     }
+    
+    
   };
-
-  // Export for use  // Export for module system
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { PipManager };
-  }
-  // Standard global exposure
-  window.PipManager = PipManager;
-  window.PipManagerModule = { PipManager };
-})();

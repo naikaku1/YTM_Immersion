@@ -14,34 +14,60 @@
 
 #ytm-custom-bg {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background-size: cover;
-  background-position: center center;
+  top: 0; left: 0; width: 100vw; height: 100vh;
   z-index: 1000;
   background-color: #050505;
-  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
-  transform: scale(1.1);
+  background-size: cover;
+  background-position: center;
   pointer-events: none;
   display: none;
+  overflow: hidden;
+  
+  /* デフォルト（従来）の背景スタイル */
+  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
+  transform: scale(1.1);
+  animation: ytmBgDrift 40s linear infinite alternate;
 }
 
-body.ytm-custom-layout #ytm-custom-bg {
-  display: block !important;
+body.ytm-custom-layout #ytm-custom-bg { display: block !important; }
+
+
+body.ytm-apple-bg #ytm-custom-bg {
+  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
+  transform: scale(1.2);
+  animation: none; 
 }
 
+body.ytm-apple-bg #ytm-custom-bg::before {
+  content: ""; position: absolute;
+  top: -30%; left: -30%; width: 160%; height: 160%;
+  background-image: inherit; background-size: cover; background-position: center;
+  opacity: 0.5; border-radius: 40%; 
+  animation: amFluid1 25s infinite alternate ease-in-out;
+}
+
+body.ytm-apple-bg #ytm-custom-bg::after {
+  content: ""; position: absolute;
+  bottom: -30%; right: -30%; width: 150%; height: 150%;
+  background-image: inherit; background-size: cover; background-position: center;
+  opacity: 0.4; border-radius: 45%; /* mix-blend-modeを外して優しく重ねる */
+  animation: amFluid2 30s infinite alternate-reverse ease-in-out;
+}
+@keyframes amFluid1 {
+  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  50% { transform: translate(5%, 10%) scale(1.1) rotate(90deg); }
+  100% { transform: translate(-5%, -10%) scale(1.05) rotate(180deg); }
+}
+@keyframes amFluid2 {
+  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  50% { transform: translate(-10%, -5%) scale(1.15) rotate(-90deg); }
+  100% { transform: translate(10%, 5%) scale(1.1) rotate(-180deg); }
+}
 @keyframes ytmBgDrift {
   0% { transform: scale(1.15) translate3d(-3%, -3%, 0); }
   50% { transform: scale(1.15) translate3d(4%, 2%, 0); }
   100% { transform: scale(1.15) translate3d(-2%, 4%, 0); }
 }
-
-body.ytm-custom-layout #ytm-custom-bg {
-  animation: ytmBgDrift 40s ease-in-out infinite alternate;
-}
-
 
 @keyframes ytmLyricsBounce {
   0%, 100% { transform: translateY(0); }
@@ -598,57 +624,34 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 /* 1. ベースの形 */
-#trans-toggle,
-#shared-trans-toggle,
-#sync-offset-save-toggle,
-#fast-mode-toggle,
-#left-align-toggle {
+#trans-toggle, #shared-trans-toggle, #sync-offset-save-toggle, #fast-mode-toggle, #left-align-toggle, #apple-bg-toggle {
   appearance: none;
-  width: 42px;
-  height: 24px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
+  width: 38px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
   position: relative;
   cursor: pointer;
   outline: none;
   transition: background 0.3s ease;
   flex-shrink: 0;
 }
-
-/* 2. ONになったときの色（緑色） */
-#trans-toggle:checked,
-#shared-trans-toggle:checked,
-#sync-offset-save-toggle:checked,
-#fast-mode-toggle:checked,
-#left-align-toggle:checked {  
-  background: #34c759;
+#trans-toggle:checked, #shared-trans-toggle:checked, #sync-offset-save-toggle:checked, #fast-mode-toggle:checked, #left-align-toggle:checked, #apple-bg-toggle:checked {  
+  background: #ff0000; /* YT Musicの赤に統一 */
 }
-
-/* 3. 白い丸ポチ */
-#trans-toggle::after,
-#shared-trans-toggle::after,
-#sync-offset-save-toggle::after,
-#fast-mode-toggle::after,
-#left-align-toggle::after { 
+#trans-toggle::after, #shared-trans-toggle::after, #sync-offset-save-toggle::after, #fast-mode-toggle::after, #left-align-toggle::after, #apple-bg-toggle::after { 
   content: '';
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   background: #fff;
   border-radius: 50%;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
   transition: transform 0.3s ease;
 }
-
-/* 4. ONになったときの丸ポチの移動 */
-#trans-toggle:checked::after,
-#shared-trans-toggle:checked::after,
-#sync-offset-save-toggle:checked::after,
-#fast-mode-toggle:checked::after,
-#left-align-toggle:checked::after {  
-  transform: translateX(18px);
+#trans-toggle:checked::after, #shared-trans-toggle:checked::after, #sync-offset-save-toggle:checked::after, #fast-mode-toggle:checked::after, #left-align-toggle:checked::after, #apple-bg-toggle:checked::after {  
+  transform: translateX(16px);
 }
 
 

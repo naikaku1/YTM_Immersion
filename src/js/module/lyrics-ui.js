@@ -2126,6 +2126,12 @@ function renderSettingsPanel() {
                   <input type="checkbox" id="left-align-toggle">
                 </label>
               </div>
+              <div class="setting-row">
+                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                  <span>${t('settings_apple_bg') || 'Apple Music風の動的背景'}</span>
+                  <input type="checkbox" id="apple-bg-toggle">
+                </label>
+              </div>
             </div>
 
             <div class="settings-group-card">
@@ -2258,6 +2264,7 @@ function renderSettingsPanel() {
     document.getElementById('fast-mode-toggle').checked = !!config.fastMode;
     document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
     document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
+    document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
     // Fast Mode のときは共有翻訳を強制OFF（トグルは表示したまま無効化）
     const fastToggleEl = document.getElementById('fast-mode-toggle');
     if (fastToggleEl) {
@@ -2326,6 +2333,7 @@ function renderSettingsPanel() {
       config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
       config.fastMode = document.getElementById('fast-mode-toggle').checked;
       config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
+      config.appleBg = document.getElementById('apple-bg-toggle').checked;
       config.lyricWeight = document.getElementById('weight-slider').value;
       config.bgBrightness = document.getElementById('bright-slider').value;
       
@@ -2340,6 +2348,9 @@ function renderSettingsPanel() {
       storage.set('ytm_fast_mode', config.fastMode);
       storage.set('ytm_left_align', config.leftAlignInfo);
       document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
+      
+      storage.set('ytm_apple_bg', config.appleBg);
+      document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
       storage.set('ytm_main_lang', config.mainLang);
       storage.set('ytm_sub_lang', config.subLang);
       storage.set('ytm_ui_lang', config.uiLang);
@@ -3912,6 +3923,11 @@ trySetArtistLink();
     const leftAlignStored = await storage.get('ytm_left_align');
     if (leftAlignStored !== null) config.leftAlignInfo = leftAlignStored;
     document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
+
+    // 4. Apple Music風背景オプション
+    const appleBgStored = await storage.get('ytm_apple_bg');
+    if (appleBgStored !== null) config.appleBg = appleBgStored;
+    document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
   })();
   
   

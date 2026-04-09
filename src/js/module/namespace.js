@@ -155,7 +155,8 @@
     syncOffset: 0,
     saveSyncOffset: false,
     useSharedTranslateApi: false,
-    leftAlignInfo: false
+    leftAlignInfo: false,
+    appleBg: true
   };
 
   // フォールバック言語
@@ -190,7 +191,8 @@
       settings_sync_offset: "歌詞同期オフセット",
       settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
       settings_fast_mode: "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)",
-      settings_left_align: "タイトルとアーティスト名を左揃えにする"
+      settings_left_align: "タイトルとアーティスト名を左揃えにする",
+      settings_apple_bg: "Apple Music風の動的背景を使用する"
     },
     en: {
       unit_hour: "hours",
@@ -222,7 +224,8 @@
       settings_sync_offset: "Lyrics sync offset",
       settings_sync_offset_save: "Don't reset offset when the song changes",
       settings_fast_mode: "Fast Load Mode (May reduce accuracy for covers)",
-      settings_left_align: "Left align title and artist name"
+      settings_left_align: "Left align title and artist name",
+      settings_apple_bg: "Use Apple Music style dynamic background"
     },
     ko: {
       unit_hour: "시간",

@@ -2727,6 +2727,8 @@ async function applyLyricsText(rawLyrics) {
     if (offsetStored !== null) config.syncOffset = offsetStored;
     const saveOffsetStored = await storage.get('ytm_save_sync_offset');
     if (saveOffsetStored !== null) config.saveSyncOffset = saveOffsetStored;
+    const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
+    if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
 
     // ★スライダー初期値反映
     const weightStored = await storage.get('ytm_lyric_weight');
@@ -2940,6 +2942,12 @@ function renderSettingsPanel() {
                   <input type="checkbox" id="apple-bg-toggle">
                 </label>
               </div>
+              <div class="setting-row">
+                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                  <span>LrcLibからのフォールバック取得</span>
+                  <input type="checkbox" id="lrclib-fallback-toggle">
+                </label>
+              </div>
             </div>
 
             <div class="settings-group-card">
@@ -3073,6 +3081,7 @@ function renderSettingsPanel() {
     document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
     document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
     document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
+    document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
     // Fast Mode のときは共有翻訳を強制OFF（トグルは表示したまま無効化）
     const fastToggleEl = document.getElementById('fast-mode-toggle');
     if (fastToggleEl) {
@@ -3142,6 +3151,7 @@ function renderSettingsPanel() {
       config.fastMode = document.getElementById('fast-mode-toggle').checked;
       config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
       config.appleBg = document.getElementById('apple-bg-toggle').checked;
+      config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
       config.lyricWeight = document.getElementById('weight-slider').value;
       config.bgBrightness = document.getElementById('bright-slider').value;
       
@@ -3158,6 +3168,7 @@ function renderSettingsPanel() {
       document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
       
       storage.set('ytm_apple_bg', config.appleBg);
+      storage.set('ytm_lrclib_fallback', config.useLrcLibFallback);
       document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
       storage.set('ytm_main_lang', config.mainLang);
       storage.set('ytm_sub_lang', config.subLang);
@@ -3577,6 +3588,8 @@ function renderSettingsPanel() {
     if (subLangStored !== null && subLangStored !== undefined) config.subLang = subLangStored;
     const uiLangStored = await storage.get('ytm_ui_lang');
     if (uiLangStored) config.uiLang = uiLangStored;
+    const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
+    if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
 
     const thisKey = `${meta.title}///${meta.artist}`;
     if (thisKey !== currentKey) return;
@@ -3918,7 +3931,7 @@ const withRandomCacheBusterFast = (url) => {
         const video_id = getCurrentVideoId();
         const res = await new Promise(resolve => {
           chrome.runtime.sendMessage(
-            { type: 'GET_LYRICS', payload: { track, artist, youtube_url, video_id } },
+            { type: 'GET_LYRICS', payload: { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback } },
             resolve
           );
         });

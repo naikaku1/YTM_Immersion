@@ -624,7 +624,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 /* 1. ベースの形 */
-#trans-toggle, #shared-trans-toggle, #sync-offset-save-toggle, #fast-mode-toggle, #left-align-toggle, #apple-bg-toggle {
+#trans-toggle, #shared-trans-toggle, #sync-offset-save-toggle, #fast-mode-toggle, #left-align-toggle, #apple-bg-toggle, #lrclib-fallback-toggle {
   appearance: none;
   width: 38px;
   height: 22px;
@@ -636,10 +636,10 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   transition: background 0.3s ease;
   flex-shrink: 0;
 }
-#trans-toggle:checked, #shared-trans-toggle:checked, #sync-offset-save-toggle:checked, #fast-mode-toggle:checked, #left-align-toggle:checked, #apple-bg-toggle:checked {  
-  background: #ff0000; /* YT Musicの赤に統一 */
+#trans-toggle:checked, #shared-trans-toggle:checked, #sync-offset-save-toggle:checked, #fast-mode-toggle:checked, #left-align-toggle:checked, #apple-bg-toggle:checked, #lrclib-fallback-toggle:checked {  
+  background: #ff0000;
 }
-#trans-toggle::after, #shared-trans-toggle::after, #sync-offset-save-toggle::after, #fast-mode-toggle::after, #left-align-toggle::after, #apple-bg-toggle::after { 
+#trans-toggle::after, #shared-trans-toggle::after, #sync-offset-save-toggle::after, #fast-mode-toggle::after, #left-align-toggle::after, #apple-bg-toggle::after, #lrclib-fallback-toggle::after { 
   content: '';
   position: absolute;
   top: 2px;
@@ -650,7 +650,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   border-radius: 50%;
   transition: transform 0.3s ease;
 }
-#trans-toggle:checked::after, #shared-trans-toggle:checked::after, #sync-offset-save-toggle:checked::after, #fast-mode-toggle:checked::after, #left-align-toggle:checked::after, #apple-bg-toggle:checked::after {  
+#trans-toggle:checked::after, #shared-trans-toggle:checked::after, #sync-offset-save-toggle:checked::after, #fast-mode-toggle:checked::after, #left-align-toggle:checked::after, #apple-bg-toggle:checked::after, #lrclib-fallback-toggle:checked::after {  
   transform: translateX(16px);
 }
 

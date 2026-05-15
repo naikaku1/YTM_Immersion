@@ -1,6 +1,0 @@
-  setupObserver();
-
-
-
-  startLyricRafLoop();
-  hoverTimeInfoSetup();

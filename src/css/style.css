@@ -269,10 +269,12 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-player#player.style-scope.
 }
 
 body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle {
-  transition: opacity 0.5s ease, visibility 0.5s ease;
+  transition: opacity 0.5s ease, visibility 0.5s ease, max-height 0.5s cubic-bezier(0.25, 1, 0.5, 1), margin-top 0.5s cubic-bezier(0.25, 1, 0.5, 1);
   opacity: 1;
   visibility: visible;
-  margin-top: 10px;
+  margin-top: 24px;
+  max-height: 50px;
+  overflow: hidden;
 }
 
 body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.moviemode {
@@ -286,6 +288,11 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+}
+
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemode {
+  max-height: 0px;
+  margin-top: 0px;
 }
 
 body.ytm-custom-layout .av-toggle.ytmusic-av-toggle {
@@ -386,7 +393,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   font-size: 20px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.7);
-  margin-bottom: 24px;
+  margin-bottom: 0px;
   transition: opacity 0.5s ease, visibility 0.5s ease;
   opacity: 1;
   visibility: visible;
@@ -403,16 +410,35 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   display: flex;
   gap: 10px;
   justify-content: center;
-  margin-top: 10px;
-  transition: opacity 0.5s ease, visibility 0.5s ease;
+  margin-top: 24px;
+  max-height: 50px;
   opacity: 1;
   visibility: visible;
+  overflow: hidden;
+  transition: opacity 0.5s ease, visibility 0.5s ease, max-height 0.5s cubic-bezier(0.25, 1, 0.5, 1), margin-top 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle ~ #ytm-btn-area {
+  margin-top: 12px;
+}
+
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive ~ #ytm-btn-area {
+  margin-top: 12px;
+}
+
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemode ~ #ytm-btn-area {
+  margin-top: 24px;
 }
 
 #ytm-btn-area.inactive {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+}
+
+#ytm-btn-area.inactive.moviemode {
+  max-height: 0px;
+  margin-top: 0px !important;
 }
 
 #ytm-btn-area.moviemode {
@@ -559,24 +585,84 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   font-weight: 700;
 }
 
-#ytm-settings-close-btn {
-  background: rgba(255, 255, 255, 0.05);
-  border: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 18px;
-  display: flex;
+/* Unified Close Button Base */
+.ytm-unified-close-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+  padding: 0;
+  box-sizing: border-box;
+  z-index: 10;
+  outline: none;
 }
 
-#ytm-settings-close-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+.ytm-unified-close-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+  transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.ytm-unified-close-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
   color: #fff;
+  transform: scale(1.08);
+}
+
+.ytm-unified-close-btn:hover svg {
+  transform: rotate(90deg);
+}
+
+.ytm-unified-close-btn:active {
+  transform: scale(0.94);
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Close Button Size Modifiers */
+.ytm-unified-close-btn.size-26 {
+  width: 26px;
+  height: 26px;
+}
+.ytm-unified-close-btn.size-26 svg {
+  width: 10px;
+  height: 10px;
+}
+
+.ytm-unified-close-btn.size-32 {
+  width: 32px;
+  height: 32px;
+}
+.ytm-unified-close-btn.size-32 svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ytm-unified-close-btn.size-36 {
+  width: 36px;
+  height: 36px;
+}
+.ytm-unified-close-btn.size-36 svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ytm-unified-close-btn.size-40 {
+  width: 40px;
+  height: 40px;
+}
+.ytm-unified-close-btn.size-40 svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* スクロールエリア */
@@ -1042,17 +1128,7 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   background: rgba(120, 200, 255, 0.14);
 }
 
-.ytm-meaning-close-btn,
-.ytm-meaning-summary-close {
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
+.ytm-meaning-close-btn {
   flex-shrink: 0;
 }
 
@@ -1060,11 +1136,8 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   position: absolute;
   top: 18px;
   right: 18px;
-}
-
-.ytm-meaning-close-btn:hover,
-.ytm-meaning-summary-close:hover {
-  background: rgba(255, 255, 255, 0.14);
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 #ytm-meaning-summary-backdrop {
@@ -2095,24 +2168,6 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   position: absolute;
   right: 30px;
   top: 30px;
-  background: rgba(255, 255, 255, 0.1);
-  border: none;
-  color: #fff;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  cursor: pointer;
-  font-size: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: 0.2s;
-  z-index: 10;
-}
-
-.replay-close-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: scale(1.1);
 }
 
 .ytm-replay-content {
@@ -3017,20 +3072,7 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
 }
 
 .ytm-switch-close {
-  background: none;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  font-size: 14px;
-  opacity: 0.6;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-
-.ytm-switch-close:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
 }
 
 .ytm-switch-list {

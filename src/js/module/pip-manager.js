@@ -248,6 +248,26 @@ pipDoc.body.innerHTML = `
 
       this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
       this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
+      this.pipLyricsContainer._lastScrolledIndex = -1;
+      this.pipLyricsContainer._isUserScrolling = false;
+      this.pipLyricsContainer._isProgrammaticScrolling = false;
+      let userScrollPipTimeout = null;
+
+      this.pipLyricsContainer.addEventListener('scroll', () => {
+        if (!this.pipLyricsContainer) return;
+        if (this.pipLyricsContainer._isProgrammaticScrolling) {
+          this.pipLyricsContainer._isProgrammaticScrolling = false;
+          return;
+        }
+        this.pipLyricsContainer._isUserScrolling = true;
+        clearTimeout(userScrollPipTimeout);
+        userScrollPipTimeout = setTimeout(() => {
+          if (this.pipLyricsContainer) {
+            this.pipLyricsContainer._isUserScrolling = false;
+            this.pipLyricsContainer._lastScrolledIndex = -1;
+          }
+        }, 2000);
+      }, { passive: true });
 
       const likeBtn = pipDoc.getElementById('pip-like-btn');
       const prevBtn = pipDoc.getElementById('pip-prev-btn'); // ★ 追加

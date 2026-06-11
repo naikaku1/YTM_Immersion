@@ -414,7 +414,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   max-height: 50px;
   opacity: 1;
   visibility: visible;
-  overflow: hidden;
+  overflow: visible;
   transition: opacity 0.5s ease, visibility 0.5s ease, max-height 0.5s cubic-bezier(0.25, 1, 0.5, 1), margin-top 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
@@ -434,6 +434,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  overflow: hidden;
 }
 
 #ytm-btn-area.inactive.moviemode {

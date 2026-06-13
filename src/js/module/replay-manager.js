@@ -2,6 +2,7 @@
     HISTORY_KEY: 'ytm_local_history',
     currentVideoId: null,
     hasRecordedCurrent: false,
+    isRecording: false,
     currentPlayTime: 0,
     lastSaveTime: 0,
 
@@ -86,6 +87,7 @@
       if (vid !== this.currentVideoId) {
         this.currentVideoId = vid;
         this.hasRecordedCurrent = false;
+        this.isRecording = false;
         this.currentPlayTime = 0;
         this.lastSaveTime = 0;
         this.currentLyricLines = 0;
@@ -98,12 +100,22 @@
         const isPlayed = this.currentPlayTime > 30 || (video.duration > 10 && this.currentPlayTime / video.duration > 0.4);
 
         if (isPlayed) {
-          if (!this.hasRecordedCurrent) {
-            await this.recordNewPlay();
-            this.hasRecordedCurrent = true;
-          } else if (this.currentPlayTime - this.lastSaveTime >= 5) {
-            await this.updateDuration();
-            this.lastSaveTime = this.currentPlayTime;
+          if (!this.hasRecordedCurrent && !this.isRecording) {
+            this.isRecording = true;
+            try {
+              await this.recordNewPlay();
+              this.hasRecordedCurrent = true;
+            } finally {
+              this.isRecording = false;
+            }
+          } else if (this.currentPlayTime - this.lastSaveTime >= 5 && !this.isRecording) {
+            this.isRecording = true;
+            try {
+              await this.updateDuration();
+              this.lastSaveTime = this.currentPlayTime;
+            } finally {
+              this.isRecording = false;
+            }
           }
         }
       }
@@ -432,5 +444,3 @@
       setInterval(() => this.check(), 1000);
     }
   };
-
-

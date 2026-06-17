@@ -942,6 +942,8 @@ function renderAnimatedTimedText(captionData) {
   if (!ui.lyrics || !captionData) return;
   animatedCaptionData = captionData;
   animatedCaptionFrameKey = '';
+  // innerHTML差し替えによるscrollイベントをユーザースクロール扱いにしない
+  suppressUserScrollDetection(500);
   hasTimestamp = true;
   document.body.classList.remove('ytm-no-lyrics', 'ytm-no-timestamp');
   document.body.classList.add('ytm-has-timestamp', 'ytm-animated-caption-mode');
@@ -1176,17 +1178,22 @@ const hoverTimeInfoSetup = () => {
     return m * 60 + s;
   };
   const removeHoverTimeInfo = () => {
-    const info = document.querySelector('#hover-time-info');
+    let attempts = 0;
     const interval = setInterval(() => {
+      const info = document.querySelector('#hover-time-info');
       if (info) {
         info.remove();
         clearInterval(interval);
+      } else {
+        attempts++;
+        if (attempts > 30) {
+          clearInterval(interval);
+        }
       }
     }, 1000);
   };
   const createHoverTimeInfo = () => {
     let info = document.querySelector('#hover-time-info-new');
-    const parent = document.querySelector('ytmusic-player-bar');
     if (!info) {
       info = document.createElement('span');
       info.id = 'hover-time-info-new';
@@ -1196,38 +1203,47 @@ const hoverTimeInfoSetup = () => {
     }
   };
   const adjustHoverTimeInfoPosition = () => {
-    const progresshandle = document.querySelector('tp-yt-paper-slider#progress-bar #sliderKnob');
-    const info = document.querySelector('#hover-time-info-new');
-    const slider = document.querySelector(
-      'tp-yt-paper-slider#progress-bar tp-yt-paper-progress#sliderBar #primaryProgress'
-    ).parentElement.parentElement;
-    const playerBar = document.querySelector('ytmusic-player-bar');
-    const refresh = () => {
-      const onMove = (e) => {
-        const marginLeft = (playerBar.parentElement.offsetWidth - playerBar.offsetWidth) / 2;
-        const infoLeft = e.clientX;
-        const relativeMouseX = e.clientX - marginLeft;
-        const timeinfo = document.querySelector('#left-controls > span');
-        const songLengthSeconds = timeToSeconds(timeinfo.textContent.replace(/^[^/]+\/\s*/, ""));
-        const relativePosition = Math.round((Math.min(1, Math.max(0, (relativeMouseX / slider.offsetWidth)))) * 1000) / 1000;
-        const hoverTimeSeconds = Math.floor(songLengthSeconds * relativePosition);
-        const hoverTimeString = `${String(Math.floor(hoverTimeSeconds / 60))}:${String(hoverTimeSeconds % 60).padStart(2, '0')}`;
-        info.style.display = 'block';
-        info.style.left = `${infoLeft}px`;
-        info.textContent = hoverTimeString;
-      };
-      const hide = () => {
-        info.style.display = 'none';
-      };
-      slider.addEventListener('mousemove', onMove);
-      slider.addEventListener('mouseout', hide);
-      progresshandle.addEventListener('mousemove', onMove);
-      progresshandle.addEventListener('mouseout', hide);
-    };
+    let attempts = 0;
     const interval = setInterval(() => {
-      if (slider && info && progresshandle) {
+      const progresshandle = document.querySelector('tp-yt-paper-slider#progress-bar #sliderKnob');
+      const info = document.querySelector('#hover-time-info-new');
+      const sliderBar = document.querySelector(
+        'tp-yt-paper-slider#progress-bar tp-yt-paper-progress#sliderBar #primaryProgress'
+      );
+      const slider = sliderBar?.parentElement?.parentElement;
+      const playerBar = document.querySelector('ytmusic-player-bar');
+
+      if (slider && info && progresshandle && playerBar) {
+        const refresh = () => {
+          const onMove = (e) => {
+            const marginLeft = (playerBar.parentElement.offsetWidth - playerBar.offsetWidth) / 2;
+            const infoLeft = e.clientX;
+            const relativeMouseX = e.clientX - marginLeft;
+            const timeinfo = document.querySelector('#left-controls > span');
+            if (!timeinfo) return;
+            const songLengthSeconds = timeToSeconds(timeinfo.textContent.replace(/^[^/]+\/\s*/, ""));
+            const relativePosition = Math.round((Math.min(1, Math.max(0, (relativeMouseX / slider.offsetWidth)))) * 1000) / 1000;
+            const hoverTimeSeconds = Math.floor(songLengthSeconds * relativePosition);
+            const hoverTimeString = `${String(Math.floor(hoverTimeSeconds / 60))}:${String(hoverTimeSeconds % 60).padStart(2, '0')}`;
+            info.style.display = 'block';
+            info.style.left = `${infoLeft}px`;
+            info.textContent = hoverTimeString;
+          };
+          const hide = () => {
+            info.style.display = 'none';
+          };
+          slider.addEventListener('mousemove', onMove);
+          slider.addEventListener('mouseout', hide);
+          progresshandle.addEventListener('mousemove', onMove);
+          progresshandle.addEventListener('mouseout', hide);
+        };
         refresh();
         clearInterval(interval);
+      } else {
+        attempts++;
+        if (attempts > 60) {
+          clearInterval(interval);
+        }
       }
     }, 1000);
   };
@@ -1773,9 +1789,9 @@ const getCurrentPlaybackTimeSec = () => {
   const v = document.querySelector('video');
   if (!v || typeof v.currentTime !== 'number' || Number.isNaN(v.currentTime)) return null;
   let t = v.currentTime;
-  if (!hasTimestamp && !(timeOffset > 0 && t < timeOffset)) {
-    t = Math.max(0, t - timeOffset);
-  }
+  // 連続再生対応: 曲開始オフセットを引いて曲内ローカル時間にする（全歌詞共通）
+  if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
+  t = Math.max(0, t - timeOffset);
   const duration = Number.isFinite(v.duration) ? v.duration : null;
   t = Math.max(0, t + (config.syncOffset / 1000));
   if (typeof duration === 'number' && duration > 0) {
@@ -2081,6 +2097,10 @@ function setupScrollResumeEvents() {
   if (!ui.lyrics) return;
 
   const handleUserScroll = () => {
+    // 曲切替・再描画など拡張側の操作で発生したscrollイベントは
+    // ユーザースクロールとして扱わない（自動スクロールが止まる原因になる）
+    if (performance.now() < _suppressUserScrollUntil) return;
+
     if (isProgrammaticScrolling) {
       // プログラムスクロール中は、完了までタイムアウトを延長
       clearTimeout(programmaticScrollTimeout);
@@ -2546,9 +2566,10 @@ async function applyLyricsText(rawLyrics) {
     }
   } catch (e) { }
 
-  if (hasTimestamp) {
-    timeOffset = 0;
-  }
+  // 注意: ここで timeOffset を 0 にリセットしてはいけない。
+  // 連続再生（currentTime がリセットされない）対応のため、曲開始オフセットは
+  // tick() で設定された値を保持する。リセット再生の場合は RAF ループ側で
+  // currentTime が offset を下回った時点で自動的に 0 に補正される。
 
   lyricsData = finalLines;
   renderLyrics(finalLines);
@@ -2617,7 +2638,10 @@ const formatPreviewTime = (seconds) => {
 const getCurrentPlaybackSeconds = () => {
   try {
     const v = document.querySelector('video');
-    if (v && Number.isFinite(v.currentTime)) return v.currentTime;
+    if (v && Number.isFinite(v.currentTime)) {
+      // 連続再生対応: 曲開始オフセットを引いて曲内ローカル時間で返す
+      return Math.max(0, v.currentTime - timeOffset);
+    }
   } catch (e) { }
   return null;
 };
@@ -2697,7 +2721,9 @@ const pickPreviewInfoFromLyrics = (rawLyrics) => {
   try {
     const v = document.querySelector('video');
     if (v && Number.isFinite(v.currentTime) && Number.isFinite(v.duration) && v.duration > 0) {
-      const ratio = Math.max(0, Math.min(1, v.currentTime / v.duration));
+      // 連続再生対応: 曲内ローカル時間で進捗比率を計算
+      const localTime = Math.max(0, v.currentTime - timeOffset);
+      const ratio = Math.max(0, Math.min(1, localTime / v.duration));
       const idx = Math.max(0, Math.min(nonEmpty.length - 1, Math.round((nonEmpty.length - 1) * ratio)));
       return {
         line: String(nonEmpty[idx].text || '').trim(),
@@ -3316,6 +3342,9 @@ async function initSettings() {
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
   config.lyricSourceMode = sourceModeStored || 'standard';
 
+  const lowCpuStored = await storage.get('ytm_low_cpu_mode');
+  if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
+
   // ★スライダー初期値反映
   const weightStored = await storage.get('ytm_lyric_weight');
   if (weightStored) config.lyricWeight = weightStored;
@@ -3430,29 +3459,36 @@ function renderSettingsPanel() {
   const ICONS = {
     visuals: `<svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5 11 5.67 11 6.5 10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5S18.33 12 17.5 12z"/></svg>`,
     trans: `<svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>`,
-    data: `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>`,
+    data: `<svg viewBox="0 0 24 24"><path d="M12 2C7.58 2 4 3.79 4 6s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4zM4 8.55V12c0 2.21 3.58 4 8 4s8-1.79 8-4V8.55C18.83 9.99 15.72 11 12 11S5.17 9.99 4 8.55zM4 14.55V18c0 2.21 3.58 4 8 4s8-1.79 8-4v-3.45C18.83 15.99 15.72 17 12 17s-6.83-1.01-8-2.45z"/></svg>`,
     save: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`,
     trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`
   };
 
+  let extVersion = '';
+  try { extVersion = (EXT && EXT.runtime && EXT.runtime.getManifest) ? (EXT.runtime.getManifest().version || '') : ''; } catch (_) { }
+
   ui.settings.innerHTML = `
       <div class="settings-tabs">
-        <div class="settings-tabs-header">Settings</div>
+        <div class="settings-tabs-header">
+          <span class="settings-app-name">YTM Immersion</span>
+          <span class="settings-app-caption">Settings</span>
+        </div>
         <button class="settings-tab-btn active" data-tab="visuals">
-          ${ICONS.visuals} Visuals
+          ${ICONS.visuals}<span>Visuals</span>
         </button>
         <button class="settings-tab-btn" data-tab="translation">
-          ${ICONS.trans} Translation
+          ${ICONS.trans}<span>Translation</span>
         </button>
         <button class="settings-tab-btn" data-tab="data">
-          ${ICONS.data} Data & Reset
+          ${ICONS.data}<span>Data & Reset</span>
         </button>
-        
-        <div style="margin-top: auto; padding-top: 20px;">
-           <button id="save-settings-btn" class="settings-action-btn btn-primary" style="padding:14px; font-size:14px; border-radius:12px; box-shadow:0 4px 12px rgba(0, 122, 255, 0.3); display:flex; align-items:center; justify-content:center; gap:8px;">
+
+        <div class="settings-tabs-footer">
+           <button id="save-settings-btn" class="settings-save-btn">
              ${ICONS.save}
-             ${t('settings_save')}
+             <span>${t('settings_save')}</span>
            </button>
+           ${extVersion ? `<div class="settings-version">v${extVersion}</div>` : ''}
         </div>
       </div>
 
@@ -3461,97 +3497,95 @@ function renderSettingsPanel() {
           <h3>${t('settings_title')}</h3>
           <button id="ytm-settings-close-btn" class="ytm-unified-close-btn size-32" title="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
-        
+
         <div class="settings-scroll-area">
-          
+
           <div class="settings-panel active" id="panel-visuals">
-            <div class="settings-section-title">Visual Customization</div>
+            <div class="settings-section-title">${t('settings_sec_display')}</div>
             <div class="settings-group-card">
-              <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:12px;">
-                <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:13px; font-weight:500;">UI Language</span>
-                  <div class="ytm-lang-group" id="ui-lang-group" style="background:transparent; padding:0;"></div>
-                </div>
-              </div>
               <div class="setting-row">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>${t('settings_left_align')}</span>
-                  <input type="checkbox" id="left-align-toggle">
-                </label>
+                <span class="setting-name">UI Language</span>
+                <div class="ytm-lang-group" id="ui-lang-group"></div>
               </div>
-              <div class="setting-row">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>${t('settings_apple_bg') || 'Apple Music風の動的背景'}</span>
-                  <input type="checkbox" id="apple-bg-toggle">
-                </label>
-              </div>
-              <div class="setting-row">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>${t('settings_animated_captions') || 'アニメーション字幕を使う'}</span>
-                  <input type="checkbox" id="animated-caption-toggle">
-                </label>
-              </div>
-              <div class="setting-row">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>LrcLibからのフォールバック取得</span>
-                  <input type="checkbox" id="lrclib-fallback-toggle">
-                </label>
-              </div>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_left_align')}</span>
+                <input type="checkbox" id="left-align-toggle">
+              </label>
             </div>
 
+            <div class="settings-section-title">${t('settings_sec_bg')}</div>
             <div class="settings-group-card">
-              <div class="setting-row" style="flex-direction:column; align-items:stretch;">
-                <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:500;">
-                  <span>歌詞の太さ (Weight)</span>
-                  <span id="weight-val" style="opacity:0.6;">${config.lyricWeight || 800}</span>
-                </div>
-                <input type="range" id="weight-slider" min="100" max="900" step="100" value="${config.lyricWeight || 800}">
-              </div>
-              <div class="setting-row" style="flex-direction:column; align-items:stretch;">
-                 <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:500;">
-                  <span>背景の明るさ (Brightness)</span>
-                  <span id="bright-val" style="opacity:0.6;">${Math.round((config.bgBrightness || 0.35) * 100)}%</span>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_apple_bg')}</span>
+                <input type="checkbox" id="apple-bg-toggle">
+              </label>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_low_cpu_mode')}</span>
+                <input type="checkbox" id="low-cpu-toggle">
+              </label>
+              <div class="setting-row stacked">
+                <div class="setting-row-top">
+                  <span class="setting-name">背景の明るさ (Brightness)</span>
+                  <span class="setting-value-badge" id="bright-val">${Math.round((config.bgBrightness || 0.35) * 100)}%</span>
                 </div>
                 <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || 0.35}">
               </div>
             </div>
 
+            <div class="settings-section-title">${t('settings_sec_lyrics')}</div>
             <div class="settings-group-card">
-              <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
-                <div class="ytm-lang-label">歌詞ソースモード (Lyric Source Mode)</div>
+              <div class="setting-row stacked">
+                <div class="setting-row-top">
+                  <span class="setting-name">歌詞の太さ (Weight)</span>
+                  <span class="setting-value-badge" id="weight-val">${config.lyricWeight || 800}</span>
+                </div>
+                <input type="range" id="weight-slider" min="100" max="900" step="100" value="${config.lyricWeight || 800}">
+              </div>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_animated_captions')}</span>
+                <input type="checkbox" id="animated-caption-toggle">
+              </label>
+            </div>
+
+            <div class="settings-section-title">${t('settings_sec_data_source')}</div>
+            <div class="settings-group-card">
+              <div class="setting-row stacked">
+                <span class="setting-name">歌詞ソースモード (Lyric Source Mode)</span>
                 <div class="ytm-lang-group" id="lyric-source-group">
                   <button class="ytm-lang-pill" data-value="standard">標準</button>
                   <button class="ytm-lang-pill" data-value="lrclib">高速 (LrcLibのみ)</button>
                 </div>
               </div>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">LrcLibからのフォールバック取得</span>
+                <input type="checkbox" id="lrclib-fallback-toggle">
+              </label>
             </div>
           </div>
 
           <div class="settings-panel" id="panel-translation">
             <div class="settings-section-title">Translation & Features</div>
             <div class="settings-group-card">
-              <div class="setting-row">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>${t('settings_trans')}</span>
-                  <input type="checkbox" id="trans-toggle">
-                </label>
-              </div>
-              <div class="setting-row" id="shared-trans-row" style="flex-direction:column; align-items:stretch; gap:10px;">
-                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                  <span>${t('settings_shared_trans')}</span>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_trans')}</span>
+                <input type="checkbox" id="trans-toggle">
+              </label>
+              <div class="setting-row stacked" id="shared-trans-row">
+                <label class="setting-row-top toggle-label">
+                  <span class="setting-name">${t('settings_shared_trans')}</span>
                   <input type="checkbox" id="shared-trans-toggle">
                 </label>
-                <div id="shared-trans-note" style="font-size:12px; opacity:0.7; line-height:1.4; display:none; white-space:pre-line; background:rgba(0,0,0,0.2); padding:10px; border-radius:8px;"></div>
-                <div style="width:100%; display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
-                  <span style="font-size:12px; opacity:0.8;">共有翻訳 残り文字数</span>
-                  <span id="community-remaining-val" style="font-size:12px; opacity:0.7; font-weight:600; font-variant-numeric: tabular-nums;">--</span>
+                <div id="shared-trans-note" class="setting-note"></div>
+                <div class="setting-row-top setting-subline">
+                  <span class="setting-desc">共有翻訳 残り文字数</span>
+                  <span id="community-remaining-val" class="setting-value-badge">--</span>
                 </div>
               </div>
             </div>
 
             <div class="settings-group-card">
-               <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
-                  <div class="ytm-lang-label">${t('settings_main_lang')}</div>
+               <div class="setting-row stacked">
+                  <span class="setting-name">${t('settings_main_lang')}</span>
                   <div class="ytm-lang-group" id="main-lang-group">
                     <button class="ytm-lang-pill" data-value="original">Original</button>
                     <button class="ytm-lang-pill" data-value="ja">日本語</button>
@@ -3559,8 +3593,8 @@ function renderSettingsPanel() {
                     <button class="ytm-lang-pill" data-value="ko">한국어</button>
                   </div>
                </div>
-               <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
-                  <div class="ytm-lang-label">${t('settings_sub_lang')}</div>
+               <div class="setting-row stacked">
+                  <span class="setting-name">${t('settings_sub_lang')}</span>
                   <div class="ytm-lang-group" id="sub-lang-group">
                     <button class="ytm-lang-pill" data-value="original">Original</button>
                     <button class="ytm-lang-pill" data-value="ja">日本語</button>
@@ -3569,51 +3603,58 @@ function renderSettingsPanel() {
                     <button class="ytm-lang-pill" data-value="zh">中文</button>
                   </div>
                </div>
-               <div class="setting-row" style="display:block;">
-                 <div style="font-size:12px; margin-bottom:8px; opacity:0.7; font-weight:500;">DeepL API Key (Optional)</div>
-                 <input type="password" id="deepl-key-input" class="setting-input-text" placeholder="Paste your API key here">
+               <div class="setting-row stacked">
+                 <span class="setting-name">DeepL API Key <span class="setting-tag">Optional</span></span>
+                 <input type="password" id="deepl-key-input" class="setting-input-text" placeholder="Paste your API key here" autocomplete="off">
                </div>
             </div>
-            
-
 
             <div class="settings-group-card">
-               <div class="setting-row" style="flex-direction:column; align-items:stretch; gap:12px;">
-                  <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:13px; font-weight:500;">${t('settings_sync_offset')}</span>
-                    <input type="number" id="sync-offset-input" placeholder="0" style="width:70px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); color:#fff; border-radius:8px; padding:6px 8px; text-align:right; outline:none;">
+               <div class="setting-row">
+                  <span class="setting-name">${t('settings_sync_offset')}</span>
+                  <div class="setting-number-wrap">
+                    <input type="number" id="sync-offset-input" class="setting-input-number" placeholder="0">
+                    <span class="setting-unit">ms</span>
                   </div>
-                  <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:12px; opacity:0.7;">${t('settings_sync_offset_save')}</span>
-                    <input type="checkbox" id="sync-offset-save-toggle">
-                  </label>
-              </div>
+               </div>
+               <label class="setting-row toggle-label">
+                 <span class="setting-name secondary">${t('settings_sync_offset_save')}</span>
+                 <input type="checkbox" id="sync-offset-save-toggle">
+               </label>
             </div>
           </div>
 
           <div class="settings-panel" id="panel-data">
             <div class="settings-section-title">Data Management</div>
             <div class="settings-group-card">
-              <div class="setting-row" style="display:block; margin-bottom:14px;">
-                <button id="delete-current-cache-btn" class="settings-action-btn btn-danger" ${hasCurrentSong ? '' : 'disabled style="opacity:0.5; cursor:not-allowed;"'} style="display:flex; align-items:center; justify-content:center; gap:8px;">
-                  ${ICONS.trash} この曲の歌詞データを削除
-                </button>
-                <div style="font-size:11px; opacity:0.5; margin-top:8px; text-align:center;">
-                  現在再生中の曲の歌詞キャッシュのみを削除します
+              <div class="setting-row action-row">
+                <div class="setting-info">
+                  <span class="setting-name">この曲の歌詞データを削除</span>
+                  <span class="setting-desc">現在再生中の曲の歌詞キャッシュのみを削除します</span>
                 </div>
-              </div>
-              <div class="setting-row" style="display:block; margin-bottom:14px;">
-                <button id="clear-all-lyrics-cache-btn" class="settings-action-btn btn-danger" style="display:flex; align-items:center; justify-content:center; gap:8px; background:#ff3b30; color:#fff;">
-                  ${ICONS.trash} すべての歌詞データを削除
+                <button id="delete-current-cache-btn" class="settings-action-btn btn-danger" ${hasCurrentSong ? '' : 'disabled'}>
+                  ${ICONS.trash}<span>削除</span>
                 </button>
-                <div style="font-size:11px; opacity:0.5; margin-top:8px; text-align:center;">
-                  保存されているすべての歌詞データを削除します（設定は保持されます）
-                </div>
               </div>
-              <div class="setting-row" style="display:block;">
-                 <button id="clear-all-btn" class="settings-action-btn" style="background:rgba(255,255,255,0.1); color:#fff;">
-                   設定をリセット (Reset All)
-                 </button>
+              <div class="setting-row action-row">
+                <div class="setting-info">
+                  <span class="setting-name">すべての歌詞データを削除</span>
+                  <span class="setting-desc">保存されているすべての歌詞データを削除します（設定は保持されます）</span>
+                </div>
+                <button id="clear-all-lyrics-cache-btn" class="settings-action-btn btn-danger strong">
+                  ${ICONS.trash}<span>全削除</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-section-title">Reset</div>
+            <div class="settings-group-card">
+              <div class="setting-row action-row">
+                <div class="setting-info">
+                  <span class="setting-name">設定をリセット (Reset All)</span>
+                  <span class="setting-desc">拡張機能のすべての設定を初期状態に戻します</span>
+                </div>
+                <button id="clear-all-btn" class="settings-action-btn btn-neutral">リセット</button>
               </div>
             </div>
           </div>
@@ -3643,6 +3684,7 @@ function renderSettingsPanel() {
   document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
   document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
+  document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
   document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
 
@@ -3653,14 +3695,27 @@ function renderSettingsPanel() {
   document.getElementById('sync-offset-save-toggle').checked = config.saveSyncOffset;
 
   // スライダーイベント設定
+  // トラックの進捗フィル（CSS変数 --fill）を現在値に合わせて更新する
+  const updateSliderFill = (slider) => {
+    if (!slider) return;
+    const min = parseFloat(slider.min || '0');
+    const max = parseFloat(slider.max || '100');
+    const val = parseFloat(slider.value || '0');
+    const pct = (max > min) ? ((val - min) / (max - min)) * 100 : 0;
+    slider.style.setProperty('--fill', pct.toFixed(1) + '%');
+  };
+
   const wSlider = document.getElementById('weight-slider');
   const bSlider = document.getElementById('bright-slider');
+  updateSliderFill(wSlider);
+  updateSliderFill(bSlider);
   if (wSlider) {
     wSlider.addEventListener('input', (e) => {
       const val = e.target.value;
       document.getElementById('weight-val').textContent = val;
       config.lyricWeight = val;
       document.documentElement.style.setProperty('--ytm-lyric-weight', val);
+      updateSliderFill(e.target);
     });
   }
   if (bSlider) {
@@ -3668,6 +3723,7 @@ function renderSettingsPanel() {
       const val = e.target.value;
       document.getElementById('bright-val').textContent = Math.round(val * 100) + '%';
       document.documentElement.style.setProperty('--ytm-bg-brightness', val);
+      updateSliderFill(e.target);
     });
   }
 
@@ -3710,6 +3766,7 @@ function renderSettingsPanel() {
     config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
     config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
+    config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
     config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
@@ -3727,9 +3784,11 @@ function renderSettingsPanel() {
     document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
 
     storage.set('ytm_apple_bg', config.appleBg);
+    storage.set('ytm_low_cpu_mode', config.lowCpuMode);
     storage.set('ytm_animated_captions_enabled', config.useAnimatedCaptions);
     storage.set('ytm_lrclib_fallback', config.useLrcLibFallback);
     document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
+    document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
     storage.set('ytm_main_lang', config.mainLang);
     storage.set('ytm_sub_lang', config.subLang);
     storage.set('ytm_ui_lang', config.uiLang);
@@ -4007,7 +4066,8 @@ function setupSwitchPanel(triggerBtn) {
 function renderSwitchItems(listEl, items, clearFirst) {
   if (clearFirst) listEl.innerHTML = '';
   const video = document.querySelector('video');
-  const currentTime = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+  // 連続再生対応: 曲開始オフセットを引いて曲内ローカル位置で別バージョンに飛ばす
+  const currentTime = video && Number.isFinite(video.currentTime) ? Math.max(0, video.currentTime - timeOffset) : 0;
 
   items.forEach(item => {
     const row = document.createElement('button');
@@ -4364,11 +4424,13 @@ async function loadLyrics(meta, options = {}) {
   }
 }
 
+// Segmenter の生成は重いため1回だけ作って使い回す
+const _jaWordSegmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+
 const optimizeLineBreaks = (text) => {
   if (!text) return '';
 
-  const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
-  const segments = Array.from(segmenter.segment(text));
+  const segments = Array.from(_jaWordSegmenter.segment(text));
 
   let html = '';
   let buffer = '';
@@ -4443,8 +4505,22 @@ function renderLyrics(data) {
   if (!ui.lyrics) return;
   document.body.classList.remove('ytm-animated-caption-mode');
   animatedCaptionFrameKey = '';
+  // 再描画によるscrollイベントをユーザースクロール扱いにしない
+  suppressUserScrollDetection(500);
   ui.lyrics.innerHTML = '';
   ui.lyrics.scrollTop = 0;
+  // 再描画後は前回のハイライト/スクロール状態が無効になるためリセットし、
+  // 次回の自動スクロールは現在の再生位置へ「即時」ジャンプさせる
+  // （曲の途中で歌詞が再描画された際、0秒位置のまま止まる問題の修正）
+  ui.lyrics._lastScrolledIndex = -1;
+  ui.lyrics._instantNextScroll = true;
+  if (PipManager.pipWindow && PipManager.pipLyricsContainer) {
+    PipManager.pipLyricsContainer._lastScrolledIndex = -1;
+    PipManager.pipLyricsContainer._instantNextScroll = true;
+  }
+  _previousActiveIndices.clear();
+  _hasDynamicRenderRanges = false;
+  _activeRowsHaveCharSpans = true;
   const hasData = Array.isArray(data) && data.length > 0;
   document.body.classList.toggle('ytm-no-lyrics', !hasData);
   document.body.classList.toggle('ytm-has-timestamp', hasTimestamp);
@@ -4521,9 +4597,13 @@ function renderLyrics(data) {
       if (typeof line._dynamicRenderEndSec === 'number') {
         row.dataset.dynamicEndTime = String(line._dynamicRenderEndSec);
       }
+      if (typeof line._dynamicRenderStartSec === 'number' && typeof line._dynamicRenderEndSec === 'number') {
+        _hasDynamicRenderRanges = true;
+      }
     }
 
     if (dyn && Array.isArray(dyn.chars) && dyn.chars.length) {
+      const charSpans = [];
       dyn.chars.forEach((ch, ci) => {
         const chSpan = createEl('span', '', 'lyric-char');
         // Preserve spaces
@@ -4533,9 +4613,13 @@ function renderLyrics(data) {
         if (typeof ch.t === 'number') {
           chSpan.dataset.time = String(ch.t / 1000);
         }
+        // \u6BCE\u30D5\u30EC\u30FC\u30E0\u306E dataset \u53C2\u7167 + parseFloat \u3092\u907F\u3051\u308B\u305F\u3081\u6570\u5024\u3092\u30AD\u30E3\u30C3\u30B7\u30E5
+        chSpan._ytmTime = (typeof ch.t === 'number') ? (ch.t / 1000) : 0;
         chSpan.classList.add('char-pending');
         mainSpan.appendChild(chSpan);
+        charSpans.push(chSpan);
       });
+      row._ytmCharSpans = charSpans;
     } else {
       const rawText = line ? line.text : '';
       mainSpan.innerHTML = optimizeLineBreaks(rawText);
@@ -4554,7 +4638,10 @@ function renderLyrics(data) {
       }
       if (!hasTimestamp || !line || line.time == null) return;
       const v = document.querySelector('video');
-      if (v) v.currentTime = line.time + (hasTimestamp ? 0 : timeOffset);
+      // line.time は曲内ローカル時間。video の currentTime は曲開始オフセット分
+      // ずれている（連続再生時）ため、offset を足し戻して正しい位置をシークする。
+      // （これがないと前の曲の音声位置にシークしてしまう）
+      if (v) v.currentTime = line.time + timeOffset;
     };
     fragment.appendChild(row);
   });
@@ -4582,34 +4669,61 @@ const handleUpload = (e) => {
 };
 
 
+let isRafLoopRunning = false;
+
 function startLyricRafLoop() {
+  if (isRafLoopRunning) return;
+  isRafLoopRunning = true;
   if (lyricRafId) cancelAnimationFrame(lyricRafId);
+  _cachedVideoEl = null;
+  // 停止中に曲が変わっている可能性があるため、巻き戻り検出の基準をリセット
+  _lastRafPlaybackTime = -1;
 
   const loop = () => {
-    const v = document.querySelector('video');
+    const v = _cachedVideoEl || (_cachedVideoEl = document.querySelector('video'));
 
     if (v) {
-
       if (PipManager.pipWindow) {
         PipManager.updatePlayState(v.paused);
       }
 
-      if (v.readyState > 0 && !v.paused && !v.ended) {
+      const isPlaying = v.readyState > 0 && !v.paused && !v.ended;
+      document.body.classList.toggle('ytm-music-paused', !isPlaying);
+
+      if (isPlaying) {
         let t = v.currentTime;
         const duration = v.duration || 1;
 
-        if (!hasTimestamp) {
-          if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
-          t = Math.max(0, t - timeOffset);
-        }
+        // 連続再生（曲が変わっても currentTime がリセットされない）対応:
+        // 現在の曲が始まった video 時間(timeOffset)を引いて曲内ローカル時間にする。
+        // currentTime が offset を下回ったら曲がリセットされたとみなし offset を解除。
+        if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
+        t = Math.max(0, t - timeOffset);
+        // v.duration は曲ごとの長さ。ローカル時間はそれを超えないのでそのままクランプ
         t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
-        if (animatedCaptionData && config.useAnimatedCaptions) {
-          updateAnimatedCaptionStage(t);
-        }
-        if (!animatedCaptionData && lyricsData.length && hasTimestamp) {
-          updateLyricHighlight(t);
-        }
 
+        // 再生時間が大幅に巻き戻った場合（曲切替 or 後方シーク）の検出。
+        // 次のスクロールを即時ジャンプにして、0秒位置からのゆっくりスクロールを防ぐ。
+        // （曲切替時の歌詞リセットは tick() が currentKey 変更を検出して
+        //   lyricsData を空にするため、ここでは凍結せず即時ジャンプのみで十分）
+        if (_lastRafPlaybackTime >= 0 && t < _lastRafPlaybackTime - 1.5) {
+          if (ui.lyrics) ui.lyrics._instantNextScroll = true;
+          if (PipManager.pipLyricsContainer) PipManager.pipLyricsContainer._instantNextScroll = true;
+        }
+        _lastRafPlaybackTime = t;
+
+        // ハイライト更新で例外が出てもRAFループを止めないようにする
+        // （止まると isRafLoopRunning が true のまま再開せず、ハイライトが永久停止するため）
+        try {
+          if (animatedCaptionData && config.useAnimatedCaptions) {
+            updateAnimatedCaptionStage(t);
+          }
+          if (!animatedCaptionData && lyricsData.length && hasTimestamp) {
+            updateLyricHighlight(t);
+          }
+        } catch (err) {
+          console.warn('[YTM] lyric highlight update failed:', err);
+        }
 
         if (PipManager.pipWindow && PipManager.progressRing) {
           const radius = 32;
@@ -4618,18 +4732,39 @@ function startLyricRafLoop() {
           const offset = circumference - (progress * circumference);
           PipManager.progressRing.style.strokeDashoffset = offset;
         }
-      }
-    }
 
-    if (PipManager.pipWindow) {
-      lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
+        if (PipManager.pipWindow) {
+          lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
+        } else {
+          lyricRafId = requestAnimationFrame(loop);
+        }
+      } else {
+        isRafLoopRunning = false;
+      }
     } else {
-      lyricRafId = requestAnimationFrame(loop);
+      isRafLoopRunning = false;
     }
   };
 
-  lyricRafId = requestAnimationFrame(loop);
+  if (PipManager.pipWindow) {
+    lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
+  } else {
+    lyricRafId = requestAnimationFrame(loop);
+  }
 }
+
+document.addEventListener('play', (e) => {
+  if (e.target.tagName === 'VIDEO') {
+    startLyricRafLoop();
+  }
+}, true);
+
+document.addEventListener('playing', (e) => {
+  if (e.target.tagName === 'VIDEO') {
+    startLyricRafLoop();
+  }
+}, true);
+
 
 let lastScrolledIndex = -1;
 let isUserScrolling = false;
@@ -4637,10 +4772,32 @@ let userScrollTimeout = null;
 let isProgrammaticScrolling = false;
 let programmaticScrollTimeout = null;
 let programmaticScrollMaxTimeout = null;
+let _previousActiveIndices = new Set();
+let _cachedVideoEl = null;
+let _slidersPatched = false;
+let _lastLikeCheckTime = 0;
+// 拡張側の操作(再描画・scrollTopリセット等)によるscrollイベントを
+// ユーザースクロールと誤検出しないための抑制ウィンドウ
+let _suppressUserScrollUntil = 0;
+// 再生時間の大幅な巻き戻り（曲切替/シーク）検出用
+let _lastRafPlaybackTime = -1;
+// 現在の描画に1文字同期(dynamic)の時間レンジが存在するか（毎フレームの全行走査を省くため）
+let _hasDynamicRenderRanges = false;
+// アクティブ行に1文字同期スパンが含まれるか。trueの間のみ毎フレームのDOM更新が必要。
+// 安全側に倒して初期値はtrue（次のフレームで実態に合わせて更新される）
+let _activeRowsHaveCharSpans = true;
+
+function suppressUserScrollDetection(ms = 500) {
+  _suppressUserScrollUntil = performance.now() + ms;
+}
 
 function updateLyricHighlight(currentTime) {
   if (!lyricsData.length) return;
   if (!hasTimestamp) return;
+  // 再生時間が不正（NaN/Infinity）な場合は処理しない。
+  // 曲切替直後などに NaN が来ると idx が最終行になり、歌詞が一番下まで
+  // スクロールしてしまうため。
+  if (!Number.isFinite(currentTime)) return;
 
   const t = currentTime;
 
@@ -4706,11 +4863,13 @@ function updateLyricHighlight(currentTime) {
       }
     }
 
-    lyricsData.forEach((line, lineIndex) => {
-      if (activeIndices.has(lineIndex)) return;
-      if (!isLineDynamicallyActiveAtTime(line, t)) return;
-      activeIndices.add(lineIndex);
-    });
+    if (_hasDynamicRenderRanges) {
+      lyricsData.forEach((line, lineIndex) => {
+        if (activeIndices.has(lineIndex)) return;
+        if (!isLineDynamicallyActiveAtTime(line, t)) return;
+        activeIndices.add(lineIndex);
+      });
+    }
 
     if (activeIndices.size > 1) {
       const activeList = Array.from(activeIndices).sort((a, b) => a - b);
@@ -4743,22 +4902,50 @@ function updateLyricHighlight(currentTime) {
     }
   }
 
+  // 差分検出: 前回と同じアクティブ行セットなら、char更新以外をスキップ
+  const activeChanged = activeIndices.size !== _previousActiveIndices.size ||
+    [...activeIndices].some(i => !_previousActiveIndices.has(i));
+
+  // 完全に変化のないフレームは行ループ自体をスキップ
+  // （アクティブ行に1文字同期がある場合のみ毎フレームの更新が必要）
+  const scrollPending = targets.some(c => idx !== (c._lastScrolledIndex ?? -1));
+  if (!activeChanged && !scrollPending && !_activeRowsHaveCharSpans) {
+    lastActiveIndex = idx;
+    if (meaningPanelVisible) {
+      syncMeaningPanelToPlayback(false, t);
+    }
+    return;
+  }
+
+  let sawActiveCharSpans = false;
+
   targets.forEach(container => {
-    const rows = container.querySelectorAll('.lyric-line');
+    const rows = container.children;
     if (rows.length === 0) return;
 
-    rows.forEach((r, i) => {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.classList.contains('lyric-line')) continue;
       const isActive = activeIndices.has(i);
       const isPrimary = (i === idx);
 
       if (isActive) {
-        if (!r.classList.contains('active')) {
+        // 状態遷移時のみクラス操作（active でなかった→active になった）
+        if (activeChanged && !_previousActiveIndices.has(i)) {
           r.classList.add('active');
+          if (r.classList.contains('has-translation')) {
+            r.classList.add('show-translation');
+          }
         }
 
         if (isPrimary && idx !== (container._lastScrolledIndex ?? -1)) {
+          // 再描画直後・大幅シーク後は現在位置へ即時ジャンプ（0秒位置からの
+          // ゆっくりスクロールを防ぐ）
+          const scrollBehavior = container._instantNextScroll ? 'auto' : 'smooth';
+          container._instantNextScroll = false;
+
           if (container === ui.lyrics) {
-            if (isUserScrolling) return;
+            if (isUserScrolling) continue;
             // 【通常再生画面】
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
             const containerRect = container.getBoundingClientRect();
@@ -4770,48 +4957,55 @@ function updateLyricHighlight(currentTime) {
             clearTimeout(programmaticScrollMaxTimeout);
             programmaticScrollTimeout = setTimeout(() => { isProgrammaticScrolling = false; }, 150);
             programmaticScrollMaxTimeout = setTimeout(() => { isProgrammaticScrolling = false; }, 1200);
+            if (scrollBehavior === 'auto') suppressUserScrollDetection(300);
 
-            container.scrollTo({ top: targetScroll, behavior: 'smooth' });
+            container.scrollTo({ top: targetScroll, behavior: scrollBehavior });
 
             container._lastScrolledIndex = idx;
             ReplayManager.incrementLyricCount();
           } else {
             // 【PIP（小窓）】
-            if (container._isUserScrolling) return;
+            if (container._isUserScrolling) continue;
 
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
             const targetScroll = container.scrollTop + rRect.top - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
 
             container._isProgrammaticScrolling = true;
-            container.scrollTo({ top: targetScroll, behavior: 'smooth' });
+            container.scrollTo({ top: targetScroll, behavior: scrollBehavior });
 
             container._lastScrolledIndex = idx;
           }
         }
 
-        if (r.classList.contains('has-translation')) {
-          r.classList.add('show-translation');
-        }
-
-        const charSpans = r.querySelectorAll('.lyric-char');
+        // char-level アニメーション（アクティブ行のみ、毎フレーム必要）
+        // 行要素にキャッシュした配列を使う（毎フレームの querySelectorAll を回避）
+        let charSpans = r._ytmCharSpans;
+        if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));
         if (charSpans.length > 0) {
+          sawActiveCharSpans = true;
           charSpans.forEach(sp => {
-            const tt = parseFloat(sp.dataset.time || '0');
+            const tt = (sp._ytmTime !== undefined) ? sp._ytmTime : (sp._ytmTime = parseFloat(sp.dataset.time || '0'));
             if (Number.isFinite(tt) && tt <= t) {
-              sp.classList.add('char-active');
-              sp.classList.remove('char-pending');
+              if (!sp.classList.contains('char-active')) {
+                sp.classList.add('char-active');
+                sp.classList.remove('char-pending');
+              }
             } else {
-              sp.classList.remove('char-active');
-              sp.classList.add('char-pending');
+              if (!sp.classList.contains('char-pending')) {
+                sp.classList.remove('char-active');
+                sp.classList.add('char-pending');
+              }
             }
           });
         }
-      } else {
+      } else if (activeChanged && _previousActiveIndices.has(i)) {
+        // 状態遷移: active→非active になった行のみリセット
         r.classList.remove('active');
         r.classList.remove('show-translation');
 
-        const charSpans = r.querySelectorAll('.lyric-char');
+        let charSpans = r._ytmCharSpans;
+        if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));
         if (charSpans.length > 0) {
           charSpans.forEach(sp => {
             sp.classList.remove('char-active');
@@ -4819,8 +5013,13 @@ function updateLyricHighlight(currentTime) {
           });
         }
       }
-    });
+    }
   });
+
+  if (activeChanged) {
+    _previousActiveIndices = new Set(activeIndices);
+  }
+  _activeRowsHaveCharSpans = sawActiveCharSpans;
 
   lastActiveIndex = idx;
   if (meaningPanelVisible) {
@@ -4892,22 +5091,26 @@ function setupPlayerBarBlankClickGuard() {
   }, true);
 }
 
+let _cachedLayoutEl = null;
+
 const tick = async () => {
-  // Update PIP window state on every player bar mutation (in real-time)
+  // Update PIP window state (throttled to once per second)
   if (PipManager && PipManager.pipWindow) {
-    PipManager.updateLikeState();
+    const now = performance.now();
+    if (now - _lastLikeCheckTime > 1000) {
+      _lastLikeCheckTime = now;
+      PipManager.updateLikeState();
+    }
   }
 
-  if (document.querySelector('.ad-interrupting') || document.querySelector('.ad-showing')) return;
+  if (document.querySelector('.ad-interrupting, .ad-showing')) return;
 
   let toggleBtn = document.getElementById('my-mode-toggle');
-
 
   if (!toggleBtn) {
     const rc = document.querySelector('.right-controls-buttons');
     if (rc) {
       toggleBtn = createEl('button', 'my-mode-toggle', '', 'IMMERSION');
-
 
       if (config.mode) toggleBtn.classList.add('active');
 
@@ -4921,14 +5124,12 @@ const tick = async () => {
       rc.prepend(toggleBtn);
     }
   } else {
-
     const isActive = toggleBtn.classList.contains('active');
     if (config.mode && !isActive) toggleBtn.classList.add('active');
     else if (!config.mode && isActive) toggleBtn.classList.remove('active');
   }
 
-
-  const layout = document.querySelector('ytmusic-app-layout');
+  const layout = _cachedLayoutEl || (_cachedLayoutEl = document.querySelector('ytmusic-app-layout'));
   const isPlayerOpen = layout?.hasAttribute('player-page-open');
   if (!config.mode || !isPlayerOpen) {
     document.body.classList.remove('ytm-custom-layout');
@@ -4939,24 +5140,30 @@ const tick = async () => {
 
 
   setupPlayerBarBlankClickGuard();
-  (function patchSliders() {
+  if (!_slidersPatched) {
     const sliders = document.querySelectorAll('ytmusic-player-bar .middle-controls tp-yt-paper-slider');
-    sliders.forEach(s => {
-      try {
-        s.style.boxSizing = 'border-box';
-        s.style.paddingLeft = '20px';
-        s.style.paddingRight = '20px';
-        s.style.minWidth = '0';
-        s.style.cursor = 'pointer';
-      } catch (e) { }
-    });
-  })();
+    if (sliders.length > 0) {
+      sliders.forEach(s => {
+        try {
+          s.style.boxSizing = 'border-box';
+          s.style.paddingLeft = '20px';
+          s.style.paddingRight = '20px';
+          s.style.minWidth = '0';
+          s.style.cursor = 'pointer';
+        } catch (e) { }
+      });
+      _slidersPatched = true;
+    }
+  }
 
   const meta = getMetadata();
   if (!meta) return;
   const key = `${meta.title}///${meta.artist}`;
 
   if (currentKey !== key) {
+    // 初回ロード（曲の途中から開いた場合など）は再生位置のリセットを待たない
+    const isInitialLoad = (currentKey === null);
+
     // クラウド同期
     if (currentKey !== null && CloudSync && typeof CloudSync.syncNow === 'function') {
       CloudSync.syncNow();
@@ -4967,10 +5174,18 @@ const tick = async () => {
     const duration = v ? v.duration : 0;
 
 
-    if (currentTime < 5 || (duration > 0 && Math.abs(duration - currentTime) < 5)) {
+    // timeOffset = 現在の曲が始まった video 時間（曲内ローカル時間 = currentTime - timeOffset）。
+    // YTM の連続再生では曲が変わっても video の currentTime が 0 にリセットされず
+    // そのまま進み続けることがある。その場合、新曲が始まった時点の currentTime を
+    // offset として引くことで曲内の正しい再生位置を得る。
+    //  ・初回ロード（最初の曲 / 途中再生）は offset 不要（currentTime がそのまま曲内時間）
+    //  ・リセット再生（currentTime が 0 に戻る）の場合は RAF ループ側で offset を自動解除
+    if (isInitialLoad) {
       timeOffset = 0;
-    } else {
+    } else if (Number.isFinite(currentTime) && currentTime >= 5) {
       timeOffset = currentTime;
+    } else {
+      timeOffset = 0;
     }
 
     if (!config.saveSyncOffset) {
@@ -5004,6 +5219,7 @@ const tick = async () => {
     setLyricsMeaningData(null);
     hideMeaningSummaryPopup();
     lastActiveIndex = -1;
+    _previousActiveIndices.clear();
     lastScrolledIndex = -1;
     if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
     if (PipManager && PipManager.pipLyricsContainer) {
@@ -5015,6 +5231,13 @@ const tick = async () => {
     if (programmaticScrollTimeout) clearTimeout(programmaticScrollTimeout);
     if (programmaticScrollMaxTimeout) clearTimeout(programmaticScrollMaxTimeout);
     lastTimeForChars = -1;
+    // 曲切替処理が走ったので巻き戻り検出の基準をリセットし、
+    // この後の scrollTop=0 / innerHTML 差し替えによる scroll イベントを
+    // ユーザースクロールとして誤検出しないようにする
+    _lastRafPlaybackTime = -1;
+    // YTM が video 要素を差し替えた場合に古い参照を使い続けないようにする
+    _cachedVideoEl = null;
+    suppressUserScrollDetection(900);
 
     if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
       QueueManager.onSongChanged();
@@ -5044,6 +5267,7 @@ const tick = async () => {
       const keyNow = `${metaNow.title}///${metaNow.artist}`;
       if (keyNow !== key) return;
       loadLyrics(metaNow);
+      startLyricRafLoop();
     }, 800);
   }
 };
@@ -5053,8 +5277,39 @@ function updateMetaUI(meta) {
   ui.artist.innerText = meta.artist;
 
   if (meta.src) {
-    ui.artwork.innerHTML = `<img src="${meta.src}" crossorigin="anonymous">`;
-    ui.bg.style.backgroundImage = `url(${meta.src})`;
+    const img = document.createElement('img');
+    img.crossOrigin = 'anonymous';
+    if (meta.src.startsWith('data:') || meta.src.startsWith('blob:')) {
+      img.src = meta.src;
+    } else {
+      try {
+        const url = new URL(meta.src);
+        url.searchParams.set('ytm_cors', Date.now().toString());
+        img.src = url.toString();
+      } catch (e) {
+        img.src = meta.src + (meta.src.includes('?') ? '&' : '?') + 'ytm_cors=' + Date.now();
+      }
+    }
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.filter = 'blur(4px)';
+        ctx.drawImage(img, 0, 0, 64, 64);
+        const blurredDataUrl = canvas.toDataURL();
+        ui.bg.style.backgroundImage = `url(${blurredDataUrl})`;
+      } catch (e) {
+        console.warn("Failed to generate pre-blurred background via canvas:", e);
+        ui.bg.style.backgroundImage = `url(${meta.src})`;
+      }
+    };
+    img.onerror = () => {
+      ui.bg.style.backgroundImage = `url(${meta.src})`;
+    };
+    ui.artwork.innerHTML = '';
+    ui.artwork.appendChild(img);
   }
   ui.lyrics.innerHTML = '<div class="lyric-loading" style="opacity:0.5; padding:20px;">Loading...</div>';
 
@@ -5135,6 +5390,11 @@ function updateMetaUI(meta) {
   const appleBgStored = await storage.get('ytm_apple_bg');
   if (appleBgStored !== null) config.appleBg = appleBgStored;
   document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
+
+  // 5. 軽量モードオプション
+  const lowCpuStored = await storage.get('ytm_low_cpu_mode');
+  if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
+  document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
 })();
 
 
@@ -5158,9 +5418,26 @@ const setupObserver = () => {
   }
 
 
-  const observer = new MutationObserver(() => {
+  let _tickScheduled = false;
+  const observer = new MutationObserver((mutations) => {
+    const hasRelevantMutation = mutations.some(mutation => {
+      const target = mutation.target;
+      if (!target) return false;
+      if (target.closest && target.closest('tp-yt-paper-slider, tp-yt-paper-progress, #left-controls, #right-controls, .time-info')) {
+        return false;
+      }
+      return true;
+    });
 
-    tick();
+    if (hasRelevantMutation) {
+      if (!_tickScheduled) {
+        _tickScheduled = true;
+        requestAnimationFrame(() => {
+          _tickScheduled = false;
+          tick();
+        });
+      }
+    }
   });
 
 

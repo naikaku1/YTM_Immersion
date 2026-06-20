@@ -184,6 +184,11 @@ body.ytm-custom-layout.ytm-no-lyrics #my-lyrics-container {
   display: none !important;
 }
 
+body.ytm-custom-layout.ytm-no-lyrics #ytm-lyrics-stage,
+#ytm-lyrics-stage.moviemode {
+  display: none !important;
+}
+
 body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-wrapper {
   gap: 0;
 }
@@ -354,6 +359,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 #ytm-artwork-container {
+  position: relative;
   width: 100%;
   aspect-ratio: 1;
   border-radius: 16px;
@@ -439,15 +445,15 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   transition: opacity 0.5s ease, visibility 0.5s ease, max-height 0.5s cubic-bezier(0.25, 1, 0.5, 1), margin-top 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle ~ #ytm-btn-area {
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle~#ytm-btn-area {
   margin-top: 12px;
 }
 
-body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive ~ #ytm-btn-area {
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive~#ytm-btn-area {
   margin-top: 12px;
 }
 
-body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemode ~ #ytm-btn-area {
+body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemode~#ytm-btn-area {
   margin-top: 24px;
 }
 
@@ -735,6 +741,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   width: 26px;
   height: 26px;
 }
+
 .ytm-unified-close-btn.size-26 svg {
   width: 10px;
   height: 10px;
@@ -744,6 +751,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   width: 32px;
   height: 32px;
 }
+
 .ytm-unified-close-btn.size-32 svg {
   width: 12px;
   height: 12px;
@@ -753,6 +761,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   width: 36px;
   height: 36px;
 }
+
 .ytm-unified-close-btn.size-36 svg {
   width: 13px;
   height: 13px;
@@ -762,6 +771,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   width: 40px;
   height: 40px;
 }
+
 .ytm-unified-close-btn.size-40 svg {
   width: 14px;
   height: 14px;
@@ -1199,10 +1209,16 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
-
-#my-lyrics-container {
+#ytm-lyrics-stage {
+  position: relative;
   width: 500px;
   height: 65vh;
+  flex: 0 0 auto;
+}
+
+#my-lyrics-container {
+  width: 100%;
+  height: 100%;
   overflow-y: auto;
   padding-right: 48px;
   padding-left: 40px;
@@ -1219,6 +1235,53 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   display: none;
 }
 
+#ytm-meaning-summary-btn.ytm-lyrics-summary-trigger {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.62);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(20, 20, 26, 0.68);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 20px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.12;
+  transform: none;
+  transition: opacity 0.9s ease, color 0.18s ease, background 0.18s ease,
+    border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+#ytm-meaning-summary-btn.ytm-lyrics-summary-trigger.ytm-summary-attention {
+  opacity: 0.78;
+}
+
+#ytm-meaning-summary-btn.ytm-lyrics-summary-trigger:hover,
+#ytm-meaning-summary-btn.ytm-lyrics-summary-trigger:focus-visible {
+  opacity: 1;
+  color: #11131a;
+  background: rgba(255, 255, 255, 0.96);
+  border-color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.36), 0 0 0 5px rgba(255, 255, 255, 0.1);
+  outline: none;
+  transform: scale(1.08);
+}
+
+body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-summary-btn {
+  display: none !important;
+}
+
 #ytm-meaning-btn[hidden],
 #ytm-meaning-summary-btn[hidden] {
   display: none !important;
@@ -1231,12 +1294,20 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 #ytm-meaning-panel {
   display: none;
-  width: min(340px, 26vw);
-  min-width: 280px;
-  max-height: 65vh;
+  position: absolute;
+  top: auto;
+  right: auto;
+  bottom: calc(50% + 110px);
+  left: 50%;
+  z-index: 5;
+  width: min(360px, calc(100% - 96px));
+  min-width: 0;
+  max-height: min(330px, calc(50vh - 166px));
   overflow-y: auto;
-  padding: 22px 20px 20px;
-  border-radius: 30px;
+  box-sizing: border-box;
+  padding: 15px 16px 14px;
+  border-radius: 20px;
+  transform: translateX(-50%);
   color: #fff;
   background: rgba(15, 15, 22, 0.92);
   /* backdrop-filter: blur(34px) saturate(170%); */
@@ -1396,6 +1467,57 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   background: rgba(120, 200, 255, 0.14);
 }
 
+.ytm-meaning-panel-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ytm-meaning-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.48);
+  background: rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease,
+    box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.ytm-meaning-pin-btn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.ytm-meaning-pin-btn:hover,
+.ytm-meaning-pin-btn:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+  transform: scale(1.06);
+}
+
+.ytm-meaning-pin-btn.is-song {
+  color: #79c5ff;
+  border-color: rgba(80, 174, 255, 0.45);
+  background: rgba(52, 151, 255, 0.18);
+  box-shadow: 0 0 18px rgba(52, 151, 255, 0.18);
+}
+
+.ytm-meaning-pin-btn.is-global {
+  color: #ffc45c;
+  border-color: rgba(255, 190, 76, 0.5);
+  background: rgba(255, 174, 39, 0.2);
+  box-shadow: 0 0 20px rgba(255, 174, 39, 0.2);
+}
+
 .ytm-meaning-close-btn {
   flex-shrink: 0;
 }
@@ -1481,6 +1603,21 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   will-change: transform, opacity;
 }
 
+/* 再生済みの行は位置を保ったまま消し、手動スクロール中だけ再表示する */
+body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-past {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.5s, color 0.5s, opacity 1.2s ease 0.3s, visibility 0s linear 1.5s;
+}
+
+body.ytm-custom-layout #my-lyrics-container.ytm-user-browsing-lyrics .lyric-line.lyric-past {
+  opacity: 0.3;
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform 0.5s, color 0.5s, opacity 0.2s ease, visibility 0s;
+}
+
 #my-lyrics-container.moviemode .lyric-line {
   transform-origin: right;
 }
@@ -1551,9 +1688,15 @@ body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
 }
 
 .lyric-line.active {
+  z-index: 6;
   color: #fff;
   transform: scale(1.05);
   text-shadow: 0 0 30px rgba(255, 255, 255, 0.5);
+}
+
+/* 上部の解説ボックスが、再生済み歌詞のフェードアウトを隠さないようにする */
+body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-past {
+  z-index: 6;
 }
 
 .lyric-line.active.moviemode {
@@ -2151,6 +2294,15 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
     align-self: stretch;
   }
 
+  body.ytm-custom-layout #ytm-meaning-summary-btn.ytm-lyrics-summary-trigger {
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    border-width: 1px;
+    font-size: 15px;
+  }
+
   body.ytm-custom-layout #ytm-custom-info-area {
     display: flex;
     flex-direction: column;
@@ -2181,9 +2333,14 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 
   body.ytm-custom-layout #my-lyrics-container {
     width: 100%;
-    max-width: 520px;
     padding-right: 16px;
     padding-top: 10vh;
+  }
+
+  body.ytm-custom-layout #ytm-lyrics-stage {
+    width: 100%;
+    max-width: 520px;
+    height: 65vh;
   }
 
   body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
@@ -2195,10 +2352,15 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   }
 
   body.ytm-custom-layout #ytm-meaning-panel {
-    width: 100%;
-    max-width: 520px;
+    top: 8px;
+    right: 16px;
+    bottom: auto;
+    left: 16px;
+    width: auto;
+    max-width: none;
     min-width: 0;
-    max-height: 34vh;
+    max-height: min(18vh, 220px);
+    transform: none;
   }
 
   body.ytm-custom-layout ytmusic-player-bar {
@@ -3623,4 +3785,145 @@ body.ytm-custom-layout.ytm-lightweight-mode .av-toggle.ytmusic-av-toggle {
 body.ytm-custom-layout.ytm-lightweight-mode .ytm-glass-btn {
   background: rgba(255, 255, 255, 0.2) !important;
 }
+.lyric-source-card {
+  position: relative;
+  overflow: visible;
+}
 
+.lyric-source-setting-row {
+  position: relative;
+  z-index: 4;
+}
+
+.setting-name-with-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+}
+
+.lyric-source-warning {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  outline: none;
+  cursor: help;
+}
+
+.lyric-source-warning-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 1.5px solid #ffb340;
+  border-radius: 50%;
+  color: #ffc45c;
+  background: rgba(255, 179, 64, 0.1);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  transition: color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.lyric-source-warning:hover .lyric-source-warning-icon,
+.lyric-source-warning:focus .lyric-source-warning-icon,
+.lyric-source-warning:focus-within .lyric-source-warning-icon {
+  color: #1b1204;
+  background: #ffb340;
+  box-shadow: 0 0 0 4px rgba(255, 179, 64, 0.14);
+  transform: scale(1.06);
+}
+
+.lyric-source-warning-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 100;
+  width: min(340px, calc(100vw - 72px));
+  box-sizing: border-box;
+  padding: 13px 15px;
+  border: 1px solid rgba(255, 190, 92, 0.3);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(24, 20, 15, 0.98);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.48);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.65;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, -4px);
+  transition: opacity 0.16s ease, visibility 0.16s ease, transform 0.16s ease;
+}
+
+.lyric-source-warning-popover::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-top: 1px solid rgba(255, 190, 92, 0.3);
+  border-left: 1px solid rgba(255, 190, 92, 0.3);
+  background: rgba(24, 20, 15, 0.98);
+  transform: translate(-50%, 5px) rotate(45deg);
+}
+
+.lyric-source-warning:hover .lyric-source-warning-popover,
+.lyric-source-warning:focus .lyric-source-warning-popover,
+.lyric-source-warning:focus-within .lyric-source-warning-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.lyric-source-warning-title {
+  display: block;
+  margin-bottom: 5px;
+  color: #ffc45c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lyric-source-warning-popover ul {
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+.lyric-source-warning-popover li + li {
+  margin-top: 5px;
+}
+
+@media (max-width: 700px) {
+  .lyric-source-warning-popover {
+    left: auto;
+    right: -28px;
+    transform: translateY(-4px);
+  }
+
+  .lyric-source-warning-popover::before {
+    right: 32px;
+    left: auto;
+    transform: translateY(5px) rotate(45deg);
+  }
+
+  .lyric-source-warning:hover .lyric-source-warning-popover,
+  .lyric-source-warning:focus .lyric-source-warning-popover,
+  .lyric-source-warning:focus-within .lyric-source-warning-popover {
+    transform: translateY(0);
+  }
+}

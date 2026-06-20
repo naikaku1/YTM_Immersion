@@ -1,8 +1,3 @@
-export const SHARED_TRANSLATE_ENDPOINTS = [
-  'https://immersionproject.coreone.work/api/translate',
-  'https://immersionproject.coreone.work/api/translate/'
-];
-
 export const COMMUNITY_REMAINING_ENDPOINTS = [
   'https://immersionproject.coreone.work/api/community/remaining',
   'https://immersionproject.coreone.work/api/community/remaining/',
@@ -303,10 +298,34 @@ export const getLrchubRecordId = (candidate) => {
 };
 
 export const fetchFromLrchub = (params) => {
-  const { track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source } = params;
+  const { track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source, method = 'POST' } = params;
   const normalizedTranslateTo = Array.isArray(translate_to)
     ? translate_to.map(toLrchubTranslateLang).filter(Boolean)
     : toLrchubTranslateLang(translate_to);
+
+  if (String(method || '').toUpperCase() === 'GET') {
+    const url = new URL(`https://lrchub.coreone.work/api/lyrics?_=${getCacheBuster()}`);
+    if (track) url.searchParams.set('track', track);
+    if (artist) url.searchParams.set('artist', artist);
+    if (youtube_url) url.searchParams.set('youtube_url', youtube_url);
+    if (video_id) url.searchParams.set('video_id', video_id);
+    if (offset_ms !== undefined && offset_ms !== null && offset_ms !== '') url.searchParams.set('offset_ms', offset_ms);
+    if (translation_source) url.searchParams.set('translation_source', translation_source);
+    if (Array.isArray(normalizedTranslateTo)) {
+      normalizedTranslateTo.forEach(lang => url.searchParams.append('translate_to', lang));
+    } else if (normalizedTranslateTo) {
+      url.searchParams.set('translate_to', normalizedTranslateTo);
+    }
+
+    return fetch(url.toString(), { method: 'GET', cache: 'no-store' })
+      .then(r => r.json())
+      .then(res => normalizeLrchubLyricsResponse(res))
+      .catch(err => {
+        console.error('[BG] LRCHub GET error:', err);
+        return null;
+      });
+  }
+
   const body = {
     track,
     artist,

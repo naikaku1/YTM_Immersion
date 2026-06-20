@@ -169,6 +169,7 @@
     appleBg: true,
     useAnimatedCaptions: false,
     useLrcLibFallback: true,
+    alwaysShowMeaning: false,
     lowCpuMode: false
   };
 

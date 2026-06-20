@@ -122,111 +122,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       };
     };
 
-    const fetchSharedJson = async (payload) => {
-      const tryFetch = async (url, init, label) => {
-        const res = await API.withTimeout(fetch(url, init), 20000, label || 'shared translate timeout');
-        const rawText = await res.text().catch(() => '');
-        let data = null;
-        try {
-          data = rawText ? JSON.parse(rawText) : null;
-        } catch (e) {
-        }
-        if (!res.ok) {
-          const msg = (data && (data.error || data.message)) ? (data.error || data.message) : (rawText || res.statusText);
-          throw new Error(`shared translate http ${res.status}: ${msg}`);
-        }
-        if (!data || (data.ok !== undefined && !data.ok)) {
-          const msg = (data && (data.error || data.message)) ? (data.error || data.message) : 'invalid response';
-          throw new Error(`shared translate: ${msg}`);
-        }
-        return data;
-      };
-
-      const jsonInit = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      };
-
-      let lastErr = null;
-      for (const url of API.SHARED_TRANSLATE_ENDPOINTS) {
-        try {
-          return await tryFetch(url, jsonInit, 'shared translate timeout');
-        } catch (e) {
-          lastErr = e;
-        }
-      }
-
-      const formBody = new URLSearchParams();
-      if (Array.isArray(payload.text)) {
-        throw lastErr || new Error('shared translate failed');
-      }
-      formBody.set('text', String(payload.text ?? ''));
-      formBody.set('target_lang', String(payload.target_lang ?? ''));
-      const formInit = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: formBody.toString(),
-      };
-
-      for (const url of API.SHARED_TRANSLATE_ENDPOINTS) {
-        try {
-          return await tryFetch(url, formInit, 'shared translate timeout');
-        } catch (e) {
-          lastErr = e;
-        }
-      }
-
-      throw lastErr || new Error('shared translate failed');
-    };
-
-    const translateViaShared = async () => {
-      const toTranslations = (arr) => arr.map(v => ({ text: (v ?? '').toString() }));
-      try {
-        const data = await fetchSharedJson({ text: texts, target_lang: target });
-        if (Array.isArray(data.text)) {
-          return {
-            translations: toTranslations(data.text),
-            detected_source_language: data.detected_source_language || null,
-            engine: data.engine || 'shared',
-            plan: data.plan || null,
-          };
-        }
-        if (Array.isArray(data.translations)) {
-          const mapped = data.translations.map(x => ({ text: (x && x.text !== undefined ? x.text : x) ?? '' }));
-          return {
-            translations: mapped,
-            detected_source_language: data.detected_source_language || null,
-            engine: data.engine || 'shared',
-            plan: data.plan || null,
-          };
-        }
-        if (typeof data.text === 'string') {
-          return {
-            translations: [{ text: data.text }],
-            detected_source_language: data.detected_source_language || null,
-            engine: data.engine || 'shared',
-            plan: data.plan || null,
-          };
-        }
-        throw new Error('Invalid response format from shared API');
-      } catch (e) {
-        console.warn('[BG] Shared batch translation failed:', e);
-        throw e;
-      }
-    };
-
     (async () => {
       try {
         if (useSharedTranslateApi) {
-          const shared = await translateViaShared();
-          sendResponse({
-            success: true,
-            translations: shared.translations,
-            detected_source_language: shared.detected_source_language,
-            engine: shared.engine,
-            plan: shared.plan,
-          });
+          sendResponse({ success: false, error: 'Shared translation is fetched from LRCHub /api/lyrics.' });
           return;
         }
         const deepl = await translateViaDeepL();
@@ -237,23 +136,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           plan: deepl.plan,
         });
       } catch (e) {
-        if (useSharedTranslateApi && apiKey) {
-          try {
-            const deepl = await translateViaDeepL();
-            sendResponse({
-              success: true,
-              translations: deepl.translations,
-              engine: deepl.engine,
-              plan: deepl.plan,
-              fallback_from: 'shared',
-              fallback_error: String(e),
-            });
-            return;
-          } catch (e2) {
-            sendResponse({ success: false, error: `${String(e2)} (shared failed: ${String(e)})` });
-            return;
-          }
-        }
         sendResponse({ success: false, error: String(e) });
       }
     })();
@@ -264,6 +146,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (req.type === 'GET_LYRICS') {
     const { track, artist, youtube_url, video_id, use_lrclib = true, offset_ms, translate_to, translation_source, lyric_source_mode = 'standard' } = req.payload || {};
     const tabId = sender && sender.tab ? sender.tab.id : null;
+    const hasTranslateRequest = Array.isArray(translate_to) ? translate_to.length > 0 : !!translate_to;
+    const lrchubLyricsMethod = hasTranslateRequest ? 'GET' : 'POST';
 
     console.log('[BG] GET_LYRICS', { track, artist, lyric_source_mode });
 
@@ -340,7 +224,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const runPrimary = async () => {
         try {
           const hubRes = await API.withTimeout(
-            API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
+            API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source, method: lrchubLyricsMethod }),
             8000,
             'lrchub'
           );
@@ -379,7 +263,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         const retryTask = (async () => {
           try {
             const hubRetryRes = await API.withTimeout(
-              API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
+              API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source, method: lrchubLyricsMethod }),
               5000,
               'lrchub retry'
             );
@@ -578,7 +462,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               youtube_url,
               video_id: video_id || vid,
               translate_to: translateTo,
-              translation_source
+              translation_source,
+              method: 'GET'
             }),
             20000,
             'lrchub translation'
@@ -599,22 +484,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           return;
         }
 
-        const url = new URL(`https://lrchub.coreone.work/api/translation?_=${API.getCacheBuster()}`);
-        if (youtube_url) url.searchParams.set('youtube_url', youtube_url);
-        else if (video_id) url.searchParams.set('video_id', video_id);
-        else if (vid) url.searchParams.set('video_id', vid);
-
-        reqLangs.forEach(l => url.searchParams.append('lang', l));
-
-        const res = await fetch(url.toString()).then(r => r.json());
-        sendResponse({ 
-          success: true, 
-          lrcMap: {
-            ...API.normalizeLrchubTranslations(res.lrc_map),
-            ...API.normalizeLrchubTranslations(res.lrcMap),
-            ...API.normalizeLrchubTranslations(res.translations)
-          }, 
-          missing: res.missing_langs || [] 
+        sendResponse({
+          success: true,
+          lrcMap: {},
+          missing: reqLangs
         });
       } catch (e) {
         sendResponse({ success: false, error: String(e) });

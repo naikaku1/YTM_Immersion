@@ -1314,6 +1314,7 @@ const shouldTranslateSegment = (script, langCode) => {
 };
 
 const translateMixedSegments = async (lines, indexes, langCode, targetLang) => {
+  if (!config.deepLKey) return null;
   try {
     const segmentsToTranslate = [];
     const perLineSegments = {};
@@ -1336,7 +1337,7 @@ const translateMixedSegments = async (lines, indexes, langCode, targetLang) => {
     if (!segmentsToTranslate.length) return null;
     const res = await new Promise(resolve => {
       chrome.runtime.sendMessage(
-        { type: 'TRANSLATE', payload: { text: segmentsToTranslate, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: (config.useSharedTranslateApi) } },
+        { type: 'TRANSLATE', payload: { text: segmentsToTranslate, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } },
         resolve
       );
     });
@@ -1379,7 +1380,7 @@ const dedupePrimarySecondary = (lines) => {
 };
 
 const translateTo = async (lines, langCode) => {
-  if ((!config.deepLKey && !(config.useSharedTranslateApi)) || !lines.length) return null;
+  if (!config.deepLKey || !lines.length) return null;
   const targetLang = resolveDeepLTargetLang(langCode);
   try {
     const baseTexts = lines.map(l => (l && l.text !== undefined && l.text !== null) ? String(l.text) : '');
@@ -1399,7 +1400,7 @@ const translateTo = async (lines, langCode) => {
     if (requestTexts.length) {
       const res = await new Promise(resolve => {
         chrome.runtime.sendMessage(
-          { type: 'TRANSLATE', payload: { text: requestTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: (config.useSharedTranslateApi) } },
+          { type: 'TRANSLATE', payload: { text: requestTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } },
           resolve
         );
       });
@@ -2209,7 +2210,9 @@ const getRequestedTranslationLangs = () => {
 };
 
 const getRequestedLrchubTranslateLangs = () => (
-  getRequestedTranslationLangs().map(toLrchubTranslateLang).filter(Boolean)
+  config.useSharedTranslateApi
+    ? getRequestedTranslationLangs().map(toLrchubTranslateLang).filter(Boolean)
+    : []
 );
 
 async function applyTranslations(baseLines, youtubeUrl) {
@@ -2223,36 +2226,38 @@ async function applyTranslations(baseLines, youtubeUrl) {
   const langsToFetch = getRequestedTranslationLangs();
   if (!langsToFetch.length) return baseLines;
 
-  let lrcMap = { ...(lyricsTranslationMap || {}) };
-  try {
-    const missingLangs = langsToFetch.filter(lang => !lrcMap[normalizeTranslationLangKey(lang)]);
-    if (missingLangs.length) {
-      const metaNow = getMetadata();
-      const track = metaNow?.title ? metaNow.title.replace(/\s*[\(-\[].*?[\)-]].*/, '') : '';
-      const artist = metaNow?.artist || '';
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage({
-          type: 'GET_TRANSLATION',
-          payload: {
-            track,
-            artist,
-            youtube_url: youtubeUrl,
-            video_id: getCurrentVideoId(),
-            langs: missingLangs
-          }
-        }, resolve);
-      });
-      if (res?.success) {
-        lrcMap = {
-          ...lrcMap,
-          ...normalizeTranslationsToLrcMapLocal(res.lrcMap),
-          ...normalizeTranslationsToLrcMapLocal(res.translations)
-        };
+  let lrcMap = config.useSharedTranslateApi ? { ...(lyricsTranslationMap || {}) } : {};
+  if (config.useSharedTranslateApi) {
+    try {
+      const missingLangs = langsToFetch.filter(lang => !lrcMap[normalizeTranslationLangKey(lang)]);
+      if (missingLangs.length) {
+        const metaNow = getMetadata();
+        const track = metaNow?.title ? metaNow.title.replace(/\s*[\(-\[].*?[\)-]].*/, '') : '';
+        const artist = metaNow?.artist || '';
+        const res = await new Promise(resolve => {
+          chrome.runtime.sendMessage({
+            type: 'GET_TRANSLATION',
+            payload: {
+              track,
+              artist,
+              youtube_url: youtubeUrl,
+              video_id: getCurrentVideoId(),
+              langs: missingLangs
+            }
+          }, resolve);
+        });
+        if (res?.success) {
+          lrcMap = {
+            ...lrcMap,
+            ...normalizeTranslationsToLrcMapLocal(res.lrcMap),
+            ...normalizeTranslationsToLrcMapLocal(res.translations)
+          };
+        }
       }
+      lyricsTranslationMap = { ...(lyricsTranslationMap || {}), ...lrcMap };
+    } catch (e) {
+      console.warn('GET_TRANSLATION failed', e);
     }
-    lyricsTranslationMap = { ...(lyricsTranslationMap || {}), ...lrcMap };
-  } catch (e) {
-    console.warn('GET_TRANSLATION failed', e);
   }
 
   const transLinesByLang = {};
@@ -2264,12 +2269,12 @@ async function applyTranslations(baseLines, youtubeUrl) {
     if (lrc) {
       const parsed = parseLRCNoFlag(lrc);
       transLinesByLang[langKey] = parsed;
-    } else {
+    } else if (!config.useSharedTranslateApi) {
       needDeepL.push(langKey);
     }
   });
 
-  if (needDeepL.length && (config.deepLKey || (config.useSharedTranslateApi))) {
+  if (needDeepL.length && config.deepLKey) {
     for (const lang of needDeepL) {
       const translatedTexts = await translateTo(baseLines, lang);
       if (translatedTexts && translatedTexts.length === baseLines.length) {
@@ -3575,8 +3580,8 @@ function renderSettingsPanel() {
                   <span class="setting-name">${t('settings_shared_trans')}</span>
                   <input type="checkbox" id="shared-trans-toggle">
                 </label>
-                <div id="shared-trans-note" class="setting-note"></div>
-                <div class="setting-row-top setting-subline">
+                <div id="shared-trans-note" class="setting-note">LRCHub /api/lyrics translations</div>
+                <div class="setting-row-top setting-subline" style="display:none">
                   <span class="setting-desc">共有翻訳 残り文字数</span>
                   <span id="community-remaining-val" class="setting-value-badge">--</span>
                 </div>
@@ -3689,8 +3694,7 @@ function renderSettingsPanel() {
   document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
 
   // 共有翻訳の残り文字数（保存済み値を表示）
-  updateCommunityRemainingUI(true);
-  ensureCommunityRemainingTimer();
+  document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-save-toggle').checked = config.saveSyncOffset;
 

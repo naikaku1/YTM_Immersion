@@ -56,3 +56,7 @@
 ### 貢献について
 
 * バグ報告や機能改善の提案は、GitHubのIssuesまたはPull Requestにていつでも歓迎します。
+
+## Liquid Glass
+
+プレイヤーバーやボタンにSVG変位マップの屈折レンズを重ね、未対応環境では高品位blurへ自動フォールバックします。参考: [Aave - Building Glass for the Web](https://aave.com/design/building-glass-for-the-web)

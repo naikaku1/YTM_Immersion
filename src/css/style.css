@@ -113,9 +113,10 @@ body.ytm-custom-layout ytmusic-nav-bar {
   top: 10px;
   left: 10%;
   width: 80%;
-  height: 64px; 
-  background: rgba(0, 0, 0, 0.6) !important; 
-  backdrop-filter: blur(10px);
+  height: 64px;
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(20px) saturate(1.5) brightness(1.04);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5) brightness(1.04);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   z-index: 2100 !important; 
   border-radius: 20px;
@@ -325,7 +326,9 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   color: #fff;
   cursor: pointer;
   font-weight: 700;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(14px) saturate(1.5) brightness(1.06);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5) brightness(1.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 4px 14px rgba(0, 0, 0, 0.25);
   font-size: 13px;
   transition: 0.2s;
 }
@@ -351,12 +354,12 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   max-height: 85vh;
   display: none;
   flex-direction: column;
-  background: rgba(30, 30, 35, 0.85);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  background: rgba(24, 24, 30, 0.68);
+  backdrop-filter: blur(28px) saturate(1.8) brightness(1.07);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8) brightness(1.07);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 24px 60px rgba(0, 0, 0, 0.5);
   color: #fff;
   z-index: 99999;
   overflow: hidden;
@@ -429,12 +432,13 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   text-transform: uppercase;
 }
 
-/* カード型デザイン */
+/* カード型デザイン（親パネルが既にガラスなので、レンズにせず tint + 内側ハイライトのみ） */
 .settings-group-card {
   background: rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .setting-row {
@@ -504,6 +508,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 #trans-toggle,
 #shared-trans-toggle,
 #sync-offset-save-toggle,
+#liquid-glass-toggle,
 #fast-mode-toggle {  /* ←ここに追加 */
   appearance: none;
   width: 40px;
@@ -518,7 +523,8 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 #trans-toggle:checked,
 #shared-trans-toggle:checked,
 #sync-offset-save-toggle:checked,
-#fast-mode-toggle:checked {  
+#liquid-glass-toggle:checked,
+#fast-mode-toggle:checked {
   background: #34c759;
 }
 
@@ -526,7 +532,8 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 #trans-toggle::after,
 #shared-trans-toggle::after,
 #sync-offset-save-toggle::after,
-#fast-mode-toggle::after { 
+#liquid-glass-toggle::after,
+#fast-mode-toggle::after {
   content: '';
   position: absolute;
   top: 2px;
@@ -542,7 +549,8 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 #trans-toggle:checked::after,
 #shared-trans-toggle:checked::after,
 #sync-offset-save-toggle:checked::after,
-#fast-mode-toggle:checked::after {  
+#liquid-glass-toggle:checked::after,
+#fast-mode-toggle:checked::after {
   transform: translateX(18px);
 }
 
@@ -562,6 +570,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   background: rgba(255, 255, 255, 0.06);
   padding: 4px;
   border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .ytm-lang-pill {
@@ -760,48 +769,51 @@ body.ytm-custom-layout ytmusic-popup-container tp-yt-iron-dropdown {
   right: 32px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: rgba(15, 15, 20, 0.9);
+  background: rgba(15, 15, 20, 0.62);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 12px 30px rgba(0, 0, 0, 0.6);
   opacity: 0;
   transform: translateY(-8px);
   pointer-events: none;
   transition: opacity 0.18s ease-out, transform 0.18s ease-out;
 }
 
+/* 非表示中はコンポジットさせない: ブラーは選択モード中だけ */
 body.ytm-share-select-mode #ytm-share-hint {
   opacity: 1;
   transform: translateY(0);
+  backdrop-filter: blur(24px) saturate(1.6) brightness(1.05);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6) brightness(1.05);
 }
 
-/* プレイヤーバー全体 */
+/* プレイヤーバー全体（旧: 2箇所に分かれていた定義をここに統合） */
 body.ytm-custom-layout ytmusic-player-bar {
   position: fixed !important;
   bottom: 40px !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
   width: 95% !important;
-  max-width: 975px !important;
-  height: 90px !important;
+  max-width: 1000px !important;
+  height: 80px !important;
   border-radius: 40px !important;
   background: rgba(20, 20, 20, 0.6) !important;
   backdrop-filter: blur(60px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(60px) saturate(180%) !important;
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
   display: flex !important;
   flex-wrap: nowrap !important;
   justify-content: space-between !important;
   align-items: center !important;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
-  padding: 0 20px !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 20px 50px rgba(0, 0, 0, 0.5) !important;
+  padding: 5px 32px 0 32px !important;
   z-index: 2000 !important;
   visibility: visible !important;
   opacity: 1 !important;
-  overflow: visible !important;
+  overflow: hidden !important;
   transition: opacity 0.5s ease, visibility 0.5s ease !important;
-  opacity: 1 !important;
-  visibility: visible !important;
 }
 body.ytm-custom-layout ytmusic-player-bar.moviemode{
     --ytmusic-player-bar-fullscreen-progress-bar-inset: 20px;
@@ -977,8 +989,9 @@ body.ytm-custom-layout ytmusic-player-bar .thumbnail-image-wrapper {
 
 /* 非 Immersion モード */
 body:not(.ytm-custom-layout) ytmusic-player-bar {
-  background: rgba(20, 20, 20, 0.4) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background: rgba(18, 18, 20, 0.42) !important;
+  backdrop-filter: blur(24px) saturate(1.8) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(1.8) brightness(1.05) !important;
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
   border-radius: 16px !important;
   bottom: 12px !important;
@@ -986,7 +999,7 @@ body:not(.ytm-custom-layout) ytmusic-player-bar {
   transform: translateX(-50%) !important;
   width: 98% !important;
   max-width: 1400px !important;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 10px 40px rgba(0, 0, 0, 0.6) !important;
   margin: 0 !important;
   padding: 0 10px !important;
   overflow: visible !important;
@@ -1065,18 +1078,22 @@ body:not(.ytm-custom-layout) #hover-time-info-new {
   border-radius: 10px !important;
   z-index: 10000 !important;
 }
-/* マルチページメニュー */
+/* マルチページメニュー（YTMネイティブ面: 疑似要素は付けず質感のみ強化） */
 ytmusic-multi-page-menu-renderer {
   border-radius: 20px !important;
-  background: rgba(20, 20, 20, 0.7) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: rgba(18, 18, 22, 0.62) !important;
+  backdrop-filter: blur(28px) saturate(1.7) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(1.7) brightness(1.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 24px 60px rgba(0, 0, 0, 0.5) !important;
 }
 /* 次に再生などのトースト */
 tp-yt-paper-toast.style-scope {
-  background: rgba(30, 30, 30, 0.5) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: rgba(24, 24, 28, 0.5) !important;
+  backdrop-filter: blur(26px) saturate(1.7) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(1.7) brightness(1.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 12px 30px rgba(0, 0, 0, 0.45) !important;
   border-radius: 10px !important;
   transform: translateY(0px) !important; /* 下から上に行くアニメーションをオーバーライド */
   margin-top: -20px !important;
@@ -1089,9 +1106,10 @@ body.ytm-custom-layout tp-yt-paper-toast.style-scope {
 /* 3点メニューポップアップ */
 tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   border-radius: 10px !important;
-  --paper-listbox-background-color: rgba(20, 20, 20, 70%) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  --paper-listbox-background-color: rgba(20, 20, 24, 62%) !important;
+  backdrop-filter: blur(26px) saturate(1.7) brightness(1.05) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(1.7) brightness(1.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
 }
 /* Lyricsアップロードメニュー */
 .ytm-upload-menu {
@@ -1101,10 +1119,10 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   min-width: 240px;
   padding: 8px;
   border-radius: 18px;
-  background: rgba(15, 15, 20, 0.75);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  background: rgba(15, 15, 20, 0.66);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 18px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(26px) saturate(1.7) brightness(1.06);
+  -webkit-backdrop-filter: blur(26px) saturate(1.7) brightness(1.06);
   border: 1px solid rgba(255, 255, 255, 0.16);
   display: flex;
   flex-direction: column;
@@ -1197,10 +1215,10 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   min-width: 260px;
   padding: 10px 10px 8px;
   border-radius: 18px;
-  background: rgba(15, 15, 20, 0.92);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  background: rgba(15, 15, 20, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 18px 40px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(26px) saturate(1.7) brightness(1.06);
+  -webkit-backdrop-filter: blur(26px) saturate(1.7) brightness(1.06);
   border: 1px solid rgba(255, 255, 255, 0.16);
   z-index: 9999;
   transform-origin: bottom right;
@@ -1354,29 +1372,43 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 }
 
 
+/* トースト（旧: style.css 内 2箇所 + uiRendering.js 注入の3重定義をここに統合） */
 #ytm-fallback-toast,
 #ytm-toast {
   position: fixed;
   top: 16px;
   right: 16px;
+  max-width: 320px;
   padding: 10px 16px;
   border-radius: 999px;
-  background: rgba(15, 15, 20, 0.9);
+  background: rgba(15, 15, 20, 0.62);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-  z-index: 3000;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 12px 30px rgba(0, 0, 0, 0.5);
+  z-index: 999999;
   opacity: 0;
   transform: translateY(-10px);
   pointer-events: none;
   transition: opacity 0.25s ease-out, transform 0.25s ease-out;
 }
 
+/* 非表示中はコンポジットさせない: ブラーは .visible の間だけ */
 #ytm-fallback-toast.visible,
 #ytm-toast.visible {
   opacity: 1;
+  backdrop-filter: blur(24px) saturate(1.6) brightness(1.05);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6) brightness(1.05);
+}
+
+#ytm-fallback-toast.visible {
   transform: translateY(4px);
+}
+
+#ytm-toast.visible {
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .ytm-upload-menu-item.ytm-upload-menu-item-disabled {
@@ -1387,36 +1419,6 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 
 .ytm-upload-menu-item.ytm-upload-menu-item-disabled:hover {
   background: transparent;
-}
-
-
-body.ytm-custom-layout ytmusic-player-bar {
-  position: fixed !important;
-  bottom: 40px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  width: 95% !important;
-  max-width: 1000px !important;
-  height: 80px !important;
-  border-radius: 40px !important;
-  background: rgba(20, 20, 20, 0.6) !important;
-  backdrop-filter: blur(60px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  justify-content: space-between !important;
-  align-items: center !important;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
-
-
-  padding: 0 32px !important;
-
-  z-index: 2000 !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-
-
-  overflow: hidden !important;
 }
 
 
@@ -1475,19 +1477,6 @@ body.ytm-custom-layout ytmusic-player-bar .middle-controls tp-yt-paper-slider#pr
 }
 
 
-body.ytm-custom-layout ytmusic-player-bar {
-
-  height: 80px !important;
-
-
-  padding-top: 5px !important;
-
-  padding-left: 32px !important;
-  padding-right: 32px !important;
-  padding-bottom: 0 !important;
-}
-
-
 body.ytm-custom-layout ytmusic-player-bar .middle-controls tp-yt-paper-slider#progress-bar {
 
   transform: none !important;
@@ -1512,15 +1501,16 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   max-width: 1200px;
   max-height: 900px;
   padding: 40px;
-  background: rgba(10, 10, 12, 0.85);
+  background: rgba(12, 12, 16, 0.72);
   border-radius: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   z-index: 100000;
   display: none;
   flex-direction: column;
   color: #fff;
-  backdrop-filter: blur(50px) saturate(180%);
-  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(36px) saturate(1.8) brightness(1.05);
+  -webkit-backdrop-filter: blur(36px) saturate(1.8) brightness(1.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 40px 100px rgba(0, 0, 0, 0.8);
   overflow: hidden;
 }
 
@@ -1598,6 +1588,7 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   border-radius: 24px;
   padding: 24px;
   border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -1868,27 +1859,6 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   font-feature-settings: "tnum";
 }
 
-.replay-footer-btn {
-  position: absolute;
-  bottom: 25px;
-  right: 30px;
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.2);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  letter-spacing: 0.5px;
-  padding: 5px 10px;
-  border-radius: 8px;
-}
-
-.replay-footer-btn:hover {
-  color: rgba(255, 60, 60, 1);
-  background: rgba(255, 60, 60, 0.1);
-}
-
 .replay-empty {
   display: flex;
   flex-direction: column;
@@ -1941,11 +1911,12 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   right: -420px;
   width: 380px;
   height: calc(100vh - 140px);
-  background: rgba(20, 20, 25, 0.85);
-  backdrop-filter: blur(40px) saturate(180%);
+  background: rgba(18, 18, 24, 0.66);
+  backdrop-filter: blur(30px) saturate(1.8) brightness(1.06);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8) brightness(1.06);
   border-radius: 24px 0 0 24px;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), -20px 0 60px rgba(0, 0, 0, 0.5);
   z-index: 9999;
 
   transition: right 0.4s cubic-bezier(0.16, 1, 0.3, 1),
@@ -2018,7 +1989,7 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 .queue-item.current {
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 
@@ -2117,71 +2088,51 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   text-overflow: ellipsis;
 }
 
+/* Replayフッター（旧: 2箇所に分かれていた定義をここに統合） */
 .replay-footer-area {
   position: absolute;
   bottom: 30px;
   right: 30px;
-  display: flex;
-  gap: 12px;
-  z-index: 100;
-}
-
-
-.replay-footer-btn {
-
-  position: static !important;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  letter-spacing: 0.5px;
-  padding: 8px 16px;
-  border-radius: 99px;
-  backdrop-filter: blur(4px);
-}
-
-.replay-footer-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  transform: translateY(-2px);
-}
-
-
-#replay-reset-action:hover {
-  background: rgba(255, 60, 60, 0.2);
-  color: #ff5555;
-  border-color: rgba(255, 60, 60, 0.3);
-}
-
-.replay-footer-area {
   margin-top: 16px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+  z-index: 100;
 }
 
+/* Replayフッターボタン（旧: 3箇所に分かれていた定義をここに統合） */
 .replay-footer-btn {
+  position: static !important;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(0, 0, 0, 0.35);
   color: #fff;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
   cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: background 0.15s ease, opacity 0.15s ease, transform 0.2s ease;
 }
 
 .replay-footer-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateY(-2px);
 }
 
 .replay-footer-btn[disabled] {
   opacity: 0.6;
   cursor: wait;
+}
+
+#replay-reset-action:hover {
+  background: rgba(255, 60, 60, 0.2);
+  color: #ff5555;
+  border-color: rgba(255, 60, 60, 0.3);
 }
 
 .dr-cloud-sync-btn {
@@ -2215,30 +2166,6 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 .dr-cloud-sync-btn .dr-cloud-time {
   opacity: 0.8;
 }
-
-#ytm-toast {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  max-width: 320px;
-  padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.85);
-  color: #fff;
-  border-radius: 999px;
-  font-size: 13px;
-  z-index: 999999;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-10px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-#ytm-toast.visible {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
 
 #my-mode-toggle {
   transition: all 0.3s ease;
@@ -2375,11 +2302,11 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   min-width: 280px;
   padding: 14px 16px;
   border-radius: 18px;
-  background: rgba(18, 18, 24, 0.92);
+  background: rgba(18, 18, 24, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 20px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(24px) saturate(1.7) brightness(1.05);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7) brightness(1.05);
   color: #fff;
   z-index: 2147483647;
   pointer-events: none;
@@ -2428,4 +2355,169 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+
+/* ===================================================================== */
+/* Liquid Glass（リキッドグラス）                                          */
+/* Aave「Building Glass for the Web」流: feDisplacementMap による屈折レンズ */
+/*                                                                       */
+/* クラスゲート（liquidGlass.js が付与）:                                   */
+/*   body.ytm-lg-fx : defs 注入済み → 粒子・ヘアライン・スペキュラ装飾が有効   */
+/*   body.ytm-lg-on : Tier 1 プローブ成功 → url(#...) 屈折フィルタが有効     */
+/* var(--ytm-lg-filter-*) は JS がフレッシュな filter id に差し替える。     */
+/* var のフォールバック値 = 従来の blur() レシピ（url() 参照切れ対策）。      */
+/* ===================================================================== */
+
+:root {
+  --ytm-lg-spec-angle: 135deg;
+}
+
+/* ---------- Tier 1: 屈折レンズ（body.ytm-lg-on 時のみ） ---------- */
+
+/* ヒーロー面: プレイヤーバー（moviemode は近透明仕様のため除外） */
+body.ytm-lg-on.ytm-custom-layout ytmusic-player-bar:not(.moviemode) {
+  backdrop-filter: var(--ytm-lg-filter-bar, blur(60px) saturate(180%)) !important;
+  -webkit-backdrop-filter: var(--ytm-lg-filter-bar, blur(60px) saturate(180%)) !important;
+  background: rgba(18, 18, 22, 0.38) !important;
+}
+
+/* ガラスピルボタン（Lyrics / Share / PIP / Replay / Settings） */
+body.ytm-lg-on .ytm-glass-btn {
+  backdrop-filter: var(--ytm-lg-filter-pill, blur(14px) saturate(1.5) brightness(1.06));
+  -webkit-backdrop-filter: var(--ytm-lg-filter-pill, blur(14px) saturate(1.5) brightness(1.06));
+  background: rgba(255, 255, 255, 0.06);
+}
+
+body.ytm-lg-on .ytm-glass-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* ポップオーバー（表示中のみレンズ化 — opacity:0 のまま合成させない） */
+body.ytm-lg-on .ytm-upload-menu.visible,
+body.ytm-lg-on .ytm-confirm-dialog.visible {
+  backdrop-filter: var(--ytm-lg-filter-pop, blur(26px) saturate(1.7) brightness(1.06));
+  -webkit-backdrop-filter: var(--ytm-lg-filter-pop, blur(26px) saturate(1.7) brightness(1.06));
+}
+
+body.ytm-lg-on .ytm-upload-menu.visible {
+  background: rgba(15, 15, 20, 0.5);
+}
+
+body.ytm-lg-on .ytm-confirm-dialog.visible {
+  background: rgba(15, 15, 20, 0.7);
+}
+
+/* トースト・共有ヒント（表示中のみ） */
+body.ytm-lg-on #ytm-toast.visible,
+body.ytm-lg-on #ytm-fallback-toast.visible {
+  backdrop-filter: var(--ytm-lg-filter-toast, blur(24px) saturate(1.6) brightness(1.05));
+  -webkit-backdrop-filter: var(--ytm-lg-filter-toast, blur(24px) saturate(1.6) brightness(1.05));
+  background: rgba(15, 15, 20, 0.45);
+}
+
+body.ytm-lg-on.ytm-share-select-mode #ytm-share-hint {
+  backdrop-filter: var(--ytm-lg-filter-toast, blur(24px) saturate(1.6) brightness(1.05));
+  -webkit-backdrop-filter: var(--ytm-lg-filter-toast, blur(24px) saturate(1.6) brightness(1.05));
+  background: rgba(15, 15, 20, 0.45);
+}
+
+/* 自動で隠れるナビバー: opacity:0 のまま合成され続けないよう、
+   非ホバー中はフィルタを外し、ホバー中だけレンズ化する */
+body.ytm-lg-on.ytm-custom-layout ytmusic-nav-bar {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.ytm-lg-on.ytm-custom-layout ytmusic-nav-bar:hover {
+  backdrop-filter: var(--ytm-lg-filter-nav, blur(20px) saturate(1.5) brightness(1.04)) !important;
+  -webkit-backdrop-filter: var(--ytm-lg-filter-nav, blur(20px) saturate(1.5) brightness(1.04)) !important;
+  background: rgba(0, 0, 0, 0.35) !important;
+}
+
+/* ---------- 装飾レイヤー（body.ytm-lg-fx 時 / Tier 1・2 共通） ---------- */
+
+/* ピルは static なので疑似要素の基準を作る */
+body.ytm-lg-fx .ytm-glass-btn {
+  position: relative;
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ヘアラインの二重線防止: 既存ボーダーはグラデリングに置き換える */
+body.ytm-lg-fx.ytm-custom-layout ytmusic-player-bar:not(.moviemode) {
+  border-color: rgba(255, 255, 255, 0.07) !important;
+}
+
+body.ytm-lg-fx .ytm-upload-menu,
+body.ytm-lg-fx .ytm-confirm-dialog,
+body.ytm-lg-fx #ytm-candidate-hover-preview,
+body.ytm-lg-fx #ytm-settings-panel,
+body.ytm-lg-fx #ytm-toast,
+body.ytm-lg-fx #ytm-fallback-toast,
+body.ytm-lg-fx #ytm-share-hint {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* グラデーションヘアライン（mask-composite で 1px のリングだけ残す） */
+body.ytm-lg-fx.ytm-custom-layout ytmusic-player-bar:not(.moviemode)::before,
+body.ytm-lg-fx:not(.ytm-custom-layout) ytmusic-player-bar::before,
+body.ytm-lg-fx.ytm-custom-layout ytmusic-nav-bar::before,
+body.ytm-lg-fx .ytm-glass-btn::before,
+body.ytm-lg-fx .ytm-upload-menu::before,
+body.ytm-lg-fx .ytm-confirm-dialog::before,
+body.ytm-lg-fx #ytm-candidate-hover-preview::before,
+body.ytm-lg-fx #ytm-settings-panel::before,
+body.ytm-lg-fx #ytm-replay-panel::before,
+body.ytm-lg-fx #ytm-queue-panel::before,
+body.ytm-lg-fx #ytm-toast::before,
+body.ytm-lg-fx #ytm-fallback-toast::before,
+body.ytm-lg-fx #ytm-share-hint::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 3;
+  background: linear-gradient(var(--ytm-lg-spec-angle, 135deg),
+      rgba(255, 255, 255, 0.5),
+      rgba(255, 255, 255, 0.08) 35%,
+      rgba(255, 255, 255, 0.02) 65%,
+      rgba(255, 255, 255, 0.26));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* スペキュラハイライト + 粒子ノイズ（feTurbulence — CSPセーフ）
+   ノイズは大きな面のバンディング防止用。小さなピル/トーストには乗せない */
+body.ytm-lg-fx.ytm-custom-layout ytmusic-player-bar:not(.moviemode)::after,
+body.ytm-lg-fx:not(.ytm-custom-layout) ytmusic-player-bar::after,
+body.ytm-lg-fx.ytm-custom-layout ytmusic-nav-bar::after,
+body.ytm-lg-fx .ytm-upload-menu::after,
+body.ytm-lg-fx .ytm-confirm-dialog::after,
+body.ytm-lg-fx #ytm-candidate-hover-preview::after,
+body.ytm-lg-fx #ytm-settings-panel::after,
+body.ytm-lg-fx #ytm-replay-panel::after,
+body.ytm-lg-fx #ytm-queue-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: screen;
+  background: linear-gradient(var(--ytm-lg-spec-angle, 135deg),
+      rgba(255, 255, 255, 0.14),
+      rgba(255, 255, 255, 0.03) 24%,
+      transparent 42%);
+  filter: url(#ytm-lg-grain);
+}
+
+/* ユーザーがアニメーション抑制を求めている場合はマイクロインタラクションを止める */
+@media (prefers-reduced-motion: reduce) {
+  body.ytm-lg-fx .ytm-glass-btn {
+    transition: none;
+  }
 }

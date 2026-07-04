@@ -28,7 +28,8 @@
       'QueueManagerModule': ['ConfigModule', 'StateModule'],
       'CloudSyncModule': ['ConfigModule', 'StateModule', 'Storage'],
       'DiscordPresenceModule': [],
-      'MovieModeModule': []
+      'MovieModeModule': [],
+      'LiquidGlassModule': ['ConfigModule']
     },
 
     // Check if module is loaded
@@ -138,7 +139,7 @@
     'LyricsLoaderModule', 'EventsModule', 'I18n', 'Storage', 'TranslationModule',
     'LyricsParserModule', 'UIRenderingModule', 'ShareModule', 'PipManagerModule',
     'ReplayManagerModule', 'QueueManagerModule', 'CloudSyncModule',
-    'DiscordPresenceModule', 'MovieModeModule'
+    'DiscordPresenceModule', 'MovieModeModule', 'LiquidGlassModule'
   ];
 
   // Check which modules are actually loaded
@@ -194,7 +195,8 @@
         { name: 'QueueManagerModule', setup: (m) => { window.QueueManager = m.QueueManager; } },
         { name: 'CloudSyncModule', setup: (m) => { window.CloudSync = m.CloudSync; } },
         { name: 'DiscordPresenceModule', setup: (m) => { window.DiscordPresence = m.DiscordPresenceModule; } },
-        { name: 'MovieModeModule', setup: (m) => { window.MovieMode = m.MovieModeModule; } }
+        { name: 'MovieModeModule', setup: (m) => { window.MovieMode = m.MovieModeModule; } },
+        { name: 'LiquidGlassModule', setup: (m) => { window.LiquidGlass = m.LiquidGlass; } }
       ];
 
       for (const { name, setup } of featureModules) {
@@ -209,7 +211,8 @@
       const initModules = [
         { name: 'ReplayManager', module: 'ReplayManagerModule' },
         { name: 'QueueManager', module: 'QueueManagerModule' },
-        { name: 'CloudSync', module: 'CloudSyncModule' }
+        { name: 'CloudSync', module: 'CloudSyncModule' },
+        { name: 'LiquidGlass', module: 'LiquidGlassModule' }
       ];
       
       for (const { name, module } of initModules) {

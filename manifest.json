@@ -45,6 +45,7 @@
         "src/js/modules/services/translation.js",
         "src/js/modules/ui/uiRendering.js",
         "src/js/modules/ui/uiManager.js",
+        "src/js/modules/ui/liquidGlass.js",
         "src/js/modules/lyrics/lyricsLoader.js",
         "src/js/modules/core/events.js",
         "src/js/modules/features/discordPresence.js",

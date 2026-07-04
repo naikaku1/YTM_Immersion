@@ -17,7 +17,8 @@
     syncOffset: 0,
     saveSyncOffset: false,
     lyricWeight: 800,
-    bgBrightness: 0.35
+    bgBrightness: 0.35,
+    liquidGlass: true
   };
 
   // Configuration API
@@ -63,6 +64,9 @@
           
           const uiLang = await window.Storage.storage.get('ytm_ui_lang');
           if (uiLang) config.uiLang = uiLang;
+
+          const liquidGlass = await window.Storage.storage.get('ytm_liquid_glass');
+          if (liquidGlass !== null && liquidGlass !== undefined) config.liquidGlass = !!liquidGlass;
         }
       } catch (storageError) {
         console.warn('[YTM Immersion] Storage access failed, using fallback:', storageError);
@@ -95,6 +99,12 @@
         if (savedBright) {
           config.bgBrightness = savedBright;
           document.documentElement.style.setProperty('--ytm-bg-brightness', savedBright);
+        }
+
+        const savedLiquidGlass = await window.Storage.storage.get('ytm_liquid_glass');
+        if (savedLiquidGlass !== null && savedLiquidGlass !== undefined) {
+          config.liquidGlass = !!savedLiquidGlass;
+          window.LiquidGlassModule?.LiquidGlass?.setEnabled(!!savedLiquidGlass);
         }
       } catch (error) {
         console.warn('[YTM Immersion] Failed to apply visual settings:', error);

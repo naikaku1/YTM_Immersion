@@ -228,6 +228,13 @@
               </div>
               <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || 0.35}" style="width:100%;">
             </div>
+
+            <div class="setting-row">
+              <label class="toggle-label" style="width:100%;">
+                <span>Liquid Glass</span>
+                <input type="checkbox" id="liquid-glass-toggle">
+              </label>
+            </div>
           </div>
         </div>
 
@@ -342,6 +349,18 @@
     document.getElementById('trans-toggle').checked = config.useTrans;
     document.getElementById('fast-mode-toggle').checked = !!config.fastMode;
     document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
+    const liquidGlassToggle = document.getElementById('liquid-glass-toggle');
+    if (liquidGlassToggle) {
+      liquidGlassToggle.checked = config.liquidGlass !== false;
+      liquidGlassToggle.addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        window.ConfigModule?.ConfigManager.set('liquidGlass', enabled);
+        window.LiquidGlassModule?.LiquidGlass?.setEnabled(enabled);
+        if (window.Storage?.storage) {
+          await window.Storage.storage.set('ytm_liquid_glass', enabled);
+        }
+      });
+    }
     
     const fastToggleEl = document.getElementById('fast-mode-toggle');
     if (fastToggleEl) {
@@ -396,6 +415,7 @@
         configMod.update('fastMode', document.getElementById('fast-mode-toggle').checked);
         configMod.update('lyricWeight', document.getElementById('weight-slider').value);
         configMod.update('bgBrightness', document.getElementById('bright-slider').value);
+        configMod.set('liquidGlass', document.getElementById('liquid-glass-toggle')?.checked !== false);
         
         let offsetVal = document.getElementById('sync-offset-input').valueAsNumber;
         if (isNaN(offsetVal)) offsetVal = 0;

@@ -16,12 +16,17 @@
 
 ## インストール方法 (Installation Guide)
 
-この拡張機能は、Chromeウェブストア審査前の「開発者モード」でのみ利用可能です。
+この拡張機能は、[Chromeウェブストア版](https://chromewebstore.google.com/detail/ytm-immersion/nnpgbfkmlfneiclbeaniejaheojikhnb?hl=ja)または手動でインストールできます。以下は手動インストール手順です。
 
 ### 1. ファイルのダウンロードと準備
 
-1. 最新の **`.zip`** ファイルをダウンロードし、解凍（展開）します。
-2. **【重要】** ファイルを解凍してできた **フォルダ全体** を使います。
+#### 方法1: Gitを使用してリポジトリをクローン 
+```bash
+git clone https://github.com/naikaku1/YTM_Immersion
+```
+#### 方法2: フォルダをダウンロード（更新に手間がかかります）
+1. 緑色の**Code**メニューから**Download Zip**を選択します。
+2. ダウンロードされたフォルダを解凍します
 
 ### 2. Chromeでの読み込み手順
 

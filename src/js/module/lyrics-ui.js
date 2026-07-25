@@ -2275,7 +2275,20 @@ function showMeaningSummaryPopup() {
 
 function setupAutoHideEvents() {
   if (document.body.dataset.autohideSetup) return;
-  ['mousemove', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, handleInteraction));
+  // mousemove は 1 フレームに 1 回へ間引く。
+  // 高ポーリングレートのマウスでは毎秒数百回発火し、その都度
+  // handleInteraction() の querySelector / classList 操作 / setTimeout 再設定が
+  // 走って無視できないCPUコストになるため。
+  let _interactionRafId = null;
+  const onMouseMove = () => {
+    if (_interactionRafId) return;
+    _interactionRafId = requestAnimationFrame(() => {
+      _interactionRafId = null;
+      handleInteraction();
+    });
+  };
+  document.addEventListener('mousemove', onMouseMove, { passive: true });
+  ['click', 'keydown'].forEach(ev => document.addEventListener(ev, handleInteraction));
   document.body.dataset.autohideSetup = 'true';
   handleInteraction();
 }
@@ -3514,6 +3527,33 @@ function setupLangPills(groupId, currentValue, onChange) {
   });
 }
 
+// ===================== UIサイズ =====================
+// Immersion UI の寸法は CSS 側で calc(<基準px> * var(--ytm-ui-scale)) として
+// 定義してあるので、この変数を書き換えるだけで全体が拡大縮小する。
+const UI_SCALE_MIN = 0.7;
+const UI_SCALE_MAX = 1.5;
+
+function normalizeUiScale(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 1;
+  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, num));
+}
+
+function applyUiScale(value) {
+  const scale = normalizeUiScale(value);
+  config.uiScale = scale;
+  document.documentElement.style.setProperty('--ytm-ui-scale', String(scale));
+  // 歌詞エリアの高さ・行高が変わると中央位置もずれるので、
+  // 次のハイライト更新で中央スクロールをやり直させる。
+  if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
+  if (PipManager && PipManager.pipLyricsContainer) {
+    PipManager.pipLyricsContainer._lastScrolledIndex = -1;
+  }
+  // 上記のレイアウト変化で出る scroll イベントをユーザー操作と誤検出させない
+  suppressUserScrollDetection(400);
+  return scale;
+}
+
 async function initSettings() {
   if (ui.settings) return;
   ui.settings = createEl('div', 'ytm-settings-panel', '', ``);
@@ -3553,6 +3593,8 @@ async function initSettings() {
   if (weightStored) config.lyricWeight = weightStored;
   const brightStored = await storage.get('ytm_bg_brightness');
   if (brightStored) config.bgBrightness = brightStored;
+  const uiScaleStored = await storage.get('ytm_ui_scale');
+  if (uiScaleStored !== null) config.uiScale = normalizeUiScale(uiScaleStored);
 
   renderSettingsPanel();
 
@@ -3714,6 +3756,13 @@ function renderSettingsPanel() {
                 <span class="setting-name">${t('settings_left_align')}</span>
                 <input type="checkbox" id="left-align-toggle">
               </label>
+              <div class="setting-row stacked">
+                <div class="setting-row-top">
+                  <span class="setting-name">UIサイズ (UI Size)</span>
+                  <span class="setting-value-badge" id="ui-scale-val">${Math.round((config.uiScale || 1) * 100)}%</span>
+                </div>
+                <input type="range" id="ui-scale-slider" min="0.7" max="1.5" step="0.05" value="${config.uiScale || 1}">
+              </div>
             </div>
 
             <div class="settings-section-title">${t('settings_sec_bg')}</div>
@@ -3928,8 +3977,18 @@ function renderSettingsPanel() {
 
   const wSlider = document.getElementById('weight-slider');
   const bSlider = document.getElementById('bright-slider');
+  const sSlider = document.getElementById('ui-scale-slider');
   updateSliderFill(wSlider);
   updateSliderFill(bSlider);
+  updateSliderFill(sSlider);
+  if (sSlider) {
+    sSlider.addEventListener('input', (e) => {
+      const val = e.target.value;
+      document.getElementById('ui-scale-val').textContent = Math.round(val * 100) + '%';
+      applyUiScale(val);
+      updateSliderFill(e.target);
+    });
+  }
   if (wSlider) {
     wSlider.addEventListener('input', (e) => {
       const val = e.target.value;
@@ -3991,7 +4050,7 @@ function renderSettingsPanel() {
     const prevDeepLKey = savedDeepLKey || '';
     const prevMainLang = savedMainLang || 'original';
     const prevSubLang = savedSubLang !== null ? savedSubLang : 'en';
-    const prevUseTrans = savedUseTrans !== null ? savedUseTrans : true;
+    const prevUseTrans = savedUseTrans !== null ? savedUseTrans : false;
     const prevUseSharedTrans = savedSharedTrans !== null ? savedSharedTrans : false;
     const prevUiLang = savedUiLang || 'ja';
     const prevAnimatedCaptions = savedAnimatedCaptions !== null ? !!savedAnimatedCaptions : false;
@@ -4010,6 +4069,7 @@ function renderSettingsPanel() {
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
     config.bgBrightness = document.getElementById('bright-slider').value;
+    config.uiScale = normalizeUiScale(document.getElementById('ui-scale-slider')?.value);
 
     const offsetVal = document.getElementById('sync-offset-input').valueAsNumber;
     config.syncOffset = isNaN(offsetVal) ? 0 : offsetVal;
@@ -4032,6 +4092,7 @@ function renderSettingsPanel() {
       storage.set('ytm_ui_lang', config.uiLang),
       storage.set('ytm_lyric_weight', config.lyricWeight),
       storage.set('ytm_bg_brightness', config.bgBrightness),
+      storage.set('ytm_ui_scale', config.uiScale),
       storage.set('ytm_sync_offset', config.syncOffset),
       storage.set('ytm_save_sync_offset', config.saveSyncOffset),
       storage.set('ytm_lyric_source_mode', config.lyricSourceMode)
@@ -4042,6 +4103,7 @@ function renderSettingsPanel() {
     document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
     document.documentElement.style.setProperty('--ytm-lyric-weight', config.lyricWeight);
     document.documentElement.style.setProperty('--ytm-bg-brightness', config.bgBrightness);
+    applyUiScale(config.uiScale);
 
     const translationChanged = (
       prevDeepLKey !== config.deepLKey ||
@@ -5692,6 +5754,10 @@ function updateMetaUI(meta) {
     config.bgBrightness = savedBright;
     document.documentElement.style.setProperty('--ytm-bg-brightness', savedBright);
   }
+
+  // 2-b. UIサイズ
+  const savedUiScale = await storage.get('ytm_ui_scale');
+  if (savedUiScale !== null) applyUiScale(savedUiScale);
 
   // 3. 左揃えオプション
   const leftAlignStored = await storage.get('ytm_left_align');

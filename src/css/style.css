@@ -11,6 +11,22 @@
   box-sizing: border-box;
 }
 
+/* ===================== UIスケール =====================
+   Immersion UI の各寸法は、以前 gap/padding を vw、歌詞エリアの高さを vh で
+   指定していたため、モニターの解像度が変わると「文字サイズは px のまま／
+   余白と歌詞エリアだけ伸縮する」という状態になり、レイアウトの比率そのものが
+   崩れていた（別解像度のモニターに繋ぐとサイズが変わる問題）。
+
+   そこで寸法はすべて px 基準（＝解像度非依存）に統一し、拡大縮小はこの
+   --ytm-ui-scale 一つだけで行う。設定パネルの「UIサイズ」から変更でき、
+   値は ytm_ui_scale として保存される。
+
+   ウィンドウが小さい場合にはみ出さないよう、要所では min() で
+   ビューポート基準の上限も併用している（小さい窓でだけ効く安全弁）。 */
+:root {
+  --ytm-ui-scale: 1;
+}
+
 
 #ytm-custom-bg {
   position: fixed;
@@ -169,8 +185,13 @@ body.ytm-apple-bg #ytm-custom-bg::after {
   flex-direction: row;
   justify-content: center;
   align-items: center;
-  gap: 8vw;
-  padding: 60px 5vw 140px 5vw;
+  /* 以前: gap 8vw / padding 左右 5vw → 解像度でアートワークと歌詞の間隔が変わっていた */
+  gap: min(8vw, calc(90px * var(--ytm-ui-scale)));
+  padding:
+    calc(60px * var(--ytm-ui-scale))
+    min(5vw, calc(60px * var(--ytm-ui-scale)))
+    calc(140px * var(--ytm-ui-scale))
+    min(5vw, calc(60px * var(--ytm-ui-scale)));
   box-sizing: border-box;
   z-index: 1001;
   transition: all 0.5s ease;
@@ -346,7 +367,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 400px;
+  width: min(calc(400px * var(--ytm-ui-scale)), 42vw);
   text-align: center;
   transition: transform 0.5s ease;
 }
@@ -362,10 +383,10 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   position: relative;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 16px;
+  border-radius: calc(16px * var(--ytm-ui-scale));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
   overflow: hidden;
-  margin-bottom: 30px;
+  margin-bottom: calc(30px * var(--ytm-ui-scale));
 }
 
 #ytm-artwork-container.moviemode {
@@ -390,7 +411,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 #ytm-custom-title {
-  font-size: 32px;
+  font-size: calc(32px * var(--ytm-ui-scale));
   font-weight: 900;
   color: #fff;
   margin-bottom: 8px;
@@ -417,7 +438,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 #ytm-custom-artist {
-  font-size: 20px;
+  font-size: calc(20px * var(--ytm-ui-scale));
   font-weight: 600;
   color: rgba(255, 255, 255, 0.7);
   margin-bottom: 0px;
@@ -435,10 +456,10 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 
 #ytm-btn-area {
   display: flex;
-  gap: 10px;
+  gap: calc(10px * var(--ytm-ui-scale));
   justify-content: center;
-  margin-top: 24px;
-  max-height: 50px;
+  margin-top: calc(24px * var(--ytm-ui-scale));
+  max-height: calc(50px * var(--ytm-ui-scale));
   opacity: 1;
   visibility: visible;
   overflow: visible;
@@ -476,15 +497,15 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 }
 
 .ytm-glass-btn {
-  padding: 8px 16px;
+  padding: calc(8px * var(--ytm-ui-scale)) calc(16px * var(--ytm-ui-scale));
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 20px;
+  border-radius: calc(20px * var(--ytm-ui-scale));
   color: #fff;
   cursor: pointer;
   font-weight: 700;
   /* backdrop-filter: blur(20px); */
-  font-size: 13px;
+  font-size: calc(13px * var(--ytm-ui-scale));
   transition: 0.2s;
 }
 
@@ -1211,7 +1232,13 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 #ytm-lyrics-stage {
   position: relative;
-  width: 500px;
+  width: min(calc(500px * var(--ytm-ui-scale)), 52vw);
+  /* 高さは意図的にビューポート基準のまま残す。
+     ここを px 固定にすると、縦に広いモニターほど歌詞の表示行数が減ってしまう
+     （画面が広いのに使わない余白が増える）。
+     解像度非依存にすべきなのは「文字や部品の大きさ」であって、
+     歌詞エリアが縦の空きスペースを使うこと自体は自然な挙動。
+     行数を増減させたい場合は設定の「UIサイズ」で文字サイズ側を調整する。 */
   height: 65vh;
   flex: 0 0 auto;
 }
@@ -1220,10 +1247,12 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  padding-right: 48px;
-  padding-left: 40px;
+  padding-right: calc(48px * var(--ytm-ui-scale));
+  padding-left: calc(40px * var(--ytm-ui-scale));
   scrollbar-width: none;
   mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+  /* 先頭行が中央まで来られるよう、ステージ高さ(65vh)のおよそ半分を確保する
+     （JS 側は clientHeight/2 を基準に中央スクロールしている） */
   padding-top: 30vh;
 }
 
@@ -1582,11 +1611,11 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
 
 .lyric-line {
   position: relative;
-  font-size: 32px;
+  font-size: calc(32px * var(--ytm-ui-scale));
   font-weight: var(--ytm-lyric-weight, 800);
   letter-spacing: -0.03em;
   color: rgba(255, 255, 255, 0.3);
-  margin-bottom: 35px;
+  margin-bottom: calc(35px * var(--ytm-ui-scale));
   cursor: pointer;
   transition: transform 0.5s, color 0.5s, opacity 0.5s;
   transform-origin: left;
@@ -1781,9 +1810,9 @@ body.ytm-custom-layout ytmusic-player-bar {
   left: 50% !important;
   transform: translateX(-50%) !important;
   width: 95% !important;
-  max-width: 1000px !important;
-  height: 80px !important;
-  border-radius: 40px !important;
+  max-width: min(calc(1000px * var(--ytm-ui-scale)), 95vw) !important;
+  height: calc(80px * var(--ytm-ui-scale)) !important;
+  border-radius: calc(40px * var(--ytm-ui-scale)) !important;
   background: rgba(20, 20, 20, 0.9) !important;
   /* backdrop-filter: blur(60px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
@@ -1792,12 +1821,21 @@ body.ytm-custom-layout ytmusic-player-bar {
   justify-content: space-between !important;
   align-items: center !important;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
-  padding: 0 32px !important;
+  padding: 0 min(calc(32px * var(--ytm-ui-scale)), 4vw) !important;
   z-index: 2000 !important;
   visibility: visible !important;
   opacity: 1 !important;
   overflow: hidden !important;
   transition: opacity 0.5s ease, visibility 0.5s ease !important;
+}
+
+/* 操作バーが「切れて」操作できなくなる問題への対策。
+   バーは overflow:hidden の固定高さなので、中身が収まらないと
+   はみ出した部分が黙って切り取られ、クリックもできなくなる。
+   フレックス子要素は min-width:auto だと最小内容幅より縮まないため、
+   明示的に min-width:0 を与えて「切り取られる」代わりに「縮む」ようにする。 */
+body.ytm-custom-layout ytmusic-player-bar>* {
+  min-width: 0 !important;
 }
 
 body.ytm-custom-layout ytmusic-player-bar.moviemode {
@@ -1806,7 +1844,13 @@ body.ytm-custom-layout ytmusic-player-bar.moviemode {
   background: rgba(0, 0, 0, 0.8) !important;
   /* backdrop-filter: blur(8px) saturate(100%) !important; */
   width: 98% !important;
-  max-width: 1200px !important;
+  max-width: min(calc(1200px * var(--ytm-ui-scale)), 98vw) !important;
+  /* 動画(MV)再生時、YTM はシークバーを
+     --ytmusic-player-bar-fullscreen-progress-bar-inset を使って
+     通常のフレックス配置の外に絶対配置する。overflow:hidden のままだと
+     バーの外に出た分が切り取られてシークできなくなるため、
+     動画モードでは切り取りを解除する。 */
+  overflow: visible !important;
 }
 
 body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
@@ -1829,9 +1873,12 @@ body.ytm-custom-layout ytmusic-player-bar .middle-controls ytmusic-play-button-r
 /* 荳ｭ螟ｮ繧ｨ繝ｪ繧｢�壹す繝ｼ繧ｯ繝舌�荳ｭ蠢� */
 body.ytm-custom-layout .middle-controls {
   flex: 1 1 auto !important;
+  /* min-width:0 がないと、シークバー+時間表示の最小内容幅より縮まず、
+     バー全体からはみ出して右側のコントロールが切り取られる */
+  min-width: 0 !important;
   justify-content: center !important;
   margin: 0 5px !important;
-  max-width: 600px !important;
+  max-width: calc(600px * var(--ytm-ui-scale)) !important;
   padding: 0 5px !important;
   display: flex !important;
   align-items: center !important;
@@ -1869,6 +1916,9 @@ body.ytm-custom-layout ytmusic-player-bar .right-controls {
   align-items: center !important;
   gap: 10px !important;
   margin-right: 16px !important;
+  /* 幅が足りないときは切り取られるのではなく詰めて全ボタンを残す */
+  flex: 0 1 auto !important;
+  flex-wrap: nowrap !important;
 }
 
 /* 繝懊ち繝ｳ繝ｻ繝�く繧ｹ繝医�濶ｲ */
@@ -2429,34 +2479,10 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 }
 
 
-body.ytm-custom-layout ytmusic-player-bar {
-  position: fixed !important;
-  bottom: 40px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  width: 95% !important;
-  max-width: 1000px !important;
-  height: 80px !important;
-  border-radius: 40px !important;
-  background: rgba(20, 20, 20, 0.9) !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  justify-content: space-between !important;
-  align-items: center !important;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
-
-
-  padding: 0 32px !important;
-
-  z-index: 2000 !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-
-
-  overflow: hidden !important;
-}
-
+/* （旧: ここに 1800 行目付近と同じ内容の ytmusic-player-bar ルールが重複していた。
+   後方に書かれている分だけ強く、height/padding をハードコードした px で
+   上書きしてしまい UI スケールが効かなくなるため削除した。
+   定義は「プレイヤーバー全体」セクション一箇所に集約している。） */
 
 body.ytm-custom-layout ytmusic-player-bar .right-controls .toggle-player-page-button,
 body.ytm-custom-layout ytmusic-player-bar .right-controls .expand-btn,
@@ -2515,14 +2541,15 @@ body.ytm-custom-layout ytmusic-player-bar .middle-controls tp-yt-paper-slider#pr
 
 body.ytm-custom-layout ytmusic-player-bar {
 
-  height: 80px !important;
+  height: calc(80px * var(--ytm-ui-scale)) !important;
 
-
-  padding-top: 5px !important;
-
-  padding-left: 32px !important;
-  padding-right: 32px !important;
+  /* 以前は padding-top:5px / padding-bottom:0 と上下非対称だった。
+     高さ固定 + overflow:hidden のバーで中身が下にずれるため、
+     中身がわずかに大きいだけで下端が切れて押せなくなる。上下対称にする。 */
+  padding-top: 0 !important;
   padding-bottom: 0 !important;
+  padding-left: min(calc(32px * var(--ytm-ui-scale)), 4vw) !important;
+  padding-right: min(calc(32px * var(--ytm-ui-scale)), 4vw) !important;
 }
 
 
@@ -3611,9 +3638,24 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-custom-bg {
   animation: ytmBgDrift 40s linear infinite alternate;
 }
 
+/* 背景には CSS blur を付けない。
+   背景画像は JS 側で 64x64 のキャンバスに事前ぼかしして data URL 化しているため
+   (updateMetaUI)、ここで blur を掛け直しても見た目はほぼ変わらない一方で、
+   ・ドリフトアニメーションの毎フレーム、ビューポート全面のブラーを再計算
+   ・その上に乗る backdrop-filter (プレイヤーバー/ナビバー) も毎フレーム再計算
+   が発生し、CPU 使用率が跳ね上がる。
+   CSS blur は下の「事前ぼかしに失敗した場合」のフォールバックだけに限定する。 */
 body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg {
+  transform: scale(1.4);
+}
+
+/* フォールバック: CORS 等でキャンバスの事前ぼかしが失敗し、元画像のURLがそのまま
+   入っている場合のみ CSS blur を使う。この場合はアニメーションを止めて
+   ブラーの再計算が毎フレーム走らないようにする。 */
+body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg:not([style*="data:"]) {
   filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4)) !important;
-  transform: scale(1.4) !important;
+  transform: scale(12) !important;
+  animation: none !important;
 }
 
 body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg::before {
@@ -3625,9 +3667,12 @@ body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg::a
 }
 
 /* ===================== Glassmorphism (Normal Mode Only) ===================== */
+/* ナビバーとプレイヤーバーは常時表示・画面幅いっぱいのため、backdrop-filter の
+   コストがそのまま常時のCPU/GPU負荷になる。背景が事前ぼかし済みで元々なだらかなので
+   ぼかし半径を下げても見た目はほとんど変わらない。 */
 body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-nav-bar {
-  backdrop-filter: blur(24px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  backdrop-filter: blur(18px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(180%) !important;
   background: rgba(15, 15, 15, 0.55) !important;
 }
 
@@ -3667,8 +3712,8 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-dialog {
 }
 
 body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-player-bar {
-  backdrop-filter: blur(60px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(60px) saturate(180%) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
   background: rgba(20, 20, 20, 0.55) !important;
 }
 

@@ -1,3 +1,4 @@
+
 /* globals chrome, browser */
   const EXT =
     typeof globalThis.chrome !== 'undefined'
@@ -90,17 +91,28 @@
 
       // ハンドルの位置を更新
       let _handleRafId = null;
+      // 直前に書き込んだスタイル値。値が変わっていないフレームでスタイルを
+      // 書き直すと無駄なスタイル再計算が毎フレーム走るため、差分がある時だけ書く。
+      // （このループは一度シークすると「バー外をクリックするまで」回り続けるので、
+      //   アイドル時のコストをゼロに近づけておく必要がある）
+      let _lastHandleStyle = '';
       const updateHandlePosition = () => {
         _handleRafId = null;
 
         if (!document.body.classList.contains('ytm-custom-layout')) {
-          customHandle.style.opacity = '0';
+          if (_lastHandleStyle !== 'hidden') {
+            customHandle.style.opacity = '0';
+            _lastHandleStyle = 'hidden';
+          }
           return;
         }
 
         // 表示条件をチェック
         if (!shouldShowHandle()) {
-          customHandle.style.opacity = '0';
+          if (_lastHandleStyle !== 'hidden') {
+            customHandle.style.opacity = '0';
+            _lastHandleStyle = 'hidden';
+          }
           return;
         }
 
@@ -117,19 +129,18 @@
         // knobの中心位置を計算（完全追従）
         const handleX = knobRect.left + knobRect.width / 2;
         const handleY = barRect.top + barRect.height / 2;
+        const size = isDragging ? '16px' : '12px';
 
-        // ハンドルを表示して位置を更新
-        customHandle.style.opacity = '1';
-        customHandle.style.left = handleX + 'px';
-        customHandle.style.top = handleY + 'px';
-
-        // ドラッグ中は大きく、そうでなければ通常サイズ
-        if (isDragging) {
-          customHandle.style.width = '16px';
-          customHandle.style.height = '16px';
-        } else {
-          customHandle.style.width = '12px';
-          customHandle.style.height = '12px';
+        const nextStyle = `${handleX}|${handleY}|${size}`;
+        if (nextStyle !== _lastHandleStyle) {
+          _lastHandleStyle = nextStyle;
+          // ハンドルを表示して位置を更新
+          customHandle.style.opacity = '1';
+          customHandle.style.left = handleX + 'px';
+          customHandle.style.top = handleY + 'px';
+          // ドラッグ中は大きく、そうでなければ通常サイズ
+          customHandle.style.width = size;
+          customHandle.style.height = size;
         }
 
         // 表示中のみ次フレームをスケジュール
@@ -157,7 +168,8 @@
 
   let config = {
     deepLKey: null,
-    useTrans: true,
+    // 翻訳は既定オフ。使いたい人が設定パネルから明示的に有効化する。
+    useTrans: false,
     mode: true,
     mainLang: 'original',
     subLang: 'en',
@@ -170,7 +182,9 @@
     useAnimatedCaptions: false,
     useLrcLibFallback: true,
     alwaysShowMeaning: false,
-    lowCpuMode: false
+    lowCpuMode: false,
+    // UIサイズ (1 = 100%)。CSS 変数 --ytm-ui-scale に反映される。
+    uiScale: 1
   };
 
   // フォールバック言語

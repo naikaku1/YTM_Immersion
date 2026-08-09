@@ -65,9 +65,14 @@
         const lyr = (res.lyrics || '');
         if (typeof lyr === 'string' && lyr.trim()) {
           storage.set(key, {
+            cacheVersion: 2,
+            record_id: res.record_id || null,
+            video_id: videoId,
             lyrics: lyr,
             dynamicLines: res.dynamicLines || null,
             candidates: res.candidates || null,
+            lyricsSource: res.lyricsSource || res.source || 'lrchub',
+            fallbackUsed: !!res.fallbackUsed,
             fetchedAt: Date.now(),
           }).then(() => {
             // Refresh highlight instantly if the panel is open
@@ -363,4 +368,3 @@
       });
     }
   };
-

@@ -1,6 +1,5 @@
-  setupObserver();
-
-
-
-  startLyricRafLoop();
-  hoverTimeInfoSetup();
+  Promise.resolve(runtimeSettingsReady).then(() => {
+    setupObserver();
+    startLyricRafLoop();
+    hoverTimeInfoSetup();
+  });

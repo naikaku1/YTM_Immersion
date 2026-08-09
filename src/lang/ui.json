@@ -28,6 +28,7 @@
     "settings_saved": "設定を保存しました",
     "settings_sync_offset": "歌詞同期オフセット",
     "settings_sync_offset_save": "曲が切り替わったときにオフセットをリセットしない",
+    "settings_singer_colors": "歌手ごとの色を歌詞に反映する",
     "settings_fast_mode": "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)"
   },
   "en": {
@@ -59,6 +60,7 @@
     "settings_saved": "Settings saved",
     "settings_sync_offset": "Lyrics sync offset",
     "settings_sync_offset_save": "Don't reset offset when the song changes",
+    "settings_singer_colors": "Apply singer colors to lyrics",
     "settings_fast_mode": "Fast Load Mode (May reduce accuracy for covers)"
   },
   "ko": {
@@ -90,6 +92,7 @@
     "settings_saved": "설정을 저장했습니다",
     "settings_sync_offset": "가사 동기 오프셋",
     "settings_sync_offset_save": "곡이 바뀌어도 오프셋을 초기화하지 않기",
+    "settings_singer_colors": "가수별 색상을 가사에 적용",
     "settings_fast_mode": "고속 로딩 모드 (커버 곡 정확도가 낮아질 수 있음)"
   },
   "zh": {
@@ -121,6 +124,7 @@
     "settings_saved": "已保存设置",
     "settings_sync_offset": "歌词同步偏移",
     "settings_sync_offset_save": "切歌时不重置偏移",
+    "settings_singer_colors": "将歌手颜色应用到歌词",
     "settings_fast_mode": "快速加载模式 (翻唱歌曲准确度可能降低)"
   }
 }

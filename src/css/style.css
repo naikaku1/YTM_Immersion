@@ -2443,7 +2443,6 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 }
 
 
-#ytm-fallback-toast,
 #ytm-toast {
   position: fixed;
   top: 16px;
@@ -2462,10 +2461,37 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   transition: opacity 0.25s ease-out, transform 0.25s ease-out;
 }
 
-#ytm-fallback-toast.visible,
 #ytm-toast.visible {
   opacity: 1;
   transform: translateY(4px);
+}
+
+#ytm-fallback-toast {
+  position: fixed;
+  right: 18px;
+  /* Keep the quiet status chip just above the floating player bar. */
+  bottom: calc(52px + (80px * var(--ytm-ui-scale, 1)));
+  max-width: min(280px, calc(100vw - 36px));
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(20, 20, 24, 0.72);
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(8px);
+  z-index: 2999;
+  opacity: 0;
+  transform: translateY(5px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#ytm-fallback-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .ytm-upload-menu-item.ytm-upload-menu-item-disabled {
@@ -3388,6 +3414,51 @@ body.ytm-custom-layout::before {
 
 .lyric-line.sub-vocal .lyric-main {
   text-align: right;
+}
+
+/* Singer metadata: odd-numbered singers stay left, even-numbered singers right. */
+.lyric-line.singer-odd {
+  text-align: left;
+  padding-left: 0;
+  padding-right: 20px;
+  transform-origin: left;
+}
+
+.lyric-line.singer-even {
+  text-align: right;
+  padding-left: 20px;
+  padding-right: 40px;
+  transform-origin: right;
+}
+
+.lyric-line.singer-odd .lyric-main {
+  text-align: left;
+}
+
+.lyric-line.singer-even .lyric-main {
+  text-align: right;
+}
+
+.lyric-singer-name {
+  display: block;
+  margin-bottom: calc(4px * var(--ytm-ui-scale));
+  font-size: 0.42em;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  opacity: 0.72;
+}
+
+.lyric-line.singer-odd .lyric-singer-name {
+  text-align: left;
+}
+
+.lyric-line.singer-even .lyric-singer-name {
+  text-align: right;
+}
+
+body.ytm-singer-colors-enabled .lyric-line[data-singer-color] {
+  color: var(--ytm-singer-color);
 }
 
 /* 蟾ｦ荳翫�繝上Φ繝舌�繧ｬ繝ｼ繝｡繝九Η繝ｼ繧帝撼陦ｨ遉ｺ縺ｫ縺吶ｋ */

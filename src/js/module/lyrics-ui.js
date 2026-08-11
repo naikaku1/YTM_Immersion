@@ -13,22 +13,23 @@ const resolveDeepLTargetLang = (lang) => {
 
 const parseLRCInternal = (lrc) => {
   if (!lrc) return { lines: [], hasTs: false };
-  const tagTest = /\[\s*\d{1,2}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/;
+  const tagTest = /\[\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/;
 
   // タイムスタンプがない場合
   if (!tagTest.test(lrc)) {
     // 空行も保持して、翻訳時に行が詰まらないようにする
-    const lines = lrc.split(/\r?\n/).map(line => {
+    const lines = lrc.split(/\r?\n/).map((line, sourceIndex) => {
       const text = (line ?? '').replace(/^\s+|\s+$/g, '');
-      return { time: null, text };
+      return { time: null, text, source_index: sourceIndex };
     });
     return { lines, hasTs: false };
   }
 
   const lines = lrc.split(/\r?\n/);
   const result = [];
-  const tagExp = /\[\s*(\d{1,2})\s*:\s*(\d{2})\s*(?:[.:]\s*(\d{1,4})\s*)?\]/g;
+  const tagExp = /\[\s*(\d{1,3})\s*:\s*(\d{2})\s*(?:[.:]\s*(\d{1,4})\s*)?\]/g;
 
+  let sourceIndex = 0;
   lines.forEach(lineStr => {
     const line = (lineStr ?? '').trim();
     if (!line) return;
@@ -47,10 +48,11 @@ const parseLRCInternal = (lrc) => {
     }
 
     if (tags.length > 0) {
+      const currentSourceIndex = sourceIndex++;
       // Strip all tags to get the line text
-      const text = line.replace(/\[\s*\d{1,2}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/g, '').trim();
+      const text = line.replace(/\[\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/g, '').trim();
       tags.forEach(time => {
-        result.push({ time, text });
+        result.push({ time, text, source_index: currentSourceIndex });
       });
     }
   });
@@ -64,6 +66,185 @@ const parseBaseLRC = (lrc) => {
   const { lines, hasTs } = parseLRCInternal(lrc);
   hasTimestamp = hasTs;
   return lines;
+};
+
+const MAX_SINGER_NUMBER = 32;
+
+const normalizeSingerNumber = (value) => {
+  if (typeof value === 'boolean') return 1;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1 && number <= MAX_SINGER_NUMBER ? number : 1;
+};
+
+const normalizeSingerColor = (value) => {
+  const color = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : '';
+};
+
+const normalizeSingerLineText = (line) => String(line?.text ?? line ?? '')
+  .normalize('NFKC')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const singerMetadataSource = (metadata) => (
+  metadata?.effective && typeof metadata.effective === 'object'
+    ? { ...metadata, ...metadata.effective }
+    : metadata
+);
+
+const hasSingerDisplayMetadata = (metadata, canonicalLines = null) => {
+  const source = singerMetadataSource(metadata);
+  if (!source || typeof source !== 'object') return false;
+  if (
+    Array.isArray(canonicalLines) &&
+    !singerMetadataMatchesCanonicalLines(source, canonicalLines)
+  ) return false;
+  const assignments = Array.isArray(source.line_singers) ? source.line_singers : [];
+  if (assignments.some(number => normalizeSingerNumber(number) !== 1)) return true;
+  const singers = source.singers && typeof source.singers === 'object' && !Array.isArray(source.singers)
+    ? source.singers
+    : {};
+  return Object.values(singers).some(profile => (
+    profile && typeof profile === 'object' && (
+      String(profile.artist_name || profile.artist || '').trim() ||
+      normalizeSingerColor(profile.color)
+    )
+  ));
+};
+
+const countCanonicalSingerLines = (canonicalLines) => {
+  if (!Array.isArray(canonicalLines)) return null;
+  const indexes = new Set();
+  canonicalLines.forEach((line, index) => {
+    const rawSourceIndex = Number(line?.source_index);
+    indexes.add(Number.isInteger(rawSourceIndex) && rawSourceIndex >= 0 ? rawSourceIndex : index);
+  });
+  return indexes.size;
+};
+
+const singerMetadataMatchesCanonicalLines = (metadata, canonicalLines) => {
+  const source = singerMetadataSource(metadata);
+  const declaredLineCount = Number(source?.line_count);
+  if (!Number.isInteger(declaredLineCount) || declaredLineCount < 0) return true;
+  return countCanonicalSingerLines(canonicalLines) === declaredLineCount;
+};
+
+const clearSingerFields = (line) => {
+  if (!line || typeof line !== 'object') return line;
+  const next = { ...line };
+  delete next.singerNumber;
+  delete next.singerArtistName;
+  delete next.singerColor;
+  delete next.showSingerName;
+  return next;
+};
+
+const applySingerMetadataToLines = (lines, metadata, options = {}) => {
+  if (!Array.isArray(lines)) return [];
+  const source = singerMetadataSource(metadata);
+  if (!source || typeof source !== 'object') return lines.map(clearSingerFields);
+
+  const assignments = Array.isArray(source.line_singers)
+    ? source.line_singers.map(normalizeSingerNumber)
+    : [];
+  const singers = source.singers && typeof source.singers === 'object' && !Array.isArray(source.singers)
+    ? source.singers
+    : {};
+  const hasCanonicalLineContract = Array.isArray(options.canonicalLines);
+  const canonicalLines = hasCanonicalLineContract ? options.canonicalLines : [];
+  const sameSource = options.sameSource !== false;
+  if (
+    hasCanonicalLineContract &&
+    !singerMetadataMatchesCanonicalLines(source, canonicalLines)
+  ) return lines.map(clearSingerFields);
+  const resolvedAssignments = new Array(lines.length).fill(null);
+
+  if (sameSource || !canonicalLines.length) {
+    lines.forEach((line, index) => {
+      if (line?.duetSide === 'right') return;
+      const rawSourceIndex = Number(line?.source_index);
+      const sourceIndex = Number.isInteger(rawSourceIndex) && rawSourceIndex >= 0 ? rawSourceIndex : index;
+      resolvedAssignments[index] = normalizeSingerNumber(assignments[sourceIndex]);
+    });
+  } else {
+    const queues = new Map();
+    const seenSourceIndexes = new Set();
+    canonicalLines.forEach((line, index) => {
+      const rawSourceIndex = Number(line?.source_index);
+      const sourceIndex = Number.isInteger(rawSourceIndex) && rawSourceIndex >= 0 ? rawSourceIndex : index;
+      if (seenSourceIndexes.has(sourceIndex)) return;
+      seenSourceIndexes.add(sourceIndex);
+      const key = normalizeSingerLineText(line);
+      if (!queues.has(key)) queues.set(key, []);
+      queues.get(key).push({ sourceIndex, number: normalizeSingerNumber(assignments[sourceIndex]) });
+    });
+
+    const usedCanonicalIndexes = new Set();
+    lines.forEach((line, displayIndex) => {
+      if (line?.duetSide === 'right') return;
+      const queue = queues.get(normalizeSingerLineText(line));
+      while (queue?.length && usedCanonicalIndexes.has(queue[0].sourceIndex)) queue.shift();
+      if (!queue?.length) return;
+      const match = queue.shift();
+      usedCanonicalIndexes.add(match.sourceIndex);
+      resolvedAssignments[displayIndex] = match.number;
+    });
+
+    lines.forEach((line, displayIndex) => {
+      if (line?.duetSide === 'right' || resolvedAssignments[displayIndex] !== null) return;
+      const rawSourceIndex = Number(line?.source_index);
+      const sourceIndex = Number.isInteger(rawSourceIndex) && rawSourceIndex >= 0 ? rawSourceIndex : displayIndex;
+      resolvedAssignments[displayIndex] = normalizeSingerNumber(assignments[sourceIndex]);
+    });
+  }
+
+  let previousDisplaySingerNumber = null;
+  return lines.map((line, index) => {
+    const next = clearSingerFields(line);
+    const number = resolvedAssignments[index];
+    if (!next || number === null) return next;
+    const profile = singers[String(number)] && typeof singers[String(number)] === 'object'
+      ? singers[String(number)]
+      : {};
+    const artistName = String(profile.artist_name || profile.artist || '').trim().slice(0, 200);
+    const hasDisplayText = !!normalizeSingerLineText(next);
+    const showSingerName = hasDisplayText && !!artistName && previousDisplaySingerNumber !== number;
+    if (hasDisplayText) previousDisplaySingerNumber = number;
+    return {
+      ...next,
+      singerNumber: number,
+      singerArtistName: artistName,
+      singerColor: normalizeSingerColor(profile.color),
+      showSingerName,
+    };
+  });
+};
+
+const applySingerMetadataToRow = (row, line, metadata) => {
+  if (!row || !line || line.singerNumber === null || line.singerNumber === undefined) return;
+  const number = normalizeSingerNumber(line.singerNumber);
+  const isEven = number % 2 === 0;
+  row.dataset.singerNumber = String(number);
+  row.classList.toggle('singer-odd', !isEven);
+  row.classList.toggle('singer-even', isEven);
+
+  const artistName = String(line.singerArtistName || '').trim();
+  row.dataset.singerLabel = artistName || `Singer ${number}`;
+  const color = normalizeSingerColor(line.singerColor);
+  if (color) {
+    row.dataset.singerColor = color;
+    row.style.setProperty('--ytm-singer-color', color);
+  } else {
+    delete row.dataset.singerColor;
+    row.style.removeProperty('--ytm-singer-color');
+  }
+
+  if (artistName && line.showSingerName) {
+    const label = (row.ownerDocument || document).createElement('span');
+    label.className = 'lyric-singer-name';
+    label.textContent = artistName;
+    row.appendChild(label);
+  }
 };
 
 // ===== duet helpers =====
@@ -104,16 +285,24 @@ const extractDynamicLineText = (line) => {
   return '';
 };
 
+const toFiniteDynamicTime = (value) => {
+  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
 const getDynamicLineStartSec = (line) => {
-  if (typeof line?.startTimeMs === 'number') return line.startTimeMs / 1000;
-  if (typeof line?.startTimeMs === 'string') {
-    const n = Number(line.startTimeMs);
-    if (!Number.isNaN(n)) return n / 1000;
+  for (const value of [line?.startTimeMs, line?.start_ms, line?.startMs]) {
+    const milliseconds = toFiniteDynamicTime(value);
+    if (milliseconds !== null) return milliseconds / 1000;
   }
-  if (typeof line?.time === 'number') return line.time;
+  const seconds = toFiniteDynamicTime(line?.time);
+  if (seconds !== null) return seconds;
   if (Array.isArray(line?.chars) && line.chars.length) {
     const ts = line.chars
-      .map(c => (typeof c?.t === 'number' ? c.t : null))
+      .map(char => [char?.t, char?.startTimeMs, char?.start_ms, char?.startMs, char?.time]
+        .map(toFiniteDynamicTime)
+        .find(value => value !== null) ?? null)
       .filter(v => v != null);
     if (ts.length) return Math.min(...ts) / 1000;
   }
@@ -129,23 +318,20 @@ const getDynamicLineEndSec = (line) => {
   const startSec = getDynamicLineStartSec(line);
   let endSec = null;
 
-  if (typeof line?.endTimeMs === 'number' && Number.isFinite(line.endTimeMs)) {
-    endSec = line.endTimeMs / 1000;
-  } else if (typeof line?.endTimeMs === 'string') {
-    const n = Number(line.endTimeMs);
-    if (Number.isFinite(n)) endSec = n / 1000;
+  for (const value of [line?.endTimeMs, line?.end_ms, line?.endMs, line?.endTime]) {
+    if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) continue;
+    const milliseconds = Number(value);
+    if (Number.isFinite(milliseconds)) {
+      endSec = milliseconds / 1000;
+      break;
+    }
   }
 
   if (Array.isArray(line?.chars) && line.chars.length) {
     const lastCharMs = line.chars
-      .map(ch => {
-        if (typeof ch?.t === 'number' && Number.isFinite(ch.t)) return ch.t;
-        if (typeof ch?.t === 'string') {
-          const n = Number(ch.t);
-          if (Number.isFinite(n)) return n;
-        }
-        return null;
-      })
+      .map(char => [char?.t, char?.startTimeMs, char?.start_ms, char?.startMs, char?.time]
+        .map(toFiniteDynamicTime)
+        .find(value => value !== null) ?? null)
       .filter(v => v != null)
       .reduce((max, v) => Math.max(max, v), Number.NEGATIVE_INFINITY);
 
@@ -1528,6 +1714,12 @@ const getCurrentVideoId = () => {
 chrome.runtime.onMessage.addListener((msg) => {
   try {
     if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'LYRICS_DATA_UPDATE') {
+      void applyLateLyricsUpgrade(msg.payload || {}).catch((error) => {
+        console.warn('[YTM] Failed to apply late LRCHub lyrics:', error);
+      });
+      return;
+    }
     if (msg.type !== 'LYRICS_META_UPDATE') return;
     const p = msg.payload || {};
     const curVid = getCurrentVideoId();
@@ -1593,6 +1785,181 @@ const showToast = (text) => {
     el.classList.remove('visible');
   }, 5000);
 };
+
+let fallbackToastTimer = null;
+let lyricsCacheWriteQueue = Promise.resolve();
+
+function enqueueLyricsCacheWrite(key, createValue, isCurrent) {
+  const task = lyricsCacheWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (typeof isCurrent === 'function' && !isCurrent()) return false;
+      const value = typeof createValue === 'function' ? await createValue() : createValue;
+      if (typeof isCurrent === 'function' && !isCurrent()) return false;
+      await storage.set(key, value);
+      return true;
+    });
+  lyricsCacheWriteQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+function hideFallbackNotice() {
+  if (fallbackToastTimer) clearTimeout(fallbackToastTimer);
+  fallbackToastTimer = null;
+  const el = document.getElementById('ytm-fallback-toast');
+  if (el) el.classList.remove('visible');
+}
+
+function showFallbackNotice() {
+  let el = document.getElementById('ytm-fallback-toast');
+  if (!el) {
+    el = createEl('div', 'ytm-fallback-toast', '', 'LrcLib の歌詞を一時表示しています');
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  el.classList.add('visible');
+  if (fallbackToastTimer) clearTimeout(fallbackToastTimer);
+  fallbackToastTimer = setTimeout(() => {
+    fallbackToastTimer = null;
+    el.classList.remove('visible');
+  }, 4500);
+}
+
+function updateLyricsSourceState(payload, notify = true) {
+  currentLyricsSource = String(payload?.lyricsSource || payload?.source || '').trim().toLowerCase() || null;
+  isFallbackLyrics = !!payload?.fallbackUsed &&
+    currentLyricsSource === 'lrclib' &&
+    !!config.useLrcLibFallback &&
+    (config.lyricSourceMode || 'standard') === 'standard';
+
+  if (isFallbackLyrics && notify) showFallbackNotice();
+  else if (!isFallbackLyrics) hideFallbackNotice();
+}
+
+const hasCharacterSyncedLines = (value) => (
+  Array.isArray(value) && value.some(line => (
+    Array.isArray(line?.chars) &&
+    line.chars.some(char => {
+      const hasText = [char?.c, char?.char, char?.text, char?.caption, char?.value]
+        .some(text => String(text ?? '').length > 0);
+      const hasTime = [char?.t, char?.startTimeMs, char?.start_ms, char?.startMs, char?.time]
+        .some(time => time !== null && time !== undefined &&
+          !(typeof time === 'string' && !time.trim()) && Number.isFinite(Number(time)));
+      return hasText && hasTime;
+    })
+  ))
+);
+
+const selectLyricsPayload = (payload) => {
+  const lyrics = typeof payload?.lyrics === 'string' ? payload.lyrics : '';
+  const animatedLyrics = typeof payload?.animated_lyrics === 'string' ? payload.animated_lyrics : '';
+  const nextDynamicLines = hasCharacterSyncedLines(payload?.dynamicLines)
+    ? payload.dynamicLines
+    : null;
+  const useAnimated = !nextDynamicLines && config.useAnimatedCaptions && animatedLyrics.trim();
+  const quality = nextDynamicLines
+    ? 4
+    : (useAnimated
+      ? 3
+      : (/\[\d+:\d{2}(?:[.:]\d{1,3})?\]/.test(lyrics) ? 2 : (lyrics.trim() ? 1 : 0)));
+  return {
+    text: useAnimated ? animatedLyrics : lyrics,
+    lyrics,
+    animatedLyrics,
+    dynamicLines: nextDynamicLines,
+    quality,
+  };
+};
+
+async function applyLateLyricsUpgrade(payload) {
+  if (!payload || payload.lyricsSource !== 'lrchub' || !payload.success) return;
+  if (!currentKey || payload.track_key !== currentKey) return;
+  if (!activeLyricsRequestId || payload.request_id !== activeLyricsRequestId) return;
+  if (payload.video_id && currentLyricsVideoId && payload.video_id !== currentLyricsVideoId) return;
+  // A manual candidate choice is an explicit user decision; never replace it
+  // with a request that started before that choice.
+  if (selectedCandidateId || currentLyricsResultPriority >= 3) return;
+
+  const selected = selectLyricsPayload(payload);
+  if (!selected.text || !selected.text.trim()) return;
+  if (currentLyricsResultPriority === 2 && selected.quality <= currentLyricsQuality) return;
+  const requestId = activeLyricsRequestId;
+  const targetKey = currentKey;
+  const targetVideoId = currentLyricsVideoId;
+  currentLyricsResultPriority = 2;
+  currentLyricsQuality = selected.quality;
+
+  lyricsCandidates = Array.isArray(payload.candidates) ? payload.candidates : null;
+  lyricsRequests = Array.isArray(payload.requests) ? payload.requests : null;
+  lyricsConfig = payload.config || null;
+  lyricsTranslationMap = {
+    ...normalizeTranslationsToLrcMapLocal(payload.translations),
+    ...normalizeTranslationsToLrcMapLocal(payload.lrcMap),
+  };
+  dynamicLines = selected.dynamicLines;
+  duetSubLyricsRaw = typeof payload.subLyrics === 'string' ? payload.subLyrics : '';
+  duetSubDynamicLines = null;
+  _duetExcludedTimes = new Set();
+  selectedCandidateId = null;
+  setLyricsMeaningData(payload);
+  syncLyricsLockState();
+  refreshCandidateMenu();
+  refreshLockMenu();
+
+  const isCurrent = () => (
+    requestId === activeLyricsRequestId &&
+    targetKey === currentKey &&
+    targetVideoId === currentLyricsVideoId &&
+    currentLyricsResultPriority === 2 &&
+    currentLyricsQuality === selected.quality
+  );
+  void requestSingerMetadataForLyrics(
+    payload.record_id,
+    selected.lyrics || selected.text,
+    { trackKey: targetKey, videoId: targetVideoId }
+  );
+  await applyLyricsText(selected.text);
+  if (!isCurrent()) return;
+  updateLyricsSourceState(payload, false);
+  clearLyricsLateRetry(targetKey);
+
+  // Cache writes from the initial fallback callback and the late LRCHub event
+  // share one queue, so the higher-priority LRCHub record always lands last.
+  try {
+    await enqueueLyricsCacheWrite(
+      targetKey,
+      async () => {
+        const existing = await storage.get(targetKey);
+        const existingRecord = existing && typeof existing === 'object' ? existing : {};
+        return {
+          ...existingRecord,
+          cacheVersion: LYRICS_CACHE_VERSION,
+          video_id: targetVideoId || payload.video_id || null,
+          record_id: payload.record_id || null,
+          lyrics: selected.lyrics || selected.text,
+          animated_lyrics: selected.animatedLyrics || null,
+          dynamicLines: selected.dynamicLines || null,
+          noLyrics: false,
+          subLyrics: duetSubLyricsRaw,
+          meaningData: lyricsMeaning || null,
+          candidates: lyricsCandidates || null,
+          lrcMap: lyricsTranslationMap || null,
+          requests: lyricsRequests || null,
+          config: lyricsConfig || null,
+          lockState: lyricsLockState || null,
+          lyricsSource: 'lrchub',
+          fallbackUsed: false,
+          lyricsQuality: selected.quality,
+          offset_ms: Number.isFinite(Number(payload.offset_ms)) ? Number(payload.offset_ms) : 0,
+        };
+      },
+      isCurrent
+    );
+  } catch (error) {
+    console.warn('[YTM] Failed to cache late LRCHub lyrics:', error);
+  }
+}
 
 const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;')
@@ -2452,8 +2819,8 @@ async function applyTranslations(baseLines, youtubeUrl) {
         if (res?.success) {
           lrcMap = {
             ...lrcMap,
-            ...normalizeTranslationsToLrcMapLocal(res.lrcMap),
-            ...normalizeTranslationsToLrcMapLocal(res.translations)
+            ...normalizeTranslationsToLrcMapLocal(res.translations),
+            ...normalizeTranslationsToLrcMapLocal(res.lrcMap)
           };
         }
       }
@@ -2611,6 +2978,7 @@ function normalizeDynamicLinesToCharLevel(dynLines) {
   const toMs = (v) => {
     if (typeof v === 'number' && Number.isFinite(v)) return v;
     if (typeof v === 'string') {
+      if (!v.trim()) return null;
       const n = Number(v);
       if (Number.isFinite(n)) return n;
     }
@@ -2619,12 +2987,19 @@ function normalizeDynamicLinesToCharLevel(dynLines) {
 
   const getLineStartMs = (line) => {
     if (!line) return null;
-    return toMs(line.startTimeMs) ?? toMs(line.time) ?? null;
+    return toMs(line.startTimeMs) ?? toMs(line.start_ms) ?? toMs(line.startMs) ?? toMs(line.time) ?? null;
   };
 
   const getCharStartMs = (ch) => {
     if (!ch) return null;
-    return toMs(ch.t) ?? toMs(ch.time) ?? toMs(ch.startTimeMs) ?? null;
+    return toMs(ch.t) ?? toMs(ch.startTimeMs) ?? toMs(ch.start_ms) ?? toMs(ch.startMs) ?? toMs(ch.time) ?? null;
+  };
+
+  const getCharText = (ch) => {
+    if (!ch || typeof ch !== 'object') return '';
+    const raw = [ch.c, ch.char, ch.text, ch.caption, ch.value]
+      .find(value => value !== null && value !== undefined && String(value).length > 0) ?? '';
+    return String(raw);
   };
 
   const isWordChunk = (s) => {
@@ -2657,6 +3032,17 @@ function normalizeDynamicLinesToCharLevel(dynLines) {
   for (let li = 0; li < dynLines.length; li++) {
     const line = dynLines[li];
     if (!line || !Array.isArray(line.chars) || line.chars.length === 0) continue;
+
+    const rawLineStartMs = getLineStartMs(line) ?? getCharStartMs(line.chars[0]) ?? 0;
+    line.chars = line.chars.map(ch => ({
+      ...(ch || {}),
+      c: getCharText(ch),
+      t: getCharStartMs(ch) ?? rawLineStartMs,
+    }));
+    if (typeof line.text !== 'string' || !line.text) {
+      line.text = line.chars.map(ch => ch.c).join('');
+    }
+    if (toMs(line.startTimeMs) === null) line.startTimeMs = rawLineStartMs;
 
     // detect if any "char" item is actually a multi-character chunk (word)
     const hasChunk = line.chars.some(ch => isWordChunk(ch?.c));
@@ -2707,8 +3093,10 @@ function normalizeDynamicLinesToCharLevel(dynLines) {
 
 async function applyLyricsText(rawLyrics) {
   const keyAtStart = currentKey;
+  const videoIdAtStart = currentLyricsVideoId;
+  const applyEpoch = ++lyricsApplyEpoch;
   if (!rawLyrics || typeof rawLyrics !== 'string' || !rawLyrics.trim()) {
-    if (keyAtStart !== currentKey) return;
+    if (keyAtStart !== currentKey || videoIdAtStart !== currentLyricsVideoId || applyEpoch !== lyricsApplyEpoch) return;
     lyricsData = [];
     hasTimestamp = false;
     animatedCaptionData = null;
@@ -2720,7 +3108,18 @@ async function applyLyricsText(rawLyrics) {
   const timedTextData = parseTimedTextAnimation(rawLyrics);
   let parsed = null;
   if (timedTextData) {
-    if (config.useAnimatedCaptions) {
+    if (config.useAnimatedCaptions && !hasCharacterSyncedLines(dynamicLines)) {
+      const canonicalLyrics = String(currentSingerCanonicalLyrics || '');
+      const canonicalSingerLines = canonicalLyrics.trim()
+        ? parseLRCInternal(canonicalLyrics).lines
+        : [];
+      const useSingerLayout = hasSingerDisplayMetadata(currentSingerMetadata, canonicalSingerLines);
+      if (
+        useSingerLayout &&
+        canonicalLyrics.trim() && canonicalLyrics.trim() !== rawLyrics.trim()
+      ) {
+        return applyLyricsText(canonicalLyrics);
+      }
       lyricsData = timedTextData.plainLines || [];
       dynamicLines = null;
       duetSubDynamicLines = null;
@@ -2769,8 +3168,20 @@ async function applyLyricsText(rawLyrics) {
       finalLines = translated;
     }
   }
-  if (keyAtStart !== currentKey) return;
+  if (
+    keyAtStart !== currentKey ||
+    videoIdAtStart !== currentLyricsVideoId ||
+    applyEpoch !== lyricsApplyEpoch
+  ) return;
 
+  const canonicalLyrics = String(currentSingerCanonicalLyrics || '');
+  const canonicalLines = canonicalLyrics.trim()
+    ? parseLRCInternal(canonicalLyrics).lines
+    : parsed;
+  finalLines = applySingerMetadataToLines(finalLines, currentSingerMetadata, {
+    canonicalLines,
+    sameSource: !canonicalLyrics.trim() || canonicalLyrics.trim() === rawLyrics.trim(),
+  });
   finalLines = collapseCrossSideDuplicateLyrics(finalLines);
 
   // Normalize Dynamic lyrics: expand "word chunks" into character-level timings
@@ -2797,6 +3208,17 @@ async function applyLyricsText(rawLyrics) {
 const getCandidateId = (cand, idx = 0) => {
   if (!cand || typeof cand !== 'object') return String(idx);
   return String(cand.id || cand.candidate_id || cand.path || cand.file || cand.filename || cand.name || cand.title || idx);
+};
+
+const getCandidateRecordId = (candidate) => {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const id = candidate.record_id || candidate.recordId ||
+    candidate.provider_meta?.record_id || candidate.provider_meta?.recordId ||
+    candidate.providerMeta?.record_id || candidate.providerMeta?.recordId ||
+    candidate.candidate_id ||
+    candidate.lyrics_id || candidate.lyric_id || candidate.record?.record_id ||
+    candidate.record?.recordId || candidate.record?.id || null;
+  return id === null || id === undefined || id === '' ? null : String(id);
 };
 
 const buildCandidateLabel = (cand, idx = 0) => {
@@ -2842,6 +3264,106 @@ const safeRuntimeSendMessage = (message) => {
   });
 };
 
+const refreshRenderedSingerMetadata = async () => {
+  const canonicalLyrics = String(currentSingerCanonicalLyrics || '');
+  const renderedLyrics = String(lastRawLyricsText || '');
+  const canonicalSingerLines = canonicalLyrics.trim()
+    ? parseLRCInternal(canonicalLyrics).lines
+    : [];
+  const useSingerLayout = hasSingerDisplayMetadata(currentSingerMetadata, canonicalSingerLines);
+
+  // Animated captions have their own free-positioned cue layout. When singer
+  // metadata changes alignment, color, or labels, use the canonical line
+  // layout so that contract remains visible and deterministic.
+  if (
+    useSingerLayout &&
+    canonicalLyrics.trim() && renderedLyrics.trim() &&
+    canonicalLyrics.trim() !== renderedLyrics.trim() &&
+    document.body.classList.contains('ytm-animated-caption-mode')
+  ) {
+    await applyLyricsText(canonicalLyrics);
+    return;
+  }
+
+  if (!Array.isArray(lyricsData) || !lyricsData.length) return;
+  const canonicalLines = canonicalLyrics.trim()
+    ? parseLRCInternal(canonicalLyrics).lines
+    : [];
+  const sameSource = !canonicalLyrics.trim() || canonicalLyrics.trim() === renderedLyrics.trim();
+  lyricsData = applySingerMetadataToLines(lyricsData, currentSingerMetadata, {
+    canonicalLines,
+    sameSource,
+  });
+  renderLyrics(lyricsData);
+};
+
+const requestSingerMetadataForLyrics = async (recordId, canonicalLyrics, identity = {}) => {
+  const normalizedRecordId = String(recordId || '').trim();
+  const targetKey = identity.trackKey || currentKey;
+  const targetVideoId = String(identity.videoId ?? currentLyricsVideoId ?? getCurrentVideoId() ?? '');
+  const nextCanonicalLyrics = typeof canonicalLyrics === 'string' ? canonicalLyrics : '';
+  if (
+    targetKey !== currentKey ||
+    targetVideoId !== String(currentLyricsVideoId || '')
+  ) return null;
+
+  const requestKey = normalizedRecordId
+    ? `${targetKey || ''}///${targetVideoId}///${normalizedRecordId}`
+    : '';
+  const canonicalChanged = nextCanonicalLyrics !== currentSingerCanonicalLyrics;
+  const metadataContextChanged = requestKey !== currentSingerMetadataKey;
+
+  currentLyricsRecordId = normalizedRecordId || null;
+  currentSingerCanonicalLyrics = nextCanonicalLyrics;
+  if (metadataContextChanged) currentSingerMetadata = null;
+
+  if (!normalizedRecordId) {
+    singerMetadataRequestSequence += 1;
+    singerMetadataRequestKey = '';
+    currentSingerMetadataKey = '';
+    currentSingerMetadata = null;
+    await refreshRenderedSingerMetadata();
+    return null;
+  }
+  if (!metadataContextChanged && currentSingerMetadata) {
+    if (canonicalChanged) await refreshRenderedSingerMetadata();
+    return currentSingerMetadata;
+  }
+
+  if (singerMetadataRequestKey === requestKey) return null;
+  singerMetadataRequestKey = requestKey;
+  const requestSequence = ++singerMetadataRequestSequence;
+  const response = await safeRuntimeSendMessage({
+    type: 'GET_LYRIC_SINGERS',
+    payload: {
+      record_id: normalizedRecordId,
+      video_id: targetVideoId || null,
+      youtube_url: getCurrentVideoUrl(),
+    },
+  });
+
+  if (requestSequence !== singerMetadataRequestSequence) return null;
+  singerMetadataRequestKey = '';
+  if (
+    targetKey !== currentKey ||
+    targetVideoId !== String(currentLyricsVideoId || '') ||
+    normalizedRecordId !== String(currentLyricsRecordId || '')
+  ) return null;
+
+  const metadata = response?.success && response.singerMetadata && typeof response.singerMetadata === 'object'
+    ? response.singerMetadata
+    : null;
+  if (metadata?.record_id && String(metadata.record_id) !== normalizedRecordId) return null;
+  if (metadata) {
+    currentSingerMetadata = metadata;
+    currentSingerMetadataKey = requestKey;
+  } else if (currentSingerMetadataKey !== requestKey) {
+    currentSingerMetadata = null;
+  }
+  await refreshRenderedSingerMetadata();
+  return currentSingerMetadata;
+};
+
 const formatPreviewTime = (seconds) => {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '--:--';
   const total = Math.max(0, Math.floor(seconds));
@@ -2859,6 +3381,116 @@ const getCurrentPlaybackSeconds = () => {
     }
   } catch (e) { }
   return null;
+};
+
+// Resolve the active lyric from the media clock. This remains accurate when a
+// background tab throttles rAF and its highlighted DOM row becomes stale.
+// null means timed lyric data is unavailable; '' is an intentional lyric gap.
+const getCurrentPlaybackLyricText = () => {
+  const meta = getMetadata();
+  if (meta) {
+    const metadataKey = `${meta.title}///${meta.artist}`;
+    if (currentKey && currentKey !== metadataKey) return '';
+  }
+
+  const currentTime = getCurrentPlaybackTimeSec();
+  if (!Number.isFinite(currentTime)) return null;
+
+  if (
+    config.useAnimatedCaptions &&
+    animatedCaptionData &&
+    Array.isArray(animatedCaptionData.events)
+  ) {
+    const tMs = Math.max(0, currentTime * 1000);
+    const activeEvents = animatedCaptionData.events
+      .filter(event => tMs + 40 >= event.startMs && tMs <= event.endMs + 40)
+      .slice(-24);
+    const currentEvent = activeEvents[activeEvents.length - 1];
+    return currentEvent ? String(currentEvent.text || '').trim() : '';
+  }
+
+  if (!Array.isArray(lyricsData) || !lyricsData.length || !hasTimestamp) return null;
+
+  let primaryIndex = -1;
+  for (let i = 0; i < lyricsData.length; i++) {
+    const lineTime = lyricsData[i]?.time;
+    if (typeof lineTime !== 'number' || !Number.isFinite(lineTime)) continue;
+    if (lineTime > currentTime) break;
+    primaryIndex = i;
+  }
+  if (primaryIndex < 0) return '';
+
+  const activeIndices = new Set([primaryIndex]);
+  const currentLineTime = lyricsData[primaryIndex]?.time;
+  if (typeof currentLineTime === 'number') {
+    for (let i = primaryIndex - 1; i >= 0; i--) {
+      if (!isSameTimestamp(lyricsData[i]?.time, currentLineTime)) break;
+      activeIndices.add(i);
+    }
+    for (let i = primaryIndex + 1; i < lyricsData.length; i++) {
+      if (!isSameTimestamp(lyricsData[i]?.time, currentLineTime)) break;
+      activeIndices.add(i);
+    }
+  }
+
+  if (activeIndices.size === 1 && primaryIndex > 0) {
+    const previousIndex = primaryIndex - 1;
+    const previousTime = lyricsData[previousIndex]?.time;
+    const currentSide = lyricsData[primaryIndex]?.duetSide;
+    const previousSide = lyricsData[previousIndex]?.duetSide;
+    const isClosePreviousLine = typeof currentLineTime === 'number' &&
+      typeof previousTime === 'number' &&
+      (currentLineTime - previousTime) <= 1.0;
+    const isDifferentDuetSide = currentSide && previousSide && currentSide !== previousSide;
+
+    if (isClosePreviousLine && !isDifferentDuetSide) {
+      const currentText = normalizeLyricCompareTextStrict(lyricsData[primaryIndex]?.text);
+      const previousText = normalizeLyricCompareTextStrict(lyricsData[previousIndex]?.text);
+      const sameDisplayedLyric = !!currentText &&
+        !!previousText &&
+        scoreLyricTextMatch(currentText, previousText) >= 100;
+      if (!sameDisplayedLyric) activeIndices.add(previousIndex);
+    }
+  }
+
+  lyricsData.forEach((line, lineIndex) => {
+    if (!activeIndices.has(lineIndex) && isLineDynamicallyActiveAtTime(line, currentTime)) {
+      activeIndices.add(lineIndex);
+    }
+  });
+
+  if (activeIndices.size > 1) {
+    const activeList = Array.from(activeIndices).sort((a, b) => a - b);
+    activeList.forEach((activeIndex) => {
+      const activeLine = lyricsData[activeIndex];
+      if (activeLine?.duetSide !== 'right') return;
+      const activeText = normalizeLyricCompareTextStrict(activeLine?.text);
+      if (!activeText) return;
+      const dedupeTolerance = Array.isArray(dynamicLines) && dynamicLines.length > 0
+        ? 5.0
+        : DUET_DUPLICATE_TOLERANCE;
+      const hasMatchingLeft = activeList.some((otherIndex) => {
+        if (otherIndex === activeIndex) return false;
+        const otherLine = lyricsData[otherIndex];
+        if (otherLine?.duetSide !== 'left') return false;
+        if (!isSameTimestamp(otherLine?.time, activeLine?.time, dedupeTolerance)) return false;
+        const otherText = normalizeLyricCompareTextStrict(otherLine?.text);
+        return !!otherText && scoreLyricTextMatch(otherText, activeText) >= 100;
+      });
+      if (hasMatchingLeft) activeIndices.delete(activeIndex);
+    });
+  }
+
+  return Array.from(activeIndices)
+    .sort((a, b) => a - b)
+    .map(index => String(lyricsData[index]?.text || lyricsData[index]?.rawLine || '').trim())
+    .filter((text, index, lines) => text && lines.indexOf(text) === index)
+    .join(' / ');
+};
+
+globalThis.YTMImmersionDiscordLyrics = {
+  ...(globalThis.YTMImmersionDiscordLyrics || {}),
+  getCurrentPlaybackLyricText,
 };
 
 const getCurrentRenderedLyricText = () => {
@@ -2959,14 +3591,32 @@ const pickPreviewInfoFromLyrics = (rawLyrics) => {
 
 async function ensureCandidateLyricsLoaded(candId) {
   if (!Array.isArray(lyricsCandidates) || !lyricsCandidates.length) return null;
+  const candidateListAtStart = lyricsCandidates;
+  const candidateKeyAtStart = currentKey;
+  const candidateVideoAtStart = currentLyricsVideoId || getCurrentVideoId() || '';
   const idx = lyricsCandidates.findIndex((cand, i) => getCandidateId(cand, i) === String(candId));
   if (idx < 0) return null;
   const cand = lyricsCandidates[idx];
-  if (cand && typeof cand.lyrics === 'string' && cand.lyrics.trim()) return cand;
+  const candidateHasLyrics = cand && typeof cand.lyrics === 'string' && cand.lyrics.trim();
+  const candidateHasRecordReference = !!(
+    cand?.record_id || cand?.recordId || cand?.candidate_id || cand?.lyrics_id ||
+    cand?.lyric_id || cand?.record?.id || cand?.record?.record_id || cand?.record?.recordId
+  );
+  const candidateNeedsFullRecord = candidateHasRecordReference && cand?.lyricsComplete !== true;
+  const candidateAdvertisesDynamic = !!(
+    cand?.has_dynamic ||
+    cand?.hasDynamic ||
+    cand?.dynamic_lrc ||
+    cand?.dynamic_lyrics ||
+    cand?.dynamicLrc ||
+    cand?.dynamicLyrics
+  );
+  const candidateNeedsDynamic = candidateAdvertisesDynamic && !hasCharacterSyncedLines(cand?.dynamicLines);
+  if (candidateHasLyrics && !candidateNeedsDynamic && !candidateNeedsFullRecord) return cand;
 
   const payload = {
     youtube_url: getCurrentVideoUrl(),
-    video_id: getCurrentVideoId(),
+    video_id: candidateVideoAtStart,
     translate_to: getRequestedLrchubTranslateLangs(),
     candidate_id: getCandidateId(cand, idx),
     candidate: cand || null
@@ -2974,13 +3624,24 @@ async function ensureCandidateLyricsLoaded(candId) {
   console.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
   const res = await safeRuntimeSendMessage({ type: 'GET_CANDIDATE_LYRICS', payload });
   console.log('[CS] GET_CANDIDATE_LYRICS response:', res);
+  if (
+    currentKey !== candidateKeyAtStart ||
+    (currentLyricsVideoId || getCurrentVideoId() || '') !== candidateVideoAtStart ||
+    lyricsCandidates !== candidateListAtStart
+  ) return null;
   const hasResponseLyrics = typeof res?.lyrics === 'string' && res.lyrics.trim();
   const hasResponseAnimatedLyrics = typeof res?.animated_lyrics === 'string' && res.animated_lyrics.trim();
   if (res && res.success && (hasResponseLyrics || hasResponseAnimatedLyrics)) {
     const next = {
       ...(cand || {}),
+      record_id: res.record_id || cand?.record_id || cand?.recordId || null,
       lyrics: res.lyrics || cand?.lyrics || '',
+      lyricsComplete: res.lyricsComplete === true,
       animated_lyrics: res.animated_lyrics || cand?.animated_lyrics || null,
+      dynamicLines: hasCharacterSyncedLines(res.dynamicLines) ? res.dynamicLines : null,
+      offset_ms: Number.isFinite(Number(res.offset_ms)) ? Number(res.offset_ms) : 0,
+      lyricsSource: res.lyricsSource || 'lrchub',
+      fallbackUsed: false,
       meaningData: res.meaningData || cand?.meaningData || null,
       songSummary: res.songSummary || cand?.songSummary || null,
       comments: Array.isArray(res.comments) ? res.comments : (Array.isArray(cand?.comments) ? cand.comments : []),
@@ -3129,43 +3790,71 @@ function hideCandidateHoverPreview() {
 
 async function selectCandidateById(candId) {
   if (!Array.isArray(lyricsCandidates) || !lyricsCandidates.length) return;
+  const selectionKey = currentKey;
+  const selectionVideoId = currentLyricsVideoId || getCurrentVideoId() || '';
   let cand = lyricsCandidates.find((c, idx) => getCandidateId(c, idx) === String(candId));
   if (!cand) return;
-  if (!(typeof cand.lyrics === 'string' && cand.lyrics.trim())) {
-    cand = await ensureCandidateLyricsLoaded(candId);
-  }
+  // A search result can already contain line-synced lyrics while its
+  // character timings still need to be fetched from /api/record.
+  cand = await ensureCandidateLyricsLoaded(candId);
+  if (
+    currentKey !== selectionKey ||
+    (currentLyricsVideoId || getCurrentVideoId() || '') !== selectionVideoId
+  ) return;
   const hasCandidateLyrics = typeof cand?.lyrics === 'string' && cand.lyrics.trim();
   const hasCandidateAnimatedLyrics = typeof cand?.animated_lyrics === 'string' && cand.animated_lyrics.trim();
   if (!cand || (!hasCandidateLyrics && !hasCandidateAnimatedLyrics)) {
     showToast('この候補の歌詞データを読み込めませんでした');
     return;
   }
-  const nextLyricsText = (config.useAnimatedCaptions && hasCandidateAnimatedLyrics)
-    ? cand.animated_lyrics
-    : cand.lyrics;
+  const selectedPayload = selectLyricsPayload(cand);
+  const nextLyricsText = selectedPayload.text;
   selectedCandidateId = candId;
-  dynamicLines = null;
+  // Cancel any automatic late upgrade which belongs to the pre-selection
+  // request. A manual candidate choice must remain authoritative.
+  activeLyricsRequestId = null;
+  currentLyricsResultPriority = 3;
+  currentLyricsQuality = selectedPayload.quality;
+  dynamicLines = selectedPayload.dynamicLines;
   lyricsTranslationMap = {
-    ...normalizeTranslationsToLrcMapLocal(cand.lrcMap),
-    ...normalizeTranslationsToLrcMapLocal(cand.translations)
+    ...normalizeTranslationsToLrcMapLocal(cand.translations),
+    ...normalizeTranslationsToLrcMapLocal(cand.lrcMap)
   };
   setLyricsMeaningData(cand);
+  updateLyricsSourceState({ lyricsSource: 'lrchub', fallbackUsed: false }, false);
   duetSubDynamicLines = null;
   _duetExcludedTimes = new Set();
+  const candidateRecordId = getCandidateRecordId(cand);
+  void requestSingerMetadataForLyrics(
+    candidateRecordId,
+    selectedPayload.lyrics || nextLyricsText,
+    { trackKey: selectionKey, videoId: selectionVideoId }
+  );
   if (currentKey) {
     storage.set(currentKey, {
+      cacheVersion: LYRICS_CACHE_VERSION,
+      video_id: currentLyricsVideoId || getCurrentVideoId() || null,
+      record_id: candidateRecordId,
       lyrics: cand.lyrics,
       animated_lyrics: cand.animated_lyrics || null,
-      dynamicLines: null,
+      dynamicLines: dynamicLines || null,
       noLyrics: false,
       lrcMap: lyricsTranslationMap || null,
       meaningData: lyricsMeaning || null,
-      candidateId: cand.id || candId || null
+      candidateId: cand.id || candId || null,
+      lyricsSource: 'lrchub',
+      fallbackUsed: false,
+      lyricsQuality: selectedPayload.quality,
+      offset_ms: Number.isFinite(Number(cand.offset_ms)) ? Number(cand.offset_ms) : 0,
     });
   }
   await applyLyricsText(nextLyricsText);
+  if (
+    currentKey !== selectionKey ||
+    (currentLyricsVideoId || getCurrentVideoId() || '') !== selectionVideoId
+  ) return;
   const youtube_url = getCurrentVideoUrl();
-  const video_id = getCurrentVideoId();
+  const video_id = selectionVideoId;
   const candidate_id = cand.id || candId;
   try {
     chrome.runtime.sendMessage(
@@ -3176,11 +3865,17 @@ async function selectCandidateById(candId) {
     console.warn('[CS] SELECT_LYRICS_CANDIDATE failed to send', e);
   }
   const reloadKey = currentKey;
+  const reloadVideoId = selectionVideoId;
   setTimeout(() => {
     const metaNow = getMetadata();
     if (!metaNow) return;
     const keyNow = `${metaNow.title}///${metaNow.artist}`;
-    if (keyNow !== reloadKey) return;
+    if (
+      keyNow !== reloadKey ||
+      currentKey !== reloadKey ||
+      (currentLyricsVideoId || getCurrentVideoId() || '') !== reloadVideoId ||
+      (getCurrentVideoId() || '') !== reloadVideoId
+    ) return;
     storage.remove(reloadKey);
     loadLyrics(metaNow);
   }, 10000);
@@ -3582,6 +4277,8 @@ async function initSettings() {
   if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
   const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
   if (animatedCaptionStored !== null) config.useAnimatedCaptions = !!animatedCaptionStored;
+  const singerColorsStored = await storage.get('ytm_singer_colors_enabled');
+  if (singerColorsStored !== null) config.useSingerColors = !!singerColorsStored;
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
   config.lyricSourceMode = sourceModeStored || 'standard';
 
@@ -3798,6 +4495,10 @@ function renderSettingsPanel() {
                 <input type="checkbox" id="animated-caption-toggle">
               </label>
               <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_singer_colors')}</span>
+                <input type="checkbox" id="singer-colors-toggle">
+              </label>
+              <label class="setting-row toggle-label">
                 <span class="setting-name">歌詞の解説がある場合常に表示</span>
                 <input type="checkbox" id="meaning-always-toggle">
               </label>
@@ -3956,6 +4657,7 @@ function renderSettingsPanel() {
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
+  document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
   document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
 
@@ -4065,6 +4767,7 @@ function renderSettingsPanel() {
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
+    config.useSingerColors = document.getElementById('singer-colors-toggle').checked;
     config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
@@ -4085,6 +4788,7 @@ function renderSettingsPanel() {
       storage.set('ytm_apple_bg', config.appleBg),
       storage.set('ytm_low_cpu_mode', config.lowCpuMode),
       storage.set('ytm_animated_captions_enabled', config.useAnimatedCaptions),
+      storage.set('ytm_singer_colors_enabled', config.useSingerColors),
       storage.set('ytm_lrclib_fallback', config.useLrcLibFallback),
       storage.set(MEANING_ALWAYS_SHOW_KEY, config.alwaysShowMeaning),
       storage.set('ytm_main_lang', config.mainLang),
@@ -4101,6 +4805,10 @@ function renderSettingsPanel() {
     document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
     document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
     document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
+    document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
+    if (PipManager.pipWindow?.document) {
+      PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
+    }
     document.documentElement.style.setProperty('--ytm-lyric-weight', config.lyricWeight);
     document.documentElement.style.setProperty('--ytm-bg-brightness', config.bgBrightness);
     applyUiScale(config.uiScale);
@@ -4588,6 +5296,7 @@ function initLayout() {
 let lyricsLateRetryTimer = null;
 let lyricsLateRetryKey = null;
 const LYRICS_LATE_RETRY_DELAYS_MS = [15000, 30000];
+const LYRICS_CACHE_VERSION = 2;
 
 function clearLyricsLateRetry(targetKey = null) {
   if (targetKey && lyricsLateRetryKey && lyricsLateRetryKey !== targetKey) return;
@@ -4600,6 +5309,7 @@ function clearLyricsLateRetry(targetKey = null) {
 
 function scheduleLyricsLateRetry(meta, targetKey, attempt = 0) {
   if (!targetKey || currentKey !== targetKey) return;
+  const targetVideoId = currentLyricsVideoId || getCurrentVideoId() || '';
   if (lyricsLateRetryTimer) return;
   if (attempt >= LYRICS_LATE_RETRY_DELAYS_MS.length) return;
 
@@ -4609,6 +5319,10 @@ function scheduleLyricsLateRetry(meta, targetKey, attempt = 0) {
     lyricsLateRetryTimer = null;
     lyricsLateRetryKey = null;
     if (currentKey !== targetKey) return;
+    if (
+      (currentLyricsVideoId || '') !== targetVideoId ||
+      (getCurrentVideoId() || '') !== targetVideoId
+    ) return;
 
     const metaNow = getMetadata() || meta;
     if (!metaNow) return;
@@ -4620,7 +5334,7 @@ function scheduleLyricsLateRetry(meta, targetKey, attempt = 0) {
 }
 
 async function loadLyrics(meta, options = {}) {
-  await ensureMeaningDisplayPreferences();
+  await Promise.all([ensureMeaningDisplayPreferences(), runtimeSettingsReady]);
   if (!config.deepLKey) config.deepLKey = await storage.get('ytm_deepl_key');
   const cachedTrans = await storage.get('ytm_trans_enabled');
   if (cachedTrans !== null && cachedTrans !== undefined) config.useTrans = cachedTrans;
@@ -4641,12 +5355,30 @@ async function loadLyrics(meta, options = {}) {
   if (sourceModeStored) config.lyricSourceMode = sourceModeStored;
 
   const thisKey = `${meta.title}///${meta.artist}`;
-  if (thisKey !== currentKey) return;
+  const requestVideoId = getCurrentVideoId() || '';
+  if (thisKey !== currentKey || requestVideoId !== (currentLyricsVideoId || '')) return;
+  const requestId = `lyrics-${Date.now()}-${++lyricsRequestSequence}`;
+  activeLyricsRequestId = requestId;
+  currentLyricsResultPriority = 0;
+  currentLyricsQuality = 0;
+  // Invalidate an older applyLyricsText() call for the same track/video while
+  // this newer request is being resolved.
+  lyricsApplyEpoch += 1;
   let cached = await storage.get(thisKey);
-  if (thisKey !== currentKey) return;
+  if (
+    thisKey !== currentKey ||
+    requestVideoId !== (currentLyricsVideoId || '') ||
+    requestId !== activeLyricsRequestId
+  ) return;
   dynamicLines = null;
   duetSubDynamicLines = null;
   _duetExcludedTimes = new Set();
+  singerMetadataRequestSequence += 1;
+  singerMetadataRequestKey = '';
+  currentSingerMetadataKey = '';
+  currentLyricsRecordId = null;
+  currentSingerMetadata = null;
+  currentSingerCanonicalLyrics = '';
   duetSubLyricsRaw = '';
   lyricsCandidates = null;
   selectedCandidateId = null;
@@ -4656,42 +5388,82 @@ async function loadLyrics(meta, options = {}) {
   lyricsTranslationMap = {};
   setLyricsMeaningData(null);
   let data = null;
+  let dataPriority = 0;
+  let dataQuality = 0;
   let noLyricsCached = false;
+  let cachedSingerRecordId = null;
+  let cachedCanonicalLyrics = '';
   if (cached !== null && cached !== undefined) {
     if (cached === NO_LYRICS_SENTINEL) {
       noLyricsCached = true;
     } else if (typeof cached === 'string') {
+      // Legacy string entries may be old line-only network caches. Display
+      // them immediately, but keep them provisional so fresh DynamicLRC can
+      // upgrade them. New manual uploads are stored with manualLyrics=true.
       data = cached;
+      dataPriority = 0;
+      dataQuality = /\[\d+:\d{2}(?:[.:]\d{1,3})?\]/.test(cached) ? 2 : 1;
+      currentLyricsResultPriority = 0;
+      currentLyricsQuality = dataQuality;
     } else if (typeof cached === 'object') {
-      if (config.useAnimatedCaptions && typeof cached.animated_lyrics === 'string' && cached.animated_lyrics.trim()) {
-        data = cached.animated_lyrics;
-      } else if (typeof cached.lyrics === 'string') {
-        data = cached.lyrics;
+      const cachedVideoId = String(cached.video_id || cached.videoId || '');
+      const cacheMatchesVideo = cached.cacheVersion === LYRICS_CACHE_VERSION &&
+        cachedVideoId === requestVideoId;
+      const cachedSource = String(cached.lyricsSource || cached.source || '').trim().toLowerCase();
+      const cachedLrcLibIsFallback = cachedSource === 'lrclib' &&
+        (config.lyricSourceMode || 'standard') === 'standard';
+      const cacheSourceAllowed = !cachedLrcLibIsFallback || !!config.useLrcLibFallback;
+      if (cacheMatchesVideo && cacheSourceAllowed) {
+        const cachedSelection = selectLyricsPayload(cached);
+        data = cachedSelection.text;
+        cachedSingerRecordId = String(cached.record_id || cached.recordId || '').trim() || null;
+        cachedCanonicalLyrics = cachedSelection.lyrics || data || '';
+        dynamicLines = cachedSelection.dynamicLines;
+        if (typeof cached.subLyrics === 'string') duetSubLyricsRaw = cached.subLyrics;
+        if (cached.noLyrics) noLyricsCached = true;
+        if (Array.isArray(cached.candidates)) lyricsCandidates = cached.candidates;
+        if (Array.isArray(cached.requests)) lyricsRequests = cached.requests;
+        if (cached.config) lyricsConfig = cached.config;
+        if (cached.lockState && typeof cached.lockState === 'object') lyricsLockState = cached.lockState;
+        if (cached.lrcMap || cached.translations) {
+          lyricsTranslationMap = {
+            ...normalizeTranslationsToLrcMapLocal(cached.translations),
+            ...normalizeTranslationsToLrcMapLocal(cached.lrcMap)
+          };
+        }
+        if (cached.meaningData) setLyricsMeaningData(cached.meaningData);
+        currentLyricsResultPriority = cached.manualLyrics ? 3 : (cachedLrcLibIsFallback ? 1 : 2);
+        dataPriority = currentLyricsResultPriority;
+        currentLyricsQuality = cachedSelection.quality;
+        dataQuality = cachedSelection.quality;
+        updateLyricsSourceState({ ...cached, fallbackUsed: cachedLrcLibIsFallback }, !!data);
       }
-      if (Array.isArray(cached.dynamicLines)) dynamicLines = cached.dynamicLines;
-      if (typeof cached.subLyrics === 'string') duetSubLyricsRaw = cached.subLyrics;
-      if (cached.noLyrics) noLyricsCached = true;
-      if (Array.isArray(cached.candidates)) lyricsCandidates = cached.candidates;
-      if (Array.isArray(cached.requests)) lyricsRequests = cached.requests;
-      if (cached.config) lyricsConfig = cached.config;
-      if (cached.lockState && typeof cached.lockState === 'object') lyricsLockState = cached.lockState;
-      if (cached.lrcMap || cached.translations) {
-        lyricsTranslationMap = {
-          ...normalizeTranslationsToLrcMapLocal(cached.lrcMap),
-          ...normalizeTranslationsToLrcMapLocal(cached.translations)
-        };
-      }
-      if (cached.meaningData) setLyricsMeaningData(cached.meaningData);
     }
   }
   syncLyricsLockState();
   refreshCandidateMenu();
   refreshLockMenu();
 
+  if (data && cachedSingerRecordId) {
+    void requestSingerMetadataForLyrics(cachedSingerRecordId, cachedCanonicalLyrics, {
+      trackKey: thisKey,
+      videoId: requestVideoId,
+    });
+  }
+
   let renderedFromCache = false;
-  if (data && thisKey === currentKey) {
+  if (
+    data &&
+    thisKey === currentKey &&
+    requestVideoId === (currentLyricsVideoId || '') &&
+    requestId === activeLyricsRequestId
+  ) {
     applyLyricsText(data).then(() => {
-      if (thisKey === currentKey) {
+      if (
+        thisKey === currentKey &&
+        requestVideoId === (currentLyricsVideoId || '') &&
+        requestId === activeLyricsRequestId
+      ) {
         refreshMeaningUi();
       }
     });
@@ -4705,9 +5477,18 @@ async function loadLyrics(meta, options = {}) {
     const track = meta.title.replace(/\s*[\(-\[].*?[\)-]].*/, '');
     const artist = meta.artist;
     const youtube_url = getCurrentVideoUrl();
-    const video_id = getCurrentVideoId();
+    const video_id = requestVideoId;
     const translate_to = getRequestedLrchubTranslateLangs();
-    const payload = { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback, lyric_source_mode: config.lyricSourceMode || 'standard' };
+    const payload = {
+      track,
+      artist,
+      youtube_url,
+      video_id,
+      use_lrclib: config.useLrcLibFallback,
+      lyric_source_mode: config.lyricSourceMode || 'standard',
+      request_id: requestId,
+      track_key: thisKey,
+    };
     if (translate_to.length) payload.translate_to = translate_to;
     const res = await new Promise(resolve => {
       chrome.runtime.sendMessage(
@@ -4715,16 +5496,35 @@ async function loadLyrics(meta, options = {}) {
         resolve
       );
     });
-    if (thisKey !== currentKey) return;
+    if (
+      thisKey !== currentKey ||
+      video_id !== (currentLyricsVideoId || '') ||
+      requestId !== activeLyricsRequestId
+    ) return;
     console.log('[CS] GET_LYRICS response:', res);
+    const selectedResponse = selectLyricsPayload(res);
+    const responseLyrics = selectedResponse.lyrics;
+    const responseAnimatedLyrics = selectedResponse.animatedLyrics;
+    const preferredLyrics = selectedResponse.text;
+    const hasResponseLyrics = !!res?.success && !!preferredLyrics.trim();
+    const responsePriority = hasResponseLyrics ? (res?.fallbackUsed ? 1 : 2) : 0;
+    // A late LRCHub event can overtake the original callback. Reject the
+    // lower-priority fallback/failure before it mutates any LRCHub state.
+    if (responsePriority < currentLyricsResultPriority) return;
+    if (
+      responsePriority === currentLyricsResultPriority &&
+      responsePriority === 2 &&
+      selectedResponse.quality < currentLyricsQuality
+    ) return;
+
     lyricsRequests = Array.isArray(res?.requests) ? res.requests : null;
     lyricsConfig = res?.config || null;
     syncLyricsLockState();
     lyricsCandidates = Array.isArray(res?.candidates) ? res.candidates : null;
     lyricsTranslationMap = {
       ...(lyricsTranslationMap || {}),
-      ...normalizeTranslationsToLrcMapLocal(res?.lrcMap),
-      ...normalizeTranslationsToLrcMapLocal(res?.translations)
+      ...normalizeTranslationsToLrcMapLocal(res?.translations),
+      ...normalizeTranslationsToLrcMapLocal(res?.lrcMap)
     };
     refreshCandidateMenu();
     refreshLockMenu();
@@ -4732,20 +5532,36 @@ async function loadLyrics(meta, options = {}) {
     if (nextMeaningData) setLyricsMeaningData(nextMeaningData);
     if (typeof res?.subLyrics === 'string' && res.subLyrics.trim()) duetSubLyricsRaw = res.subLyrics;
 
-    const responseLyrics = typeof res?.lyrics === 'string' ? res.lyrics : '';
-    const responseAnimatedLyrics = typeof res?.animated_lyrics === 'string' ? res.animated_lyrics : '';
-    const preferredLyrics = (config.useAnimatedCaptions && responseAnimatedLyrics.trim()) ? responseAnimatedLyrics : responseLyrics;
-    if (res?.success && preferredLyrics.trim()) {
+    if (hasResponseLyrics) {
       const isDifferent = (preferredLyrics !== data) ||
-        (JSON.stringify(res.dynamicLines) !== JSON.stringify(dynamicLines)) ||
+        (JSON.stringify(selectedResponse.dynamicLines) !== JSON.stringify(dynamicLines)) ||
         (res.subLyrics && res.subLyrics !== duetSubLyricsRaw);
 
+      currentLyricsResultPriority = responsePriority;
+      currentLyricsQuality = selectedResponse.quality;
+      dataPriority = responsePriority;
+      dataQuality = selectedResponse.quality;
       data = preferredLyrics;
       gotLyrics = true;
-      if (Array.isArray(res.dynamicLines) && res.dynamicLines.length) dynamicLines = res.dynamicLines;
-      if (thisKey === currentKey) {
+      dynamicLines = selectedResponse.dynamicLines;
+      void requestSingerMetadataForLyrics(
+        res.record_id,
+        responseLyrics || preferredLyrics,
+        { trackKey: thisKey, videoId: video_id }
+      );
+      updateLyricsSourceState(res, true);
+      if (
+        thisKey === currentKey &&
+        video_id === (currentLyricsVideoId || '') &&
+        requestId === activeLyricsRequestId &&
+        responsePriority === currentLyricsResultPriority &&
+        selectedResponse.quality === currentLyricsQuality
+      ) {
         clearLyricsLateRetry(thisKey);
-        storage.set(thisKey, {
+        const cacheRecord = {
+          cacheVersion: LYRICS_CACHE_VERSION,
+          video_id,
+          record_id: res.record_id || null,
           lyrics: responseLyrics || data,
           animated_lyrics: responseAnimatedLyrics || null,
           dynamicLines: dynamicLines || null,
@@ -4756,9 +5572,25 @@ async function loadLyrics(meta, options = {}) {
           lrcMap: lyricsTranslationMap || null,
           requests: lyricsRequests || null,
           config: lyricsConfig || null,
-          lockState: lyricsLockState || null
-        });
-        if (isDifferent || !renderedFromCache) {
+          lockState: lyricsLockState || null,
+          lyricsSource: res.lyricsSource || null,
+          fallbackUsed: !!res.fallbackUsed,
+          lyricsQuality: selectedResponse.quality,
+          offset_ms: Number.isFinite(Number(res.offset_ms)) ? Number(res.offset_ms) : 0,
+        };
+        const isResponseCurrent = () => (
+          thisKey === currentKey &&
+          video_id === (currentLyricsVideoId || '') &&
+          requestId === activeLyricsRequestId &&
+          responsePriority === currentLyricsResultPriority &&
+          selectedResponse.quality === currentLyricsQuality
+        );
+        const wroteCache = await enqueueLyricsCacheWrite(
+          thisKey,
+          cacheRecord,
+          isResponseCurrent
+        );
+        if (wroteCache && isResponseCurrent() && (isDifferent || !renderedFromCache)) {
           needsRendering = true;
         }
       }
@@ -4768,19 +5600,49 @@ async function loadLyrics(meta, options = {}) {
   } catch (e) {
     console.error('GET_LYRICS failed', e);
   }
-  if (!gotLyrics && !data && thisKey === currentKey) {
-    storage.set(thisKey, NO_LYRICS_SENTINEL);
+  if (
+    !gotLyrics &&
+    !data &&
+    thisKey === currentKey &&
+    requestVideoId === (currentLyricsVideoId || '') &&
+    requestId === activeLyricsRequestId &&
+    currentLyricsResultPriority === 0 &&
+    currentLyricsQuality === 0
+  ) {
+    const noLyricsIsCurrent = () => (
+      thisKey === currentKey &&
+      requestVideoId === (currentLyricsVideoId || '') &&
+      requestId === activeLyricsRequestId &&
+      currentLyricsResultPriority === 0 &&
+      currentLyricsQuality === 0
+    );
+    try {
+      const wroteNoLyrics = await enqueueLyricsCacheWrite(
+        thisKey,
+        NO_LYRICS_SENTINEL,
+        noLyricsIsCurrent
+      );
+      if (!wroteNoLyrics) return;
+    } catch (error) {
+      console.warn('[YTM] Failed to cache the no-lyrics result:', error);
+    }
+    if (!noLyricsIsCurrent()) return;
     noLyricsCached = true;
     scheduleLyricsLateRetry(meta, thisKey, options.lateRetryAttempt || 0);
   }
-  if (thisKey !== currentKey) return;
-  if (!data) {
+  if (
+    thisKey !== currentKey ||
+    requestVideoId !== (currentLyricsVideoId || '') ||
+    requestId !== activeLyricsRequestId
+  ) return;
+  if (!data && currentLyricsResultPriority === 0 && currentLyricsQuality === 0) {
     renderLyrics([]);
     refreshCandidateMenu();
     refreshLockMenu();
     refreshMeaningUi();
     return;
   }
+  if (dataPriority !== currentLyricsResultPriority || dataQuality !== currentLyricsQuality) return;
   if (needsRendering) {
     await applyLyricsText(data);
   }
@@ -4901,6 +5763,7 @@ function renderLyrics(data) {
     } else if (line && line.duetSide === 'left') {
       row.classList.add('main-vocal');
     }
+    applySingerMetadataToRow(row, line, currentSingerMetadata);
 
     if (line && typeof line === 'object') {
       line._dynamicRenderStartSec = null;
@@ -5022,6 +5885,7 @@ function renderLyrics(data) {
     PipManager.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
     if (PipManager.pipWindow.document) {
       PipManager.pipWindow.document.body.classList.toggle('ytm-no-timestamp', !hasTimestamp);
+      PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
     }
   }
 }
@@ -5031,7 +5895,16 @@ const handleUpload = (e) => {
   if (!file || !currentKey) return;
   const r = new FileReader();
   r.onload = (ev) => {
-    storage.set(currentKey, ev.target.result);
+    storage.set(currentKey, {
+      cacheVersion: LYRICS_CACHE_VERSION,
+      video_id: currentLyricsVideoId || getCurrentVideoId() || null,
+      lyrics: String(ev.target.result || ''),
+      dynamicLines: null,
+      manualLyrics: true,
+      lyricsSource: 'manual',
+      fallbackUsed: false,
+      noLyrics: false,
+    });
     currentKey = null;
   };
   r.readAsText(file);
@@ -5531,8 +6404,9 @@ const tick = async () => {
   const meta = getMetadata();
   if (!meta) return;
   const key = `${meta.title}///${meta.artist}`;
+  const videoId = getCurrentVideoId() || '';
 
-  if (currentKey !== key) {
+  if (currentKey !== key || (currentLyricsVideoId || '') !== videoId) {
     // 初回ロード（曲の途中から開いた場合など）は再生位置のリセットを待たない
     const isInitialLoad = (currentKey === null);
 
@@ -5578,11 +6452,28 @@ const tick = async () => {
     clearLyricsLateRetry();
 
     currentKey = key;
+    currentLyricsVideoId = videoId;
+    activeLyricsRequestId = null;
+    currentLyricsResultPriority = 0;
+    currentLyricsQuality = 0;
+    currentLyricsSource = null;
+    isFallbackLyrics = false;
+    lyricsApplyEpoch += 1;
+    hideFallbackNotice();
     summaryButtonAttentionKey = null;
     lyricsData = [];
+    animatedCaptionData = null;
+    animatedCaptionFrameKey = '';
+    document.body.classList.remove('ytm-animated-caption-mode');
     dynamicLines = null;
     duetSubDynamicLines = null;
     _duetExcludedTimes = new Set();
+    singerMetadataRequestSequence += 1;
+    singerMetadataRequestKey = '';
+    currentSingerMetadataKey = '';
+    currentLyricsRecordId = null;
+    currentSingerMetadata = null;
+    currentSingerCanonicalLyrics = '';
     lyricsCandidates = null;
     selectedCandidateId = null;
     lyricsRequests = null;
@@ -5637,6 +6528,7 @@ const tick = async () => {
     if (ui.lyrics) ui.lyrics.scrollTop = 0;
     setTimeout(() => {
       if (currentKey !== key) return;
+      if ((currentLyricsVideoId || '') !== videoId || (getCurrentVideoId() || '') !== videoId) return;
       const metaNow = getMetadata() || meta;
       const keyNow = `${metaNow.title}///${metaNow.artist}`;
       if (keyNow !== key) return;
@@ -5740,7 +6632,30 @@ function updateMetaUI(meta) {
   trySetArtistLink();
 }
 
-(async function applySavedVisualSettings() {
+const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
+  const [
+    savedOffset,
+    savedOffsetEnabled,
+    savedFallbackEnabled,
+    savedSourceMode,
+    savedAnimatedCaptions,
+    savedSingerColors,
+  ] = await Promise.all([
+    storage.get('ytm_sync_offset'),
+    storage.get('ytm_save_sync_offset'),
+    storage.get('ytm_lrclib_fallback'),
+    storage.get('ytm_lyric_source_mode'),
+    storage.get('ytm_animated_captions_enabled'),
+    storage.get('ytm_singer_colors_enabled'),
+  ]);
+  if (savedOffset !== null && Number.isFinite(Number(savedOffset))) config.syncOffset = Number(savedOffset);
+  if (savedOffsetEnabled !== null) config.saveSyncOffset = !!savedOffsetEnabled;
+  if (savedFallbackEnabled !== null) config.useLrcLibFallback = !!savedFallbackEnabled;
+  if (savedSourceMode) config.lyricSourceMode = savedSourceMode;
+  if (savedAnimatedCaptions !== null) config.useAnimatedCaptions = !!savedAnimatedCaptions;
+  if (savedSingerColors !== null) config.useSingerColors = !!savedSingerColors;
+  document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
+
   // 1. 歌詞の太さ
   const savedWeight = await storage.get('ytm_lyric_weight');
   if (savedWeight) {
@@ -5773,7 +6688,9 @@ function updateMetaUI(meta) {
   const lowCpuStored = await storage.get('ytm_low_cpu_mode');
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
   document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
-})();
+})().catch((error) => {
+  console.warn('[YTM] Failed to restore saved runtime settings:', error);
+});
 
 
 // ===================== 初期化 =====================
@@ -5797,6 +6714,32 @@ const setupObserver = () => {
 
 
   let _tickScheduled = false;
+  let _tickRafId = null;
+  let _tickFallbackTimer = null;
+  const runScheduledTick = () => {
+    if (!_tickScheduled) return;
+    _tickScheduled = false;
+    if (_tickRafId !== null) {
+      cancelAnimationFrame(_tickRafId);
+      _tickRafId = null;
+    }
+    if (_tickFallbackTimer !== null) {
+      clearTimeout(_tickFallbackTimer);
+      _tickFallbackTimer = null;
+    }
+    tick();
+  };
+  const scheduleTick = () => {
+    if (_tickScheduled) return;
+    _tickScheduled = true;
+    if (!document.hidden) {
+      _tickRafId = requestAnimationFrame(runScheduledTick);
+    }
+    _tickFallbackTimer = setTimeout(
+      runScheduledTick,
+      document.hidden ? 0 : 250
+    );
+  };
   const observer = new MutationObserver((mutations) => {
     const hasRelevantMutation = mutations.some(mutation => {
       const target = mutation.target;
@@ -5808,13 +6751,7 @@ const setupObserver = () => {
     });
 
     if (hasRelevantMutation) {
-      if (!_tickScheduled) {
-        _tickScheduled = true;
-        requestAnimationFrame(() => {
-          _tickScheduled = false;
-          tick();
-        });
-      }
+      scheduleTick();
     }
   });
 

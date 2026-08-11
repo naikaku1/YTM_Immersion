@@ -396,6 +396,18 @@
   // ===================== ここから既存 Immersion ロジック =====================
 
   let currentKey = null;
+  let currentLyricsVideoId = null;
+  let currentLyricsRecordId = null;
+  let currentSingerMetadata = null;
+  let currentSingerMetadataKey = '';
+  let currentSingerCanonicalLyrics = '';
+  let singerMetadataRequestSequence = 0;
+  let singerMetadataRequestKey = '';
+  let activeLyricsRequestId = null;
+  let lyricsRequestSequence = 0;
+  let lyricsApplyEpoch = 0;
+  let currentLyricsResultPriority = 0;
+  let currentLyricsQuality = 0;
   let lyricsData = [];
   let hasTimestamp = false;
   let dynamicLines = null;
@@ -421,6 +433,7 @@
   let isFirstSongDetected = true;
 
   let isFallbackLyrics = false;
+  let currentLyricsSource = null;
 
   let lyricsRequests = null;
   let lyricsConfig = null;

@@ -163,6 +163,36 @@ const forceStyle = pipDoc.createElement('style');
           text-shadow: 0 0 10px rgba(0, 0, 0, 0.3) !important; 
         }
 
+        .lyric-line.singer-odd {
+          text-align: left !important;
+          transform-origin: left center !important;
+          padding-left: 0 !important;
+          padding-right: 14px !important;
+        }
+        .lyric-line.singer-even {
+          text-align: right !important;
+          transform-origin: right center !important;
+          padding-left: 14px !important;
+          padding-right: 0 !important;
+        }
+        .lyric-line.singer-even .lyric-main,
+        .lyric-line.singer-even .lyric-singer-name { text-align: right !important; }
+        .lyric-line.singer-odd .lyric-main,
+        .lyric-line.singer-odd .lyric-singer-name { text-align: left !important; }
+        .lyric-singer-name {
+          display: block;
+          margin-bottom: 3px;
+          font-size: 0.42em;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          opacity: 0.72;
+        }
+        body.ytm-singer-colors-enabled .lyric-line[data-singer-color],
+        body.ytm-singer-colors-enabled .lyric-line[data-singer-color].active,
+        body.ytm-singer-colors-enabled.ytm-no-timestamp .lyric-line[data-singer-color] {
+          color: var(--ytm-singer-color) !important;
+        }
+
         .lyric-line {
           text-wrap: balance !important;
           word-break: keep-all !important;     
@@ -208,6 +238,7 @@ const forceStyle = pipDoc.createElement('style');
             pipDoc.head.appendChild(forceStyle);
       pipDoc.body.className = 'ytm-pip-mode';
       if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
+      if (document.body.classList.contains('ytm-singer-colors-enabled')) pipDoc.body.classList.add('ytm-singer-colors-enabled');
 
       const artworkUrl = ui.artwork.querySelector('img')?.src || '';
       

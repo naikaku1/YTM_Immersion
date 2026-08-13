@@ -1,6 +1,6 @@
 # Privacy Policy for YTM-Immersion
 
-**Last Updated:** January 12, 2026
+**Last Updated:** August 13, 2026
 
 YTM-Immersion ("we", "our", or "us") is a Chrome Extension developed by Naikaku. We are committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our extension.
 
@@ -20,6 +20,12 @@ To provide specific features, the extension sends limited data to the following 
   - **Services:** LRCLib (lrclib.net), LRCHub (lrchub.coreone.work)
   - **Data Sent:** Song title, artist name, and album name.
   - **Purpose:** To search for and download synchronized lyrics.
+
+- **Lyrics Fetching from YouTube Music:**
+  - **Service:** YouTube Music (music.youtube.com)
+  - **Data Sent:** The video ID of the track you are playing, and the song title and artist name when we need to locate the corresponding catalog track.
+  - **Purpose:** To retrieve the line-synchronized lyrics that YouTube Music provides on its mobile apps.
+  - **Note:** These requests are made from the music.youtube.com page you are already on, and are sent without credentials (no cookies or account information). They are not associated with your Google account.
 
 - **Translation:**
   - **Service:** DeepL API (deepl.com)

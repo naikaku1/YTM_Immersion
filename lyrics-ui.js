@@ -5508,12 +5508,15 @@ async function loadLyrics(meta, options = {}) {
       ? window.YTMLyrics.fetch(video_id)
       : Promise.resolve(null);
 
+    // 既に返っているかを見るためのフラグ。追加の待ち時間は発生しない。
+    let backgroundSettled = null;
     const backgroundPromise = new Promise(resolve => {
       chrome.runtime.sendMessage(
         { type: 'GET_LYRICS', payload },
         resolve
       );
     });
+    backgroundPromise.then(r => { backgroundSettled = r || null; }).catch(() => { });
 
     // YTM優先で YTM が同期歌詞を持っているなら、LRCHub の完了を待つ意味はない。
     // 以前はここで background を無条件に await していたため、YTM が 250ms で
@@ -5523,15 +5526,13 @@ async function loadLyrics(meta, options = {}) {
     const ytmEarly = preferYtmSource ? await ytmPromise : null;
     const skipWaitingBackground = !!(ytmEarly && ytmEarly.hasSynced);
 
-    let res = skipWaitingBackground
-      // 既に返っていればメタデータ(候補・翻訳・解説)ごと使えるので、短時間だけ待つ
-      ? await Promise.race([
-        backgroundPromise,
-        new Promise(resolve => setTimeout(() => resolve(null), 400)),
-      ])
-      : await backgroundPromise;
+    // YTM を採用できるなら background は一切待たない。
+    // 以前はメタデータ目当てに 400ms 待っていたが、間に合わなかった分は
+    // 下の late ハンドラで反映されるので、この待ち時間は丸ごと無駄だった。
+    // (カタログ楽曲なら 235ms で描画できるのに 635ms かかっていた)
+    let res = skipWaitingBackground ? backgroundSettled : await backgroundPromise;
 
-    if (skipWaitingBackground && res === null) {
+    if (skipWaitingBackground && !res) {
       // 間に合わなかった分は、届いた時にメタデータだけ反映する。
       // 歌詞そのものは YTM を採用済みなので触らない。
       const metaKey = thisKey, metaVideoId = video_id, metaRequestId = requestId;

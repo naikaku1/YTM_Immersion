@@ -1110,12 +1110,16 @@ export const extractVideoIdFromUrl = (youtube_url) => {
 };
 
 export const withTimeout = (promise, ms, label) => {
+  let timer = null;
   return Promise.race([
     promise,
     new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(label || 'timeout')), ms);
+      timer = setTimeout(() => reject(new Error(label || 'timeout')), ms);
     }),
-  ]);
+  ]).finally(() => {
+    // 解除しないと GET_LYRICS 1回につき数本のタイマーが満了まで居座る
+    if (timer !== null) clearTimeout(timer);
+  });
 };
 
 export const delay = (ms) => new Promise(resolve => {

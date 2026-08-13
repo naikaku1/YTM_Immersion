@@ -886,6 +886,19 @@ const getSubDynamicLineForTime = (sec) => {
   return found || null;
 };
 
+// 歌詞ソースの優先設定。'ytm' か 'lrchub' の2択で、どちらも他ソースへフォールバックする。
+// 旧バージョンの 'standard' / 'ytm_only' / 'lrclib' もここで吸収する。
+const normalizeSourceMode = (value) => (
+  (value === 'ytm' || value === 'ytm_only') ? 'ytm'
+    : (value === 'lrchub' || value === 'standard' || value === 'lrclib') ? 'lrchub'
+      : 'ytm'
+);
+
+// いま表示している歌詞が「YTM優先」設定によって選ばれたものか。
+// true の間は、あとから届く LRCHub の高品質差し替えを受け付けない
+// (手動で候補を選んだときと同じ扱い)。
+let currentLyricsFromPreferredYtm = false;
+
 let animatedCaptionData = null;
 let animatedCaptionFrameKey = '';
 
@@ -1880,6 +1893,11 @@ async function applyLateLyricsUpgrade(payload) {
   // A manual candidate choice is an explicit user decision; never replace it
   // with a request that started before that choice.
   if (selectedCandidateId || currentLyricsResultPriority >= 3) return;
+  // YTM優先で選ばれた歌詞は、ユーザーの明示的な選択と同じ扱い。
+  // 再生中に LRCHub が割り込んで差し替えるのを防ぐ。
+  // typeof で見ているのは、この関数がテストで単体切り出しされ、
+  // 外側の変数が存在しない文脈で実行されることがあるため。
+  if (typeof currentLyricsFromPreferredYtm !== 'undefined' && currentLyricsFromPreferredYtm) return;
 
   const selected = selectLyricsPayload(payload);
   if (!selected.text || !selected.text.trim()) return;
@@ -3810,6 +3828,7 @@ async function selectCandidateById(candId) {
   const selectedPayload = selectLyricsPayload(cand);
   const nextLyricsText = selectedPayload.text;
   selectedCandidateId = candId;
+  currentLyricsFromPreferredYtm = false;  // 手動選択が最優先
   // Cancel any automatic late upgrade which belongs to the pre-selection
   // request. A manual candidate choice must remain authoritative.
   activeLyricsRequestId = null;
@@ -4274,13 +4293,13 @@ async function initSettings() {
   const saveOffsetStored = await storage.get('ytm_save_sync_offset');
   if (saveOffsetStored !== null) config.saveSyncOffset = saveOffsetStored;
   const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
-  if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+  config.useLrcLibFallback = true;  // 歌詞ソース設定は廃止。常に全ソースを使う
   const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
   if (animatedCaptionStored !== null) config.useAnimatedCaptions = !!animatedCaptionStored;
   const singerColorsStored = await storage.get('ytm_singer_colors_enabled');
   if (singerColorsStored !== null) config.useSingerColors = !!singerColorsStored;
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
-  config.lyricSourceMode = sourceModeStored || 'standard';
+  config.lyricSourceMode = normalizeSourceMode(sourceModeStored);
 
   const lowCpuStored = await storage.get('ytm_low_cpu_mode');
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
@@ -4453,6 +4472,10 @@ function renderSettingsPanel() {
                 <span class="setting-name">${t('settings_left_align')}</span>
                 <input type="checkbox" id="left-align-toggle">
               </label>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_keep_past_lyrics')}</span>
+                <input type="checkbox" id="keep-past-lyrics-toggle">
+              </label>
               <div class="setting-row stacked">
                 <div class="setting-row-top">
                   <span class="setting-name">UIサイズ (UI Size)</span>
@@ -4505,33 +4528,15 @@ function renderSettingsPanel() {
             </div>
 
             <div class="settings-section-title">${t('settings_sec_data_source')}</div>
-            <div class="settings-group-card lyric-source-card">
-              <div class="setting-row stacked lyric-source-setting-row">
-                <span class="setting-name setting-name-with-warning">
-                  歌詞ソースモード (Lyric Source Mode)
-                  <button type="button" class="lyric-source-warning"
-                    aria-label="LrcLibのみモードの注意事項" aria-describedby="lyric-source-warning-text">
-                    <span class="lyric-source-warning-icon" aria-hidden="true">!</span>
-                    <span class="lyric-source-warning-popover" id="lyric-source-warning-text" role="tooltip">
-                      <span class="lyric-source-warning-title">注意事項</span>
-                      <ul>
-                        <li>LicLibのみにすると</li>
-                        <li>「歌ってみた」などの取得率が下がる可能性があります。</li>
-                        <li>誤った歌詞を読み込むことがあります。</li>
-                        <li>共有翻訳機能が使えません</li>
-                      </ul>
-                    </span>
-                  </button>
-                </span>
+            <div class="settings-group-card">
+              <div class="setting-row stacked">
+                <span class="setting-name">${t('settings_source_auto_title')}</span>
+                <span class="setting-desc">${t('settings_source_auto_desc')}</span>
                 <div class="ytm-lang-group" id="lyric-source-group">
-                  <button class="ytm-lang-pill" data-value="standard">標準</button>
-                  <button class="ytm-lang-pill" data-value="lrclib">高速 (LrcLibのみ)</button>
+                  <button class="ytm-lang-pill" data-value="ytm">${t('settings_source_ytm')}</button>
+                  <button class="ytm-lang-pill" data-value="lrchub">${t('settings_source_lrchub')}</button>
                 </div>
               </div>
-              <label class="setting-row toggle-label">
-                <span class="setting-name">LrcLibからのフォールバック取得</span>
-                <input type="checkbox" id="lrclib-fallback-toggle">
-              </label>
             </div>
           </div>
 
@@ -4654,11 +4659,11 @@ function renderSettingsPanel() {
   document.getElementById('trans-toggle').checked = config.useTrans;
   document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
   document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
+  document.getElementById('keep-past-lyrics-toggle').checked = !!config.keepPastLyrics;
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
   document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
-  document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
 
   // 共有翻訳の残り文字数（保存済み値を表示）
@@ -4712,7 +4717,7 @@ function renderSettingsPanel() {
   // 言語ピル設定
   setupLangPills('main-lang-group', config.mainLang, v => { config.mainLang = v; });
   setupLangPills('sub-lang-group', config.subLang, v => { config.subLang = v; });
-  setupLangPills('lyric-source-group', config.lyricSourceMode || 'standard', v => { config.lyricSourceMode = v; });
+  setupLangPills('lyric-source-group', config.lyricSourceMode || 'ytm', v => { config.lyricSourceMode = v; });
   refreshUiLangGroup();
 
   // 閉じるボタン
@@ -4764,11 +4769,11 @@ function renderSettingsPanel() {
     config.useTrans = document.getElementById('trans-toggle').checked;
     config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
     config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
+    config.keepPastLyrics = document.getElementById('keep-past-lyrics-toggle').checked;
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
     config.useSingerColors = document.getElementById('singer-colors-toggle').checked;
-    config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
     config.bgBrightness = document.getElementById('bright-slider').value;
@@ -4785,6 +4790,7 @@ function renderSettingsPanel() {
       storage.set('ytm_trans_enabled', config.useTrans),
       storage.set('ytm_shared_trans_enabled', config.useSharedTranslateApi),
       storage.set('ytm_left_align', config.leftAlignInfo),
+      storage.set('ytm_keep_past_lyrics', config.keepPastLyrics),
       storage.set('ytm_apple_bg', config.appleBg),
       storage.set('ytm_low_cpu_mode', config.lowCpuMode),
       storage.set('ytm_animated_captions_enabled', config.useAnimatedCaptions),
@@ -4803,6 +4809,7 @@ function renderSettingsPanel() {
     ]);
 
     document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
+    document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
     document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
     document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
     document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
@@ -5348,11 +5355,11 @@ async function loadLyrics(meta, options = {}) {
   const uiLangStored = await storage.get('ytm_ui_lang');
   if (uiLangStored) config.uiLang = uiLangStored;
   const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
-  if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+  config.useLrcLibFallback = true;  // 歌詞ソース設定は廃止。常に全ソースを使う
   const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
   if (animatedCaptionStored !== null && animatedCaptionStored !== undefined) config.useAnimatedCaptions = !!animatedCaptionStored;
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
-  if (sourceModeStored) config.lyricSourceMode = sourceModeStored;
+  config.lyricSourceMode = normalizeSourceMode(sourceModeStored);
 
   const thisKey = `${meta.title}///${meta.artist}`;
   const requestVideoId = getCurrentVideoId() || '';
@@ -5382,6 +5389,9 @@ async function loadLyrics(meta, options = {}) {
   duetSubLyricsRaw = '';
   lyricsCandidates = null;
   selectedCandidateId = null;
+  // 曲ごとに必ず倒す。倒し忘れると、次の曲で YTM が取れなかったときも
+  // LRCHub の差し替えを止め続けてしまう。
+  currentLyricsFromPreferredYtm = false;
   lyricsRequests = null;
   lyricsConfig = null;
   lyricsLockState = null;
@@ -5490,7 +5500,15 @@ async function loadLyrics(meta, options = {}) {
       track_key: thisKey,
     };
     if (translate_to.length) payload.translate_to = translate_to;
-    const res = await new Promise(resolve => {
+
+    // YouTube Music の行同期歌詞は content script からしか取れない
+    // (Service Worker の fetch は Origin: chrome-extension:// が付いて YouTube に 403 で弾かれる)。
+    // background への問い合わせと並列に走らせるので、待ち時間は増えない。
+    const ytmPromise = (window.YTMLyrics && video_id)
+      ? window.YTMLyrics.fetch(video_id)
+      : Promise.resolve(null);
+
+    let res = await new Promise(resolve => {
       chrome.runtime.sendMessage(
         { type: 'GET_LYRICS', payload },
         resolve
@@ -5502,6 +5520,45 @@ async function loadLyrics(meta, options = {}) {
       requestId !== activeLyricsRequestId
     ) return;
     console.log('[CS] GET_LYRICS response:', res);
+
+    // 歌詞ソースの優先設定は 'ytm' / 'lrchub' の2択。どちらも他方へフォールバックする。
+    //   YTM優先   … YTM に同期歌詞があればそれ。無ければ LRCHub / LrcLib
+    //   LRCHub優先 … LRCHub / LrcLib が歌詞を返せばそれ。無ければ YTM
+    // 品質スコアによる自動判定はしない。設定した側が確実に優先される方が予測しやすい。
+    try {
+      const preferYtm = (config.lyricSourceMode || 'ytm') === 'ytm';
+      const backgroundHasLyrics = !!res?.success &&
+        typeof res.lyrics === 'string' && !!res.lyrics.trim();
+
+      // LRCHub優先で、しかも LRCHub 側が既に歌詞を返しているなら YTM の結果は使わない。
+      // ここで待つと、表示が YTM の完了まで丸ごと遅れてしまう
+      // (カタログ解決が走る曲では1秒以上かかる)。走らせたままにして待たない。
+      if (preferYtm || !backgroundHasLyrics) {
+        const ytmRes = await ytmPromise;
+        const stillCurrent =
+          thisKey === currentKey &&
+          video_id === (currentLyricsVideoId || '') &&
+          requestId === activeLyricsRequestId;
+
+        if (ytmRes && ytmRes.hasSynced && stillCurrent) {
+          console.log(`[CS] YouTube Music を採用 (${preferYtm ? 'YTM優先' : 'LRCHubが空のためフォールバック'})`);
+          // フォールバックで採った場合は、あとから LRCHub が届いたら差し替えてよい
+          currentLyricsFromPreferredYtm = preferYtm;
+          res = {
+            ...res,
+            success: true,
+            lyrics: ytmRes.lyrics,
+            animated_lyrics: null,
+            dynamicLines: null,
+            lyricsSource: 'ytm',
+            fallbackUsed: !preferYtm,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('[CS] YouTube Music の取り込みに失敗:', e);
+    }
+
     const selectedResponse = selectLyricsPayload(res);
     const responseLyrics = selectedResponse.lyrics;
     const responseAnimatedLyrics = selectedResponse.animatedLyrics;
@@ -5517,10 +5574,13 @@ async function loadLyrics(meta, options = {}) {
       selectedResponse.quality < currentLyricsQuality
     ) return;
 
-    lyricsRequests = Array.isArray(res?.requests) ? res.requests : null;
-    lyricsConfig = res?.config || null;
+    // LRCHub 以外の軽量ソース(YTM / LrcLib)が勝ったレスポンスには
+    // requests / config / candidates が入っていない。無条件に代入すると
+    // それらを null で潰したうえで下のキャッシュ書き込みが永続化してしまう。
+    if (Array.isArray(res?.requests)) lyricsRequests = res.requests;
+    if (res?.config) lyricsConfig = res.config;
     syncLyricsLockState();
-    lyricsCandidates = Array.isArray(res?.candidates) ? res.candidates : null;
+    if (Array.isArray(res?.candidates) && res.candidates.length) lyricsCandidates = res.candidates;
     lyricsTranslationMap = {
       ...(lyricsTranslationMap || {}),
       ...normalizeTranslationsToLrcMapLocal(res?.translations),
@@ -5884,6 +5944,8 @@ function renderLyrics(data) {
   if (PipManager.pipWindow && PipManager.pipLyricsContainer) {
     PipManager.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
     if (PipManager.pipWindow.document) {
+      // 歌詞が無い曲は PIP でも歌詞エリアごと畳む（通常ウィンドウと同じ扱い）
+      PipManager.pipWindow.document.body.classList.toggle('ytm-no-lyrics', !hasData);
       PipManager.pipWindow.document.body.classList.toggle('ytm-no-timestamp', !hasTimestamp);
       PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
     }
@@ -5913,11 +5975,32 @@ const handleUpload = (e) => {
 
 
 let isRafLoopRunning = false;
+// rAF の ID はそれを発行したウィンドウでしか解除できない。
+// PIP ウィンドウで予約した ID をメインの cancelAnimationFrame に渡しても効かないので、
+// どちらで発行したかを覚えておく。
+let lyricRafWindow = null;
+
+const cancelLyricRaf = () => {
+  if (!lyricRafId) return;
+  try { (lyricRafWindow || window).cancelAnimationFrame(lyricRafId); } catch (e) { }
+  lyricRafId = null;
+  lyricRafWindow = null;
+};
+
+// PIP の開閉時に呼ぶ。ループは走り続けているので startLyricRafLoop() だけでは
+// ガードで弾かれ、コールバックが旧ウィンドウに予約されたまま残る。
+// PIP を開くとメイン側は rAF が絞られて次フレームが来ず、ハイライトが止まる。
+const restartLyricRafLoop = () => {
+  cancelLyricRaf();
+  isRafLoopRunning = false;
+  startLyricRafLoop();
+};
+window.restartLyricRafLoop = restartLyricRafLoop;
 
 function startLyricRafLoop() {
   if (isRafLoopRunning) return;
   isRafLoopRunning = true;
-  if (lyricRafId) cancelAnimationFrame(lyricRafId);
+  cancelLyricRaf();
   _cachedVideoEl = null;
   // 停止中に曲が変わっている可能性があるため、巻き戻り検出の基準をリセット
   _lastRafPlaybackTime = -1;
@@ -5977,8 +6060,10 @@ function startLyricRafLoop() {
         }
 
         if (PipManager.pipWindow) {
+          lyricRafWindow = PipManager.pipWindow;
           lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
         } else {
+          lyricRafWindow = window;
           lyricRafId = requestAnimationFrame(loop);
         }
       } else {
@@ -5990,8 +6075,10 @@ function startLyricRafLoop() {
   };
 
   if (PipManager.pipWindow) {
+    lyricRafWindow = PipManager.pipWindow;
     lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
   } else {
+    lyricRafWindow = window;
     lyricRafId = requestAnimationFrame(loop);
   }
 }
@@ -6650,8 +6737,8 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   ]);
   if (savedOffset !== null && Number.isFinite(Number(savedOffset))) config.syncOffset = Number(savedOffset);
   if (savedOffsetEnabled !== null) config.saveSyncOffset = !!savedOffsetEnabled;
-  if (savedFallbackEnabled !== null) config.useLrcLibFallback = !!savedFallbackEnabled;
-  if (savedSourceMode) config.lyricSourceMode = savedSourceMode;
+  config.useLrcLibFallback = true;
+  config.lyricSourceMode = normalizeSourceMode(savedSourceMode);
   if (savedAnimatedCaptions !== null) config.useAnimatedCaptions = !!savedAnimatedCaptions;
   if (savedSingerColors !== null) config.useSingerColors = !!savedSingerColors;
   document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
@@ -6678,6 +6765,9 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   const leftAlignStored = await storage.get('ytm_left_align');
   if (leftAlignStored !== null) config.leftAlignInfo = leftAlignStored;
   document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
+  const keepPastStored = await storage.get('ytm_keep_past_lyrics');
+  if (keepPastStored !== null && keepPastStored !== undefined) config.keepPastLyrics = !!keepPastStored;
+  document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
 
   // 4. Apple Music風背景オプション
   const appleBgStored = await storage.get('ytm_apple_bg');

@@ -75,9 +75,10 @@
             fallbackUsed: !!res.fallbackUsed,
             fetchedAt: Date.now(),
           }).then(() => {
-            // Refresh highlight instantly if the panel is open
+            // Refresh highlight instantly if the panel is open.
+            // syncQueue() だと署名が同じで再構築がスキップされ、枠線が更新されない。
             if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-              this.syncQueue();
+              this._refreshHighlights();
             }
           });
         } else {
@@ -95,13 +96,32 @@
               fetchedAt: Date.now(),
             });
           }).then(() => {
-            // Refresh highlight instantly if the panel is open
+            // Refresh highlight instantly if the panel is open.
+            // syncQueue() だと署名が同じで再構築がスキップされ、枠線が更新されない。
             if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-              this.syncQueue();
+              this._refreshHighlights();
             }
           });
         }
       });
+    },
+
+    // 行を作り直さずに枠線(歌詞あり/なし)だけ更新する
+    _refreshHighlights: function () {
+      if (!ui.queuePanel) return;
+      ui.queuePanel.querySelectorAll('.queue-item').forEach(row => {
+        const key = row.dataset.lyricsKey;
+        if (key) this._applyLoadedLyricsHighlight(row, key);
+      });
+    },
+
+    // 曲名に < > & が含まれると innerHTML でマークアップが壊れる
+    _escapeHtml: function (value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
     },
 
     _applyLoadedLyricsHighlight: function (row, key) {
@@ -259,17 +279,22 @@
     startObserver: function () {
       const originalQueue = document.querySelector('ytmusic-player-queue');
       if (originalQueue && !this.observer) {
+        // attributes:true を無条件で見ていたため、キュー内のあらゆる属性変化
+        // (ホバー・進捗・遅延読み込み等) で発火し、そのたびに全行を作り直して
+        // ちらつき＋スクロール位置リセットが起きていた。
+        // 監視は selected の変化に絞り、さらにデバウンスする。
         this.observer = new MutationObserver(() => {
-          if (ui.queuePanel && ui.queuePanel.classList.contains('visible')) {
-            this.syncQueue();
-          }
+          if (!ui.queuePanel || !ui.queuePanel.classList.contains('visible')) return;
+          clearTimeout(this._syncDebounce);
+          this._syncDebounce = setTimeout(() => this.syncQueue(), 120);
         });
       }
       if (originalQueue && this.observer && !this._isObserving) {
         this.observer.observe(originalQueue, {
           childList: true,
           subtree: true,
-          attributes: true
+          attributes: true,
+          attributeFilter: ['selected']
         });
         this._isObserving = true;
       }
@@ -294,36 +319,59 @@
       if (visibleItems.length === 0) return;
 
       let currentIndex = visibleItems.findIndex(item => item.hasAttribute('selected'));
-      if (currentIndex === -1) currentIndex = 0;
+      if (currentIndex === -1) {
+        // 曲の切り替わり中、YTM は selected を一瞬外す。
+        // ここで 0 に落とすとキューの先頭を「再生中」として描き直してしまい、
+        // 曲送りのたびにリストが頭に飛ぶ。既に描画済みなら更新を見送る。
+        if (this._renderedSignature) return;
+        currentIndex = 0;
+      }
 
       const targetItems = visibleItems.slice(currentIndex);
 
-      container.innerHTML = '';
-      const seenKeys = new Set();
+      // 中身が変わっていないのに innerHTML を作り直すと、スクロール位置が戻り
+      // クリックハンドラも張り直しになる。署名で差分を見て無駄な再構築を避ける。
+      const signature = targetItems.map(item => {
+        const t = item.querySelector('.song-title');
+        return `${this._extractVideoIdFromQueueItem(item) || ''}:${t ? t.textContent.trim() : ''}`;
+      }).join('|');
+      if (signature && signature === this._renderedSignature) return;
+      this._renderedSignature = signature;
 
+      container.innerHTML = '';
+      const seenIds = new Set();
+
+      let renderedCount = 0;
       targetItems.forEach((item, idx) => {
         const titleEl = item.querySelector('.song-title');
         const artistEl = item.querySelector('.byline');
         const imgEl = item.querySelector('.thumbnail img');
 
-        const isPlaying = (idx === 0);
-
         if (!titleEl) return;
 
         const title = titleEl.textContent.trim();
         const artist = artistEl ? artistEl.textContent.trim() : '';
+        const videoId = this._extractVideoIdFromQueueItem(item);
 
+        // 重複判定は videoId で行う。曲名+アーティストだと、ミックスや
+        // リピートで同じ曲がキューに複数回入っているとき正当な行まで消えていた。
+        const dedupeKey = videoId || `${title}///${artist}`;
+        if (seenIds.has(dedupeKey)) return;
+        seenIds.add(dedupeKey);
 
-        if (idx === 1) {
-          const videoId = this._extractVideoIdFromQueueItem(item);
-          const youtubeUrl = videoId ? `https://youtu.be/${videoId}` : null;
-          this._prefetchLyrics({ title, artist, videoId, youtubeUrl });
+        const isPlaying = (renderedCount === 0);
+        // 先読みは重複除去後の「次の曲」に対して行う。
+        // 以前は除去前の idx===1 を見ていたため、その行が重複で消えると
+        // 画面に出ていない曲を先読みしていた。
+        if (renderedCount === 1) {
+          this._prefetchLyrics({
+            title, artist, videoId,
+            youtubeUrl: videoId ? `https://youtu.be/${videoId}` : null,
+          });
         }
-
+        renderedCount += 1;
 
         const uniqueKey = `${title}///${artist}`;
-        if (seenKeys.has(uniqueKey)) return;
-        seenKeys.add(uniqueKey);
 
         let src = '';
         if (imgEl && imgEl.src && !imgEl.src.startsWith('data:')) {
@@ -346,8 +394,8 @@
             ${indicatorHtml}
           </div>
           <div class="queue-info">
-            <div class="queue-title">${title}</div>
-            <div class="queue-artist">${artist}</div>
+            <div class="queue-title">${this._escapeHtml(title)}</div>
+            <div class="queue-artist">${this._escapeHtml(artist)}</div>
           </div>
         `;
 
@@ -362,6 +410,7 @@
           setTimeout(() => this.syncQueue(), 500);
         };
 
+        row.dataset.lyricsKey = uniqueKey;
         container.appendChild(row);
 
         this._applyLoadedLyricsHighlight(row, uniqueKey);

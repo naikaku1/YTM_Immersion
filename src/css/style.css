@@ -25,6 +25,11 @@
    ビューポート基準の上限も併用している（小さい窓でだけ効く安全弁）。 */
 :root {
   --ytm-ui-scale: 1;
+  /* 歌詞エリアの縦位置の微調整。負の値で上に上がる。
+     左カラム(アートワーク＋曲名＋アーティスト)は動かさず、歌詞側だけをずらす。
+     レイアウトを乱さないよう transform で動かしているので、
+     ここの数値を変えるだけで安全に調整できる。 */
+  --ytm-lyrics-offset-y: -5vh;
 }
 
 
@@ -367,7 +372,14 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: min(calc(400px * var(--ytm-ui-scale)), 42vw);
+  /* 左右を「常に等分」にする。
+     固定幅で揃えると、画面が狭いとき flex の縮小が歌詞側(flex:0 0 auto)を
+     避けて左カラムだけに集中し、結局アートワーク幅まで潰れて非対称に戻る。
+     flex-basis 0 + 同じ上限にすれば、余白がいくつでも左右同幅になる。
+     絵の大きさは #ytm-artwork-container 側で据え置く。 */
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(calc(500px * var(--ytm-ui-scale)), 52vw);
   text-align: center;
   transition: transform 0.5s ease;
 }
@@ -381,7 +393,8 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 
 #ytm-artwork-container {
   position: relative;
-  width: 100%;
+  /* 枠を広げてもアートワーク自体は従来サイズを保つ */
+  width: min(calc(400px * var(--ytm-ui-scale)), 42vw);
   aspect-ratio: 1;
   border-radius: calc(16px * var(--ytm-ui-scale));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
@@ -1232,7 +1245,6 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 #ytm-lyrics-stage {
   position: relative;
-  width: min(calc(500px * var(--ytm-ui-scale)), 52vw);
   /* 高さは意図的にビューポート基準のまま残す。
      ここを px 固定にすると、縦に広いモニターほど歌詞の表示行数が減ってしまう
      （画面が広いのに使わない余白が増える）。
@@ -1240,15 +1252,21 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
      歌詞エリアが縦の空きスペースを使うこと自体は自然な挙動。
      行数を増減させたい場合は設定の「UIサイズ」で文字サイズ側を調整する。 */
   height: 65vh;
-  flex: 0 0 auto;
+  /* 左カラムと同じ伸縮条件・同じ上限。これで常に左右同幅になる */
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(calc(500px * var(--ytm-ui-scale)), 52vw);
+  /* 歌詞側だけ縦位置を上げる。transform なので幅・高さの計算には影響しない */
+  transform: translateY(var(--ytm-lyrics-offset-y));
 }
 
 #my-lyrics-container {
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  padding-right: calc(48px * var(--ytm-ui-scale));
-  padding-left: calc(40px * var(--ytm-ui-scale));
+  /* 左右非対称だと歌詞ブロックの光学中心がずれるため揃える */
+  padding-right: calc(44px * var(--ytm-ui-scale));
+  padding-left: calc(44px * var(--ytm-ui-scale));
   scrollbar-width: none;
   mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
   /* 先頭行が中央まで来られるよう、ステージ高さ(65vh)のおよそ半分を確保する
@@ -1645,6 +1663,15 @@ body.ytm-custom-layout #my-lyrics-container.ytm-user-browsing-lyrics .lyric-line
   visibility: visible;
   pointer-events: auto;
   transition: transform 0.5s, color 0.5s, opacity 0.2s ease, visibility 0s;
+}
+
+/* 設定「再生済みの歌詞を残す」がONのとき。
+   手動スクロール中と同じ見え方（薄く残す）に固定する。 */
+body.ytm-custom-layout.ytm-keep-past-lyrics #my-lyrics-container .lyric-line.lyric-past {
+  opacity: 0.3;
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform 0.5s, color 0.5s, opacity 0.3s ease, visibility 0s;
 }
 
 #my-lyrics-container.moviemode .lyric-line {
@@ -2325,6 +2352,9 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   }
 
   body.ytm-custom-layout #ytm-custom-left-col {
+    /* 縦積みレイアウトでは主軸が縦になるため、flex-basis:0 を解除する。
+       残すと高さの基準が 0 になって潰れる。 */
+    flex: 0 0 auto;
     width: 100%;
     max-width: 520px;
     flex-direction: row;
@@ -2388,9 +2418,12 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   }
 
   body.ytm-custom-layout #ytm-lyrics-stage {
+    flex: 0 0 auto;
     width: 100%;
     max-width: 520px;
     height: 65vh;
+    /* 縦積みでは左右に並んでいないのでオフセットは不要 */
+    transform: none;
   }
 
   body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {

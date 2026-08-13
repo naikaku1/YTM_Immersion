@@ -178,6 +178,8 @@
     saveSyncOffset: false,
     useSharedTranslateApi: false,
     leftAlignInfo: false,
+    // 再生済みの歌詞を残すか。false = 従来どおり消える
+    keepPastLyrics: false,
     appleBg: true,
     useAnimatedCaptions: false,
     useSingerColors: true,
@@ -228,7 +230,12 @@
       settings_sec_display: "表示とレイアウト",
       settings_sec_bg: "背景エフェクト & パフォーマンス",
       settings_sec_lyrics: "歌詞スタイル & アニメーション",
-      settings_sec_data_source: "データ & 歌詞ソース"
+      settings_sec_data_source: "データ & 歌詞ソース",
+      settings_source_auto_title: "歌詞ソース",
+      settings_source_auto_desc: "優先する取得元を選びます。どちらも、選んだ側で取れなかった曲は自動でもう一方（と LrcLib）に切り替わります。",
+      settings_source_ytm: "YouTube Music 優先",
+      settings_source_lrchub: "LRC Hub 優先",
+      settings_keep_past_lyrics: "再生済みの歌詞を残す",
     },
     en: {
       unit_hour: "hours",
@@ -267,7 +274,12 @@
       settings_sec_display: "Display & Layout",
       settings_sec_bg: "Background & Performance",
       settings_sec_lyrics: "Lyrics & Animations",
-      settings_sec_data_source: "Data & Lyrics Source"
+      settings_sec_data_source: "Data & Lyrics Source",
+      settings_source_auto_title: "Lyrics source",
+      settings_source_auto_desc: "Choose which source to try first. If it has nothing for a song, the other one (and LrcLib) is used automatically.",
+      settings_source_ytm: "Prefer YouTube Music",
+      settings_source_lrchub: "Prefer LRC Hub",
+      settings_keep_past_lyrics: "Keep already-played lyrics visible",
     },
     ko: {
       unit_hour: "시간",
@@ -303,7 +315,15 @@
       settings_sec_display: "표시 및 레이아웃",
       settings_sec_bg: "배경 그래픽 및 성능",
       settings_sec_lyrics: "가사 스타일 및 애니메이션",
-      settings_sec_data_source: "데이터 및 가사 소스"
+      settings_sec_data_source: "데이터 및 가사 소스",
+      settings_animated_captions: "애니메이션 자막 사용",
+      settings_apple_bg: "Apple Music 스타일 동적 배경 사용",
+      settings_left_align: "제목과 아티스트 이름을 왼쪽 정렬",
+      settings_source_auto_title: "가사 소스",
+      settings_source_auto_desc: "먼저 사용할 소스를 선택합니다. 선택한 쪽에 가사가 없으면 다른 쪽(및 LrcLib)으로 자동 전환됩니다.",
+      settings_source_ytm: "YouTube Music 우선",
+      settings_source_lrchub: "LRC Hub 우선",
+      settings_keep_past_lyrics: "재생된 가사를 남겨두기",
     },
     zh: {
       unit_hour: "小时",
@@ -339,7 +359,15 @@
       settings_sec_display: "显示与布局",
       settings_sec_bg: "背景效果与性能",
       settings_sec_lyrics: "歌词样式与动画",
-      settings_sec_data_source: "数据与歌词源"
+      settings_sec_data_source: "数据与歌词源",
+      settings_animated_captions: "使用动画字幕",
+      settings_apple_bg: "使用 Apple Music 风格动态背景",
+      settings_left_align: "标题与艺人名称左对齐",
+      settings_source_auto_title: "歌词来源",
+      settings_source_auto_desc: "选择优先使用的来源。若所选来源没有该歌曲，将自动切换到另一个来源（以及 LrcLib）。",
+      settings_source_ytm: "优先 YouTube Music",
+      settings_source_lrchub: "优先 LRC Hub",
+      settings_keep_past_lyrics: "保留已播放的歌词",
     }
   }; 
   

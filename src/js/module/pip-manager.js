@@ -114,7 +114,40 @@ const forceStyle = pipDoc.createElement('style');
             z-index: 1;
             pointer-events: none;
         }
-        
+
+        /* 歌詞が無い曲は歌詞エリアごと畳み、アートワークを主役にする。
+           通常ウィンドウの body.ytm-no-lyrics と同じ考え方。
+           「見つかりません」と出すより、最初からそういう画面に見せる。 */
+        body.ytm-no-lyrics #pip-lyrics-container { display: none !important; }
+
+        body.ytm-no-lyrics .pip-header {
+            position: absolute;
+            inset: 0;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 18px;
+            padding: 48px 28px 150px 28px;
+            text-align: center;
+        }
+        body.ytm-no-lyrics .artwork-box {
+            width: 190px; height: 190px;
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+        }
+        body.ytm-no-lyrics .info-box {
+            flex-grow: 0;
+            align-items: center;
+            text-align: center;
+        }
+        body.ytm-no-lyrics #pip-title {
+            font-size: 21px; -webkit-line-clamp: 2; margin-bottom: 4px;
+        }
+        body.ytm-no-lyrics #pip-artist { font-size: 15px; }
+        body.ytm-no-lyrics #pip-like-btn {
+            position: absolute; top: 20px; right: 20px;
+        }
+
         .lyric-line {
       
           font-size: 26px !important; 
@@ -128,9 +161,12 @@ const forceStyle = pipDoc.createElement('style');
           transform: scale(0.85) !important; 
           transform-origin: left center !important; 
           
-          transition: transform 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.2), 
-                      color 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), 
-                      filter 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) !important; 
+          /* 以前は transform に cubic-bezier(..., 1.2) を使っており、
+             終点を行き過ぎてから戻る＝「もちっと」した動きになっていた。
+             オーバーシュートしないカーブに変え、時間も詰めて素直に止める。 */
+          transition: transform 0.42s cubic-bezier(0.2, 0.8, 0.2, 1),
+                      color 0.5s cubic-bezier(0.2, 0.8, 0.2, 1),
+                      filter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
           
           cursor: pointer !important;
           text-align: left !important; 
@@ -359,12 +395,14 @@ pipDoc.body.innerHTML = `
         }
       });
 
-      startLyricRafLoop();
+      // 開閉時はウィンドウが切り替わるので、ループを張り直す必要がある。
+      // startLyricRafLoop() は実行中ガードで弾かれてしまう。
+      (window.restartLyricRafLoop || startLyricRafLoop)();
 
       this.pipWindow.addEventListener('pagehide', () => {
         this.pipWindow = null;
         this.pipLyricsContainer = null;
-        startLyricRafLoop();
+        (window.restartLyricRafLoop || startLyricRafLoop)();
       });
     },
 

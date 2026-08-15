@@ -7,6 +7,11 @@
 }
 
 * {
+  /* ここは触らないこと。
+     一度 'Hiragino Sans' を明示的に足したところ、macOS の日本語が
+     Hiragino Kaku Gothic ProN(W3/W6 まで) から Hiragino Sans(W0〜W9) に
+     切り替わり、同じ font-weight のまま表示だけ太くなる副作用が出た。
+     Windows での太さは、フォント指定ではなく下の .ytm-win で補正する。 */
   font-family: 'SF Pro Display', 'InterVariable', 'Noto Sans JP';
   box-sizing: border-box;
 }
@@ -48,7 +53,7 @@
   overflow: hidden;
 
   /* 繝�ヵ繧ｩ繝ｫ繝茨ｼ亥ｾ捺擂�峨�閭梧勹繧ｹ繧ｿ繧､繝ｫ: 蝓ｺ譛ｬ縺ｯ譏主ｺｦ繝ｻ蠖ｩ蠎ｦ縺ｮ隱ｿ謨ｴ縺ｮ縺ｿ縺ｧ縲；PU雋�闕ｷ縺ｮ髱槫ｸｸ縺ｫ螟ｧ縺阪＞CSS blur縺ｯ辟｡蜉ｹ蛹� (JS蛛ｴ縺ｧ莠句燕縺ｼ縺九＠蜃ｦ逅�ｒ螳滓命) */
-  filter: brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
+  filter: brightness(var(--ytm-bg-brightness, 0.65)) saturate(140%);
   transform: scale(1.1);
   will-change: transform;
   animation: none;
@@ -56,7 +61,7 @@
 
 /* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
 #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
+  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.65)) saturate(140%);
   animation: none !important;
 }
 
@@ -67,14 +72,14 @@ body.ytm-custom-layout #ytm-custom-bg {
 
 body.ytm-apple-bg #ytm-custom-bg {
   /* 本来はCSS blurを非表示 */
-  filter: saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
+  filter: saturate(120%) brightness(var(--ytm-bg-brightness, 0.65));
   transform: scale(1.2);
   animation: none;
 }
 
 /* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
 body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
+  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.65));
   transform: scale(12);
   animation: none;
 }
@@ -1272,6 +1277,10 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   /* 先頭行が中央まで来られるよう、ステージ高さ(65vh)のおよそ半分を確保する
      （JS 側は clientHeight/2 を基準に中央スクロールしている） */
   padding-top: 30vh;
+  /* 末尾側も同じだけ空ける。これが無いと、最後の数行はスクロールしきっても
+     中央まで上がってこず、他の行と違う位置でハイライトされてしまう。
+     上下対称にすることで、1行目から最終行まで同じ高さで読める。 */
+  padding-bottom: 30vh;
 }
 
 #my-lyrics-container.moviemode {
@@ -1631,6 +1640,10 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   position: relative;
   font-size: calc(32px * var(--ytm-ui-scale));
   font-weight: var(--ytm-lyric-weight, 800);
+  /* Windows の日本語フォールバック(Yu Gothic UI 等)は Hiragino Sans より
+     字面が重く、同じ数値でも一段太く見える。設定値はそのままに、
+     Windows でだけ実効ウェイトを1段下げて見た目を揃える。
+     スライダーで調整したい人は従来どおり上書きできる。 */
   letter-spacing: -0.03em;
   color: rgba(255, 255, 255, 0.3);
   margin-bottom: calc(35px * var(--ytm-ui-scale));
@@ -1641,10 +1654,17 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   display: block;
   width: 100%;
   padding-right: 20px;
-  overflow-wrap: anywhere;
+  /* anywhere は「どこでも切ってよい」なので、日本語が語の途中で割れていた。
+     文節で折る auto-phrase を主にして、緊急時だけ語中で折る break-word に落とす。 */
+  overflow-wrap: break-word;
   word-break: keep-all;
+  word-break: auto-phrase;
   text-wrap: balance;
-  white-space: pre-wrap;
+  line-break: strict;
+  /* pre-wrap だと折り返し位置の空白がそのまま残り、2行目の先頭に
+     スペースが乗ってしまう。pre-line なら改行は保ったまま空白の連続と
+     行頭・行末の空白が畳まれるので、折り返しても字下げが起きない。 */
+  white-space: pre-line;
 
   /* GPU蜷域�繝ｬ繧､繝､繝ｼ縺ｫ逋ｻ骭ｲ縺励※繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ縺ｨ螟牙ｽ｢譎ゅ�蜀阪Λ繧ｹ繧ｿ繝ｩ繧､繧ｺ繧帝∩縺代ｋ */
   will-change: transform, opacity;
@@ -3145,6 +3165,73 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   display: block;
 }
 
+/* Windows 用の補正。セレクタに .ytm-win が必要なので macOS には一切効かない。
+   Windows の日本語は Yu Gothic UI に落ちて字面が重く見えるため、
+   実効ウェイトを1段下げ、実体のないウェイトの合成太字も止める。 */
+body.ytm-win .lyric-line,
+body.ytm-win #ytm-custom-title,
+body.ytm-win .queue-title {
+  font-weight: calc(var(--ytm-lyric-weight, 800) - 100);
+  font-synthesis-weight: none;
+}
+
+/* 背景の常時アニメーションは、見えていない時は止める。
+   backdrop-filter を持つ要素(プレイヤーバー・ナビバー等)が上に乗っているため、
+   背景が動き続けると、その裏側のぼかしが毎フレーム計算し直される。 */
+body.ytm-anim-idle #ytm-custom-bg,
+body.ytm-anim-idle #ytm-custom-bg::before,
+body.ytm-anim-idle #ytm-custom-bg::after {
+  animation-play-state: paused !important;
+}
+
+/* 設定サイドバー下部の外部リンク(Discord / GitHub)。
+   タブを切り替えても常に見える位置に置くため、保存ボタンの上に並べる。 */
+.settings-links {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+a.settings-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+a.settings-link-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+a.settings-link-btn svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+/* videoId からもサムネイルを引けなかった行だけの保険 */
+.queue-img-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #2a2a2a;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 18px;
+  line-height: 1;
+}
+
 
 .queue-playing-indicator {
   position: absolute;
@@ -3504,9 +3591,17 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
 
 
 .lyric-line {
+  /* 日本語の折り返しを文節単位にする。keep-all だと「折り返し禁止」なので
+     行があふれた時に overflow-wrap の緊急改行が働き、語の途中で切れていた。
+     auto-phrase は「これでも」「行きたい」のような塊を保ったまま折り返す。
+     未対応ブラウザは直前の keep-all がそのまま残る(宣言が無効なため)。 */
   text-wrap: balance !important;
   word-break: keep-all;
+  word-break: auto-phrase;
+  /* 最後の砦。1語で1行を超える時だけ働く */
   overflow-wrap: break-word;
+  /* 行末に句読点や閉じ括弧が単独で落ちるのを防ぐ */
+  line-break: strict;
 }
 
 .lyric-phrase {
@@ -3757,7 +3852,7 @@ body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg {
    入っている場合のみ CSS blur を使う。この場合はアニメーションを止めて
    ブラーの再計算が毎フレーム走らないようにする。 */
 body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4)) !important;
+  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.65)) !important;
   transform: scale(12) !important;
   animation: none !important;
 }
@@ -3805,12 +3900,18 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-panel {
   background: rgba(15, 15, 22, 0.55) !important;
 }
 
-body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-backdrop {
+/* 開いている時だけ backdrop-filter を掛ける。
+   このオーバーレイは position:fixed inset:0 で画面全面を覆っており、
+   閉じている状態も opacity:0 のまま描画対象として残る(visibility:hidden ではない)。
+   そこにぼかしが乗っていると、閉じていても画面全面のぼかしが合成され続け、
+   さらに背景アニメーションが動くたびに計算し直しになる。実測で
+   1800x898 = 約160万px 分の無駄なぼかしが常時かかっていた。 */
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-backdrop.visible {
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
 }
 
-body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-dialog {
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-backdrop.visible #ytm-meaning-summary-dialog {
   backdrop-filter: blur(36px) saturate(180%) !important;
   -webkit-backdrop-filter: blur(36px) saturate(180%) !important;
 }
@@ -3881,7 +3982,7 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-queue-panel {
 /* ===================== Fallback / Optimization (Lightweight Mode Only) ===================== */
 body.ytm-custom-layout.ytm-lightweight-mode #ytm-custom-bg {
   animation: none !important;
-  filter: brightness(var(--ytm-bg-brightness, 0.35)) saturate(100%) !important;
+  filter: brightness(var(--ytm-bg-brightness, 0.65)) saturate(100%) !important;
   transform: scale(1.1) !important;
 }
 

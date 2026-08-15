@@ -1,3 +1,21 @@
+// ── デバッグログ ────────────────────────────────────────────
+// このファイルは ES モジュールなので background.js のスコープを共有しない。
+// 既定は無効。chrome.storage の ytm_debug で有効化する。
+const YTMLog = (() => {
+  let enabled = false;
+  const api = {
+    log: (...a) => { if (enabled) console.log('[YTM]', ...a); },
+    info: (...a) => { if (enabled) console.info('[YTM]', ...a); },
+    debug: (...a) => { if (enabled) console.debug('[YTM]', ...a); },
+  };
+  try {
+    chrome.storage.local.get(['ytm_debug'], (res) => {
+      enabled = !!res && (res.ytm_debug === '1' || res.ytm_debug === true);
+    });
+  } catch (e) { /* 読めなければ無効のまま */ }
+  return api;
+})();
+
 export const COMMUNITY_REMAINING_ENDPOINTS = [
   'https://immersionproject.coreone.work/api/community/remaining',
   'https://immersionproject.coreone.work/api/community/remaining/',
@@ -7,6 +25,35 @@ export const COMMUNITY_REMAINING_ENDPOINTS = [
 
 export const normalizeArtist = (s) =>
   (s || '').toLowerCase().replace(/\s+/g, '').trim();
+
+// ── LRCHub のサーキットブレーカー ──────────────────────────────
+// サーバーが落ちている(または経路が塞がっている)時、曲を再生するたびに
+// タイムアウトを待つと歌詞の表示がまるごとそのぶん遅れる。1曲につき
+// primary / search / retry の3回叩くので、待ち時間は積み上がる。
+// 通信そのものに連続で失敗したら一定時間だけ問い合わせを止め、
+// LrcLib など他のソースへ即座に回す。
+//
+// 「見つからなかった(HTTPは返ってきた)」は失敗に数えない。
+// 数えると、単に LRCHub に無いだけの曲が続いた時に止めてしまう。
+const LRCHUB_FAIL_THRESHOLD = 3;
+const LRCHUB_COOLDOWN_MS = 3 * 60 * 1000;
+let lrchubFailStreak = 0;
+let lrchubSkipUntil = 0;
+
+export const isLrchubReachable = () => Date.now() >= lrchubSkipUntil;
+
+const noteLrchubTransport = (ok) => {
+  if (ok) {
+    lrchubFailStreak = 0;
+    lrchubSkipUntil = 0;
+    return;
+  }
+  lrchubFailStreak += 1;
+  if (lrchubFailStreak >= LRCHUB_FAIL_THRESHOLD && Date.now() >= lrchubSkipUntil) {
+    lrchubSkipUntil = Date.now() + LRCHUB_COOLDOWN_MS;
+    console.warn(`[BG] LRCHub に接続できないため ${LRCHUB_COOLDOWN_MS / 60000} 分間スキップします`);
+  }
+};
 
 export const pickBestLrcLibHit = (items, artist) => {
   if (!Array.isArray(items) || !items.length) return null;
@@ -47,13 +94,25 @@ export const pickBestLrcLibHit = (items, artist) => {
 
 export const fetchFromLrcLib = (track, artist) => {
   if (!track) return Promise.resolve({ lyrics: '', candidates: [] });
-  const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(track)}`;
-  console.log('[BG] LrcLib search URL:', url);
 
-  return fetch(url)
-    .then(r => (r.ok ? r.json() : Promise.reject(r.statusText)))
+  // 曲名だけで引くと結果が最大20件で打ち切られ、同名異曲に押し出されて
+  // 目当てのアーティストの行が入ってこないことがある。
+  // artist_name まで渡して絞り、0件だった時だけ曲名だけの検索に落とす。
+  const searchUrl = (withArtist) => {
+    const params = new URLSearchParams({ track_name: track });
+    if (withArtist && artist) params.set('artist_name', artist);
+    return `https://lrclib.net/api/search?${params.toString()}`;
+  };
+  const search = (withArtist) => fetch(searchUrl(withArtist))
+    .then(r => (r.ok ? r.json() : Promise.reject(r.statusText)));
+
+  YTMLog.log('[BG] LrcLib search:', track, '/', artist || '(artist未指定)');
+
+  return (artist ? search(true).then(list => (
+    Array.isArray(list) && list.length ? list : search(false)
+  )) : search(false))
     .then(list => {
-      console.log('[BG] LrcLib search result count:', Array.isArray(list) ? list.length : 'N/A');
+      YTMLog.log('[BG] LrcLib search result count:', Array.isArray(list) ? list.length : 'N/A');
       const items = Array.isArray(list) ? list : [];
       
       const hit = pickBestLrcLibHit(items, artist);
@@ -816,6 +875,8 @@ export const fetchLrchubSingerMetadata = (params = {}) => {
 };
 
 export const fetchFromLrchub = (params) => {
+  // 接続不能が続いている間は即座に諦める。ここで待つと表示がそのぶん遅れる。
+  if (!isLrchubReachable()) return Promise.resolve(null);
   const { track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source, method = 'POST' } = params;
   const normalizedTranslateTo = Array.isArray(translate_to)
     ? translate_to.map(toLrchubTranslateLang).filter(Boolean)
@@ -836,13 +897,14 @@ export const fetchFromLrchub = (params) => {
     }
 
     return fetch(url.toString(), { method: 'GET', cache: 'no-store' })
-      .then(r => r.json())
+      .then(r => { noteLrchubTransport(true); return r.json(); })
       // /api/lyrics already applies the selected video's offset server-side.
       .then(res => normalizeLrchubLyricsResponse(res, {
         videoId: video_id,
         applyVideoOffsetToTranslations: true,
       }))
       .catch(err => {
+        noteLrchubTransport(false);
         console.error('[BG] LRCHub GET error:', err);
         return null;
       });
@@ -865,27 +927,30 @@ export const fetchFromLrchub = (params) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-    .then(r => r.json())
+    .then(r => { noteLrchubTransport(true); return r.json(); })
     // /api/lyrics already applies the selected video's offset server-side.
     .then(res => normalizeLrchubLyricsResponse(res, {
       videoId: video_id,
       applyVideoOffsetToTranslations: true,
     }))
     .catch(err => {
+      noteLrchubTransport(false);
       console.error('[BG] LRCHub error:', err);
       return null;
     });
 };
 
 export const searchLrchub = (track, artist, limit = 30) => {
+  if (!isLrchubReachable()) return Promise.resolve([]);
   const url = new URL(`https://lrchub.coreone.work/api/search?_=${getCacheBuster()}`);
   url.searchParams.set('track', track);
   if (artist) url.searchParams.set('artist', artist);
   if (limit) url.searchParams.set('limit', limit);
 
   return fetch(url.toString())
-    .then(r => r.json())
+    .then(r => { noteLrchubTransport(true); return r.json(); })
     .catch(err => {
+      noteLrchubTransport(false);
       console.error('[BG] LRCHub search error:', err);
       return [];
     });

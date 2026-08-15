@@ -1,6 +1,6 @@
 # Privacy Policy for YTM-Immersion
 
-**Last Updated:** August 13, 2026
+**Last Updated:** August 15, 2026
 
 YTM-Immersion ("we", "our", or "us") is a Chrome Extension developed by Naikaku. We are committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our extension.
 
@@ -24,8 +24,8 @@ To provide specific features, the extension sends limited data to the following 
 - **Lyrics Fetching from YouTube Music:**
   - **Service:** YouTube Music (music.youtube.com)
   - **Data Sent:** The video ID of the track you are playing, and the song title and artist name when we need to locate the corresponding catalog track.
-  - **Purpose:** To retrieve the line-synchronized lyrics that YouTube Music provides on its mobile apps.
-  - **Note:** These requests are made from the music.youtube.com page you are already on, and are sent without credentials (no cookies or account information). They are not associated with your Google account.
+  - **Purpose:** To retrieve the line-synchronized lyrics that YouTube Music provides.
+  - **Note:** These requests are made from the music.youtube.com page you are already on. They are same-origin requests and no data is sent to any server other than YouTube Music.
 
 - **Translation:**
   - **Service:** DeepL API (deepl.com)
@@ -36,6 +36,17 @@ To provide specific features, the extension sends limited data to the following 
   - **Service:** Immersion Project Server (immersionproject.coreone.work)
   - **Data Sent:** Your encrypted settings and playback statistics.
   - **Purpose:** To backup and sync your data across devices (only if you opt-in).
+
+### C. Use of Your Signed-in YouTube Music Session
+
+Some lyrics are only served by YouTube Music to signed-in requests. To display those lyrics, the extension signs its requests to `music.youtube.com` using the login session your browser already holds — the same mechanism the YouTube Music page itself uses.
+
+- The signature is computed **entirely within your browser**.
+- Your credentials (cookie values) are **never stored** by the extension.
+- Your credentials are **never sent to any destination other than `music.youtube.com`**.
+- This applies only to requests to YouTube Music. Requests to lyrics providers, the translation service, and the sync server are made without any credentials.
+
+If you are not signed in to YouTube Music, the extension simply falls back to anonymous requests and continues to work.
 
 ## 2. How We Use Your Information
 

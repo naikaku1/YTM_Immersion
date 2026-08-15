@@ -1,6 +1,28 @@
 import * as CloudSync from './module/bg-cloud-sync.js';
 import * as API from './module/api.js';
 
+// ── デバッグログ ────────────────────────────────────────────
+// Service Worker には localStorage が無いので chrome.storage を見る。
+// 既定は無効。有効化は content script 側と同じ ytm_debug キー。
+const YTMLog = (() => {
+  let enabled = false;
+  const noop = () => { };
+  const api = {
+    enabled: false,
+    log: (...a) => { if (enabled) console.log('[YTM]', ...a); },
+    info: (...a) => { if (enabled) console.info('[YTM]', ...a); },
+    debug: (...a) => { if (enabled) console.debug('[YTM]', ...a); },
+  };
+  try {
+    chrome.storage.local.get(['ytm_debug'], (res) => {
+      enabled = res && (res.ytm_debug === '1' || res.ytm_debug === true);
+      api.enabled = enabled;
+    });
+  } catch (e) { /* 読めなければ無効のまま */ }
+  return api;
+})();
+
+
 const getLrchubRecordId = (value) => {
   if (typeof API.getLrchubRecordId === 'function') return API.getLrchubRecordId(value);
   if (!value || typeof value !== 'object') return null;
@@ -193,7 +215,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     const hasTranslateRequest = Array.isArray(translate_to) ? translate_to.length > 0 : !!translate_to;
     const lrchubLyricsMethod = hasTranslateRequest ? 'GET' : 'POST';
 
-    console.log('[BG] GET_LYRICS', { track, artist, lyric_source_mode });
+    YTMLog.log('[BG] GET_LYRICS', { track, artist, lyric_source_mode });
 
     let responded = false;
     const sendOnce = (payload) => {
@@ -292,7 +314,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (sent && typeof sent.then === 'function') await sent;
           return true;
         } catch (e) {
-          console.debug('[BG] Late lyrics update skipped:', e);
+          YTMLog.debug('[BG] Late lyrics update skipped:', e);
           return false;
         }
       };
@@ -341,7 +363,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             'lrclib only'
           );
           if (lrcLibRes && lrcLibRes.lyrics && lrcLibRes.lyrics.trim()) {
-            console.log('[BG] Won: LrcLib (LrcLib Only Mode)');
+            YTMLog.log('[BG] Won: LrcLib (LrcLib Only Mode)');
             sendOnce(buildLrcLibPayload(lrcLibRes, false));
             return;
           }
@@ -360,7 +382,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const resolvedHubResults = [];
 
       const sendHubLyrics = (hubRes, sourceLabel) => {
-        console.log(`[BG] Won: ${sourceLabel}`);
+        YTMLog.log(`[BG] Won: ${sourceLabel}`);
         deliveredHubQuality = Math.max(deliveredHubQuality, getHubLyricsQuality(hubRes));
         sendOnce(buildHubLyricsPayload(hubRes, sourceLabel));
       };
@@ -370,7 +392,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         const quality = getHubLyricsQuality(hubResult.res);
         if (quality <= deliveredHubQuality) return false;
         deliveredHubQuality = quality;
-        console.log(`[BG] Upgrading lyrics quality to ${hubResult.source} (${quality})`);
+        YTMLog.log(`[BG] Upgrading lyrics quality to ${hubResult.source} (${quality})`);
         return pushLyricsUpdate(buildHubLyricsPayload(hubResult.res, hubResult.source));
       };
 
@@ -503,19 +525,19 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           return;
         }
 
-        console.log('[BG] Won temporarily: LrcLib');
+        YTMLog.log('[BG] Won temporarily: LrcLib');
         sendOnce(buildLrcLibPayload(winner.res, true));
         pushBestResolvedHubUpgrade();
 
         const lateHub = await rawHubTask;
         if (lateHub) {
-          console.log(`[BG] Upgrading LrcLib lyrics to ${lateHub.source}`);
+          YTMLog.log(`[BG] Upgrading LrcLib lyrics to ${lateHub.source}`);
           await pushHubUpgrade(lateHub);
         }
         return;
       }
 
-      console.log('[BG] No lyrics found');
+      YTMLog.log('[BG] No lyrics found');
       sendOnce({
         success: false,
         lyrics: '',

@@ -7,6 +7,35 @@
     _prefetchInFlight: new Set(),
     PREFETCH_DEDUP_MS: 6000,
 
+    // YTM のキュー DOM からは videoId もサムネイル URL も取れない
+    // (実測: ytmusic-player-queue-item の中に a 要素が1つも無く、
+    //  img は画面外だと 1x1 の data: プレースホルダのまま)。
+    // ytm-lyrics.js が取得済みの InnerTube のキューを曲名で引き当てて補う。
+    _normalizeTitleForQueue: function (s) {
+      return String(s || '')
+        .replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+        .replace(/[^\p{L}\p{N}]/gu, '')
+        .toLowerCase();
+    },
+
+    _buildQueueIndex: function () {
+      const index = new Map();
+      try {
+        if (!window.YTMLyrics || typeof window.YTMLyrics.queue !== 'function') return index;
+        const currentId = new URL(location.href).searchParams.get('v');
+        // まだ取得できていない時は空で返ってくる。届いたら一度だけ描き直す。
+        const entries = window.YTMLyrics.queue(currentId, () => {
+          this._renderedSignature = null;
+          this.syncQueue();
+        }) || [];
+        for (const entry of entries) {
+          const key = this._normalizeTitleForQueue(entry.title);
+          if (key && !index.has(key)) index.set(key, entry);
+        }
+      } catch (e) { /* 引けなくても従来どおり DOM だけで描画する */ }
+      return index;
+    },
+
     _extractVideoIdFromQueueItem: function (queueItem) {
       try {
         const a =
@@ -46,7 +75,7 @@
       const videoId = meta && meta.videoId ? meta.videoId : null;
       const youtubeUrl = meta && meta.youtubeUrl ? meta.youtubeUrl : (videoId ? `https://youtu.be/${videoId}` : null);
 
-      console.log('[Queue] Prefetch(next) lyrics:', title, '/', artist);
+      YTMLog.log('[Queue] Prefetch(next) lyrics:', title, '/', artist);
 
       chrome.runtime.sendMessage({
         type: 'GET_LYRICS',
@@ -58,6 +87,9 @@
         }
       }, (res) => {
         this._prefetchInFlight.delete(key);
+        // Service Worker が寝ている等で応答が来ないと chrome.runtime.lastError が
+        // 立つ。参照しないと未処理エラーとしてコンソールに残り続けるので必ず読む。
+        if (chrome.runtime.lastError) return;
 
         // Don't overwrite existing good cache on transient failures
         if (!res || !res.success) return;
@@ -161,16 +193,20 @@
         <div class="queue-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <h3 style="margin:0;line-height:1.1;">Up Next</h3>
           <button class="queue-pin" type="button" title="Pin" aria-label="Pin Up Next" style="
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
             cursor:pointer;
-            padding:6px 8px;
+            width:30px;
+            height:30px;
+            padding:0;
             border-radius:10px;
             border:1px solid rgba(255,255,255,0.18);
             background:rgba(255,255,255,0.06);
             color:inherit;
-            font-size:14px;
             line-height:1;
             user-select:none;
-          ">📌</button>
+          "></button>
         </div>
         <div class="queue-list-content">
             <div class="lyric-loading">Loading...</div>
@@ -183,23 +219,37 @@
       const PIN_KEY = 'ytm_queue_pinned';
       const pinBtn = panel.querySelector('.queue-pin');
 
+      // ピンは絵文字だと環境ごとに字形も色も揃わないので、他のボタンと同じ
+      // インライン SVG(currentColor 追従)で描く。留めている時だけ塗りつぶす。
+      const pinSvg = (filled) => `
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"
+             fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor"
+             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6.1 1.9h3.8v3.6l1.9 2.4H4.2l1.9-2.4V1.9Z"/>
+          <path d="M8 8.1v6" fill="none"/>
+        </svg>`;
+
       const applyPinnedUI = (pinned) => {
         if (!pinBtn) return;
+        pinBtn.innerHTML = pinSvg(pinned);
+        pinBtn.title = pinned ? 'Unpin' : 'Pin';
+        pinBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
         if (pinned) {
           pinBtn.dataset.pinned = '1';
-          pinBtn.textContent = '📍';
+          pinBtn.style.color = 'rgb(190, 255, 110)';
           pinBtn.style.background = 'rgba(255,255,255,0.14)';
           pinBtn.style.border = '1px solid rgba(190, 255, 110, 0.55)';
           pinBtn.style.boxShadow = '0 0 0 1px rgba(190,255,110,0.18), 0 0 10px rgba(190,255,110,0.12)';
           pinBtn.style.transform = 'translateZ(0)';
         } else {
           pinBtn.dataset.pinned = '';
-          pinBtn.textContent = '📌';
+          pinBtn.style.color = 'inherit';
           pinBtn.style.background = 'rgba(255,255,255,0.06)';
           pinBtn.style.border = '1px solid rgba(255,255,255,0.18)';
           pinBtn.style.boxShadow = 'none';
         }
       };
+      applyPinnedUI(false);
 
       // Load persisted pin state
       storage.get(PIN_KEY).then((v) => {
@@ -340,6 +390,7 @@
 
       container.innerHTML = '';
       const seenIds = new Set();
+      const queueIndex = this._buildQueueIndex();
 
       let renderedCount = 0;
       targetItems.forEach((item, idx) => {
@@ -351,7 +402,9 @@
 
         const title = titleEl.textContent.trim();
         const artist = artistEl ? artistEl.textContent.trim() : '';
-        const videoId = this._extractVideoIdFromQueueItem(item);
+        const queueEntry = queueIndex.get(this._normalizeTitleForQueue(title)) || null;
+        const videoId = this._extractVideoIdFromQueueItem(item)
+          || (queueEntry ? queueEntry.videoId : null);
 
         // 重複判定は videoId で行う。曲名+アーティストだと、ミックスや
         // リピートで同じ曲がキューに複数回入っているとき正当な行まで消えていた。
@@ -369,20 +422,39 @@
             youtubeUrl: videoId ? `https://youtu.be/${videoId}` : null,
           });
         }
+
+        // YouTube Music 側の歌詞は content script からしか取れないので、
+        // これから流れる数曲ぶんをここで温めておく。videoId 単位でメモ化される
+        // ため、実際に曲が変わった時にはネットワーク往復ゼロで表示できる。
+        // 数曲先まで持っておくと、曲送りを連打された時も待ちが出ない。
+        if (renderedCount >= 1 && renderedCount <= 3 && videoId &&
+          window.YTMLyrics && typeof window.YTMLyrics.fetch === 'function') {
+          window.YTMLyrics.fetch(videoId).catch(() => { });
+        }
         renderedCount += 1;
 
         const uniqueKey = `${title}///${artist}`;
 
+        // YTM のキューはサムネイルを遅延読み込みしており、画面外の行の img は
+        // 1x1 の透明 GIF (data:) のまま。実測では最初はキュー全行がこの状態で、
+        // そのままだと Up Next のジャケットがほぼ全部プレースホルダになる。
+        //   1. DOM が本物を持っていればそれ(正方形のアートワーク)
+        //   2. InnerTube のキューにあるアートワーク URL
+        //   3. videoId から i.ytimg.com のサムネイル
         let src = '';
         if (imgEl && imgEl.src && !imgEl.src.startsWith('data:')) {
           src = imgEl.src;
+        } else if (queueEntry && queueEntry.thumbnail) {
+          src = queueEntry.thumbnail;
+        } else if (videoId) {
+          src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
         }
 
         const row = createEl('div', '', `queue-item ${isPlaying ? 'current' : ''}`);
 
         const imgHtml = src
           ? `<img src="${src}" loading="lazy">`
-          : `<div style="display:flex;justify-content:center;align-items:center;width:100%;height:100%;background:#333;font-size:18px;">🎵</div>`;
+          : `<div class="queue-img-fallback">♪</div>`;
 
         const indicatorHtml = isPlaying
           ? `<div class="queue-playing-indicator"><i></i><i></i><i></i></div>`
@@ -398,6 +470,16 @@
             <div class="queue-artist">${this._escapeHtml(artist)}</div>
           </div>
         `;
+
+        // サムネイルが 404 等で落ちた時だけ記号に差し替える。
+        // インラインの onerror は YTM の CSP で実行されないので、必ずここで張る。
+        const rowImg = row.querySelector('.queue-img img');
+        if (rowImg) {
+          rowImg.addEventListener('error', () => {
+            const fallback = createEl('div', '', 'queue-img-fallback', '♪');
+            rowImg.replaceWith(fallback);
+          }, { once: true });
+        }
 
         row.onclick = (e) => {
           e.stopPropagation();

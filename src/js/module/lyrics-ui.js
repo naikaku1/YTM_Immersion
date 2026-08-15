@@ -888,9 +888,21 @@ const getSubDynamicLineForTime = (sec) => {
 
 // 歌詞ソースの優先設定。'ytm' か 'lrchub' の2択で、どちらも他ソースへフォールバックする。
 // 旧バージョンの 'standard' / 'ytm_only' / 'lrclib' もここで吸収する。
+// 歌詞ソース設定は「YTM優先 / LRCHub優先」の2択になった。
+// それ以前の保存値をどう引き継ぐかの対応表:
+//   ytm / ytm_only … そのまま YTM優先
+//   lrchub         … 明示的に LRCHub を選んだ意思とみなして尊重する
+//   standard       … 旧デフォルト。特に選んでいないので、新しい既定値へ
+//   lrclib         … 旧「LRCLIB優先」。その選択肢自体が無くなったので既定値へ
+//   未設定 / 不明   … 既定値
+// 既定値を YTM優先 にしているのは、videoId で曲を一意に特定できる YTM の方が
+// 誤マッチが起きず、タイミングも配信元のデータそのままで正確なため。
+// 背景の明るさの既定値。CSS 側の var() のフォールバックとも揃えること。
+const DEFAULT_BG_BRIGHTNESS = 0.65;
+
 const normalizeSourceMode = (value) => (
   (value === 'ytm' || value === 'ytm_only') ? 'ytm'
-    : (value === 'lrchub' || value === 'standard' || value === 'lrclib') ? 'lrchub'
+    : (value === 'lrchub') ? 'lrchub'
       : 'ytm'
 );
 
@@ -898,6 +910,9 @@ const normalizeSourceMode = (value) => (
 // true の間は、あとから届く LRCHub の高品質差し替えを受け付けない
 // (手動で候補を選んだときと同じ扱い)。
 let currentLyricsFromPreferredYtm = false;
+// Immersion が開いていて再生位置を継続的に追えていたか。
+// 連続再生の offset 補正を適用してよいかの判断に使う。
+let _wasTrackingPlayback = false;
 
 let animatedCaptionData = null;
 let animatedCaptionFrameKey = '';
@@ -1193,6 +1208,51 @@ function setupMovieMode() {
   };
   check();
 };
+// ============================================================
+// ■ 未解決の不具合: Immersion ON のとき「曲 / 動画」の切り替えが効かない
+//   (2026-08-15 調査。次に触る人向けのメモ)
+//
+// 症状
+//   Immersion ON では「動画」を押しても playback-mode が ATV_PREFERRED の
+//   まま変わらない。OFF にすると、まったく同じ click() で即座に
+//   OMV_PREFERRED になり URL も MV の videoId へ変わる。
+//   つまり YTM 側は正常で、こちらが何かを邪魔している。
+//
+// これは以前からある不具合
+//   bringSwitcherOnly() は 2026-03-23 から一度も変わっていない
+//   (git log -S"bringSwitcherOnly" で確認済み)。
+//   コードが変わっていないのに動かなくなったので、原因は YTM 側の
+//   実装変更。同時期に、キューの ytmusic-player-queue-item から
+//   a 要素が消えて videoId が取れなくなる変更も入っている
+//   (queue-manager.js の _buildQueueIndex 参照)。同じ刷新の一部と思われる。
+//
+// 唯一つかんだ手がかり
+//   #ytm-custom-info-area ごと DOM から切り離した状態でクリックすると
+//   切り替えが成立した。この時 handleMutation → changeUIWithMovieMode 内の
+//   customSwitcherParent.appendChild(switcher) が例外で止まっている。
+//   ただし video 要素の移動はその前に走っているので、
+//   「動画要素の移動」ではなく「切り替え中の switcher の移動」が
+//   引き金である可能性が高い。
+//
+// 試して駄目だった案 (どれも切り替わらず)
+//   1. switcher を動かさず、自前の代理ボタンから本体を click() する
+//   2. 本体の visibility:hidden を打ち消してから click() する
+//   3. プレイヤーページの非表示と ytm-custom-layout を外してから click() する
+//   4. handleMutation の DOM 組み替えを 600ms 遅らせる
+//   1 が駄目だった点が上の仮説と噛み合っておらず、まだ何か見落としがある。
+//
+// 次に調べるとよさそうなこと
+//   - YTM 側のクリックハンドラが実際に走っているか (イベントリスナの確認)
+//   - ytmusic-player-page の内部状態 (player-page-open / player-ui-state) が
+//     切り替え処理の前提になっていないか
+//   - Immersion OFF の復帰処理 changeIModeUIWithMovieMode(false) が
+//     具体的に何を戻しているか。そこに必要条件が含まれているはず
+//
+// UI は今のところ従来どおり (トグルは表示したまま) にしてある。
+// 壊れているのを確認できたのが 2 環境だけで、YTM の段階的な配信で
+// まだ動く利用者が居る可能性を否定できないため。
+// 広く壊れていると分かったら、Immersion 中は非表示にするのが親切。
+// ============================================================
 function bringSwitcherOnly() {
   const switcher = document.querySelector("ytmusic-av-toggle");
   const customSwitcherParent = document.querySelector("#ytm-custom-info-area");
@@ -1886,7 +1946,10 @@ const selectLyricsPayload = (payload) => {
 };
 
 async function applyLateLyricsUpgrade(payload) {
-  if (!payload || payload.lyricsSource !== 'lrchub' || !payload.success) return;
+  // 'ytm' も受ける。YouTube Music 側は時刻なしの歌詞を先に返しておいて、
+  // 裏で同期版を探し当てたらここで差し替えにくる。
+  const lateSource = payload && payload.lyricsSource;
+  if (!payload || (lateSource !== 'lrchub' && lateSource !== 'ytm') || !payload.success) return;
   if (!currentKey || payload.track_key !== currentKey) return;
   if (!activeLyricsRequestId || payload.request_id !== activeLyricsRequestId) return;
   if (payload.video_id && currentLyricsVideoId && payload.video_id !== currentLyricsVideoId) return;
@@ -2877,7 +2940,7 @@ async function applyTranslations(baseLines, youtubeUrl) {
             type: 'REGISTER_TRANSLATION',
             payload: { youtube_url: youtubeUrl, lang, lyrics: plain }
           }, (res) => {
-            console.log('[CS] REGISTER_TRANSLATION', lang, res);
+            YTMLog.log('[CS] REGISTER_TRANSLATION', lang, res);
           });
         }
       }
@@ -3639,9 +3702,9 @@ async function ensureCandidateLyricsLoaded(candId) {
     candidate_id: getCandidateId(cand, idx),
     candidate: cand || null
   };
-  console.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
+  YTMLog.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
   const res = await safeRuntimeSendMessage({ type: 'GET_CANDIDATE_LYRICS', payload });
-  console.log('[CS] GET_CANDIDATE_LYRICS response:', res);
+  YTMLog.log('[CS] GET_CANDIDATE_LYRICS response:', res);
   if (
     currentKey !== candidateKeyAtStart ||
     (currentLyricsVideoId || getCurrentVideoId() || '') !== candidateVideoAtStart ||
@@ -3780,7 +3843,7 @@ async function showCandidateHoverPreview(candId, ev) {
   hoverPreviewMouseX = ev?.clientX ?? hoverPreviewMouseX;
   hoverPreviewMouseY = ev?.clientY ?? hoverPreviewMouseY;
   hoverPreviewLoading = true;
-  console.log('[CS] hover preview start:', candId);
+  YTMLog.log('[CS] hover preview start:', candId);
   const el = ensureCandidateHoverPreview();
   if (el) {
     renderCandidateHoverPreview(candId);
@@ -3878,7 +3941,7 @@ async function selectCandidateById(candId) {
   try {
     chrome.runtime.sendMessage(
       { type: 'SELECT_LYRICS_CANDIDATE', payload: { youtube_url, video_id, candidate_id } },
-      (res) => console.log('[CS] SELECT_LYRICS_CANDIDATE result:', res)
+      (res) => YTMLog.log('[CS] SELECT_LYRICS_CANDIDATE result:', res)
     );
   } catch (e) {
     console.warn('[CS] SELECT_LYRICS_CANDIDATE failed to send', e);
@@ -4422,7 +4485,9 @@ function renderSettingsPanel() {
     trans: `<svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>`,
     data: `<svg viewBox="0 0 24 24"><path d="M12 2C7.58 2 4 3.79 4 6s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4zM4 8.55V12c0 2.21 3.58 4 8 4s8-1.79 8-4V8.55C18.83 9.99 15.72 11 12 11S5.17 9.99 4 8.55zM4 14.55V18c0 2.21 3.58 4 8 4s8-1.79 8-4v-3.45C18.83 15.99 15.72 17 12 17s-6.83-1.01-8-2.45z"/></svg>`,
     save: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`,
-    trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`
+    trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`,
+    discord: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19.27 5.33A18.6 18.6 0 0 0 14.9 4l-.25.45c1.4.33 2.7.9 3.9 1.65a13.3 13.3 0 0 0-4.55-1.45 13.9 13.9 0 0 0-4 0A13.3 13.3 0 0 0 5.45 6.1c1.2-.75 2.5-1.32 3.9-1.65L9.1 4a18.6 18.6 0 0 0-4.37 1.33C2.14 9.2 1.44 12.97 1.79 16.69a18.7 18.7 0 0 0 5.6 2.83l1.2-1.66c-.66-.25-1.28-.55-1.87-.92l.46-.34a13.3 13.3 0 0 0 11.64 0l.46.34c-.59.37-1.21.67-1.87.92l1.2 1.66a18.7 18.7 0 0 0 5.6-2.83c.42-4.3-.7-8.03-2.94-11.36zM8.52 14.46c-.9 0-1.63-.82-1.63-1.83 0-1 .72-1.83 1.63-1.83.92 0 1.65.83 1.63 1.83 0 1.01-.72 1.83-1.63 1.83zm6.96 0c-.9 0-1.63-.82-1.63-1.83 0-1 .72-1.83 1.63-1.83.92 0 1.65.83 1.63 1.83 0 1.01-.71 1.83-1.63 1.83z"/></svg>`,
+    github: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49l-.01-1.72c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.570 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.8-4.57 5.05.36.32.68.94.68 1.9l-.01 2.82c0 .27.18.6.69.49A10.06 10.06 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>`
   };
 
   let extVersion = '';
@@ -4445,6 +4510,16 @@ function renderSettingsPanel() {
         </button>
 
         <div class="settings-tabs-footer">
+           <div class="settings-links">
+             <a class="settings-link-btn" href="https://discord.gg/cpBCACpt6j"
+                target="_blank" rel="noopener noreferrer" title="Discord" aria-label="Discord">
+               ${ICONS.discord}
+             </a>
+             <a class="settings-link-btn" href="https://github.com/naikaku1/YTM_Immersion"
+                target="_blank" rel="noopener noreferrer" title="GitHub" aria-label="GitHub">
+               ${ICONS.github}
+             </a>
+           </div>
            <button id="save-settings-btn" class="settings-save-btn">
              ${ICONS.save}
              <span>${t('settings_save')}</span>
@@ -4498,9 +4573,9 @@ function renderSettingsPanel() {
               <div class="setting-row stacked">
                 <div class="setting-row-top">
                   <span class="setting-name">背景の明るさ (Brightness)</span>
-                  <span class="setting-value-badge" id="bright-val">${Math.round((config.bgBrightness || 0.35) * 100)}%</span>
+                  <span class="setting-value-badge" id="bright-val">${Math.round((config.bgBrightness || DEFAULT_BG_BRIGHTNESS) * 100)}%</span>
                 </div>
-                <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || 0.35}">
+                <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || DEFAULT_BG_BRIGHTNESS}">
               </div>
             </div>
 
@@ -4633,6 +4708,7 @@ function renderSettingsPanel() {
                 <button id="clear-all-btn" class="settings-action-btn btn-neutral">リセット</button>
               </div>
             </div>
+
           </div>
 
         </div>
@@ -5505,28 +5581,86 @@ async function loadLyrics(meta, options = {}) {
     // (Service Worker の fetch は Origin: chrome-extension:// が付いて YouTube に 403 で弾かれる)。
     // background への問い合わせと並列に走らせるので、待ち時間は増えない。
     const ytmPromise = (window.YTMLyrics && video_id)
-      ? window.YTMLyrics.fetch(video_id)
+      ? window.YTMLyrics.fetch(video_id, {
+        // YTM が時刻なしの歌詞しか持っていない曲では、別リリースに同期版が
+        // あることがある。その探索は数秒かかるので待たずに先へ進み、
+        // 見つかった時だけここで差し替える。
+        onUpgrade: (upgraded) => {
+          if (!upgraded || !upgraded.hasSynced) return;
+          void applyLateLyricsUpgrade({
+            success: true,
+            lyricsSource: 'ytm',
+            lyrics: upgraded.lyrics,
+            animated_lyrics: null,
+            dynamicLines: null,
+            track_key: thisKey,
+            request_id: requestId,
+            video_id,
+          });
+        },
+      })
       : Promise.resolve(null);
 
-    let res = await new Promise(resolve => {
+    const backgroundPromise = new Promise(resolve => {
       chrome.runtime.sendMessage(
         { type: 'GET_LYRICS', payload },
         resolve
       );
     });
+
+    // YTM優先で YTM が同期歌詞を持っているなら、LRCHub の完了を待つ意味はない。
+    // 以前はここで background を無条件に await していたため、YTM が 250ms で
+    // 返っていても LRCHub のレース(1.5秒)とフォールバック(各8秒)が終わるまで
+    // 描画されず、並列に走らせた意味が消えていた。
+    const preferYtmSource = (config.lyricSourceMode || 'ytm') === 'ytm';
+    const ytmEarly = preferYtmSource ? await ytmPromise : null;
+    const skipWaitingBackground = !!(ytmEarly && ytmEarly.hasSynced);
+
+    let res = skipWaitingBackground
+      // 既に返っていればメタデータ(候補・翻訳・解説)ごと使えるので、短時間だけ待つ
+      ? await Promise.race([
+        backgroundPromise,
+        new Promise(resolve => setTimeout(() => resolve(null), 400)),
+      ])
+      : await backgroundPromise;
+
+    if (skipWaitingBackground && res === null) {
+      // 間に合わなかった分は、届いた時にメタデータだけ反映する。
+      // 歌詞そのものは YTM を採用済みなので触らない。
+      const metaKey = thisKey, metaVideoId = video_id, metaRequestId = requestId;
+      backgroundPromise.then(late => {
+        if (!late || !late.success) return;
+        if (metaKey !== currentKey || metaVideoId !== (currentLyricsVideoId || '')) return;
+        if (metaRequestId !== activeLyricsRequestId) return;
+        if (Array.isArray(late.requests)) lyricsRequests = late.requests;
+        if (late.config) lyricsConfig = late.config;
+        if (Array.isArray(late.candidates) && late.candidates.length) lyricsCandidates = late.candidates;
+        lyricsTranslationMap = {
+          ...(lyricsTranslationMap || {}),
+          ...normalizeTranslationsToLrcMapLocal(late.translations),
+          ...normalizeTranslationsToLrcMapLocal(late.lrcMap),
+        };
+        const lateMeaning = normalizeMeaningPayloadLocal(late);
+        if (lateMeaning) setLyricsMeaningData(lateMeaning);
+        syncLyricsLockState();
+        refreshCandidateMenu();
+        refreshLockMenu();
+        refreshMeaningUi();
+      }).catch(() => { });
+    }
     if (
       thisKey !== currentKey ||
       video_id !== (currentLyricsVideoId || '') ||
       requestId !== activeLyricsRequestId
     ) return;
-    console.log('[CS] GET_LYRICS response:', res);
+    YTMLog.log('[CS] GET_LYRICS response:', res);
 
     // 歌詞ソースの優先設定は 'ytm' / 'lrchub' の2択。どちらも他方へフォールバックする。
     //   YTM優先   … YTM に同期歌詞があればそれ。無ければ LRCHub / LrcLib
     //   LRCHub優先 … LRCHub / LrcLib が歌詞を返せばそれ。無ければ YTM
     // 品質スコアによる自動判定はしない。設定した側が確実に優先される方が予測しやすい。
     try {
-      const preferYtm = (config.lyricSourceMode || 'ytm') === 'ytm';
+      const preferYtm = preferYtmSource;
       const backgroundHasLyrics = !!res?.success &&
         typeof res.lyrics === 'string' && !!res.lyrics.trim();
 
@@ -5534,16 +5668,28 @@ async function loadLyrics(meta, options = {}) {
       // ここで待つと、表示が YTM の完了まで丸ごと遅れてしまう
       // (カタログ解決が走る曲では1秒以上かかる)。走らせたままにして待たない。
       if (preferYtm || !backgroundHasLyrics) {
-        const ytmRes = await ytmPromise;
+        const ytmRes = ytmEarly || await ytmPromise;
         const stillCurrent =
           thisKey === currentKey &&
           video_id === (currentLyricsVideoId || '') &&
           requestId === activeLyricsRequestId;
 
-        if (ytmRes && ytmRes.hasSynced && stillCurrent) {
-          console.log(`[CS] YouTube Music を採用 (${preferYtm ? 'YTM優先' : 'LRCHubが空のためフォールバック'})`);
-          // フォールバックで採った場合は、あとから LRCHub が届いたら差し替えてよい
-          currentLyricsFromPreferredYtm = preferYtm;
+        // YTM が同期歌詞を持たない曲でも、歌詞テキスト自体は持っていることがある
+        // (実測: 曲の約2割は cueRange を持たない = モバイルでも時刻なしで表示される)。
+        // 以前はこれを丸ごと捨てていたため、「モバイルには歌詞があるのに
+        // 拡張では何も出ない」曲が生まれていた。他にどこからも歌詞が来ない
+        // ときの最後の受け皿として採用する。
+        const ytmHasPlain = !!(ytmRes && !ytmRes.hasSynced &&
+          typeof ytmRes.lyrics === 'string' && ytmRes.lyrics.trim());
+        const useYtm = !!ytmRes && stillCurrent &&
+          (ytmRes.hasSynced || (ytmHasPlain && !backgroundHasLyrics));
+
+        if (useYtm) {
+          const synced = !!ytmRes.hasSynced;
+          YTMLog.log(`[CS] YouTube Music を採用 (${synced ? '同期' : '時刻なし'} / ${preferYtm ? 'YTM優先' : 'LRCHubが空のためフォールバック'})`);
+          // フォールバックで採った場合は、あとから LRCHub が届いたら差し替えてよい。
+          // 時刻なしの歌詞は同期歌詞に劣るので、YTM優先設定でも差し替えを許す。
+          currentLyricsFromPreferredYtm = preferYtm && synced;
           res = {
             ...res,
             success: true,
@@ -5551,7 +5697,7 @@ async function loadLyrics(meta, options = {}) {
             animated_lyrics: null,
             dynamicLines: null,
             lyricsSource: 'ytm',
-            fallbackUsed: !preferYtm,
+            fallbackUsed: !preferYtm || !synced,
           };
         }
       }
@@ -6465,6 +6611,9 @@ const tick = async () => {
   const isPlayerOpen = layout?.hasAttribute('player-page-open');
   if (!config.mode || !isPlayerOpen) {
     document.body.classList.remove('ytm-custom-layout');
+    // Immersion を閉じている間は再生位置を追えていない。
+    // 次に開いた時、曲の切り替わりを見ていたことにしてはいけない。
+    _wasTrackingPlayback = false;
     return;
   }
   document.body.classList.add('ytm-custom-layout');
@@ -6490,6 +6639,9 @@ const tick = async () => {
 
   const meta = getMetadata();
   if (!meta) return;
+  // 「直前の tick でも追えていたか」を、フラグを更新する前に控える
+  const wasTrackingBefore = _wasTrackingPlayback;
+  _wasTrackingPlayback = true;
   const key = `${meta.title}///${meta.artist}`;
   const videoId = getCurrentVideoId() || '';
 
@@ -6513,7 +6665,13 @@ const tick = async () => {
     // offset として引くことで曲内の正しい再生位置を得る。
     //  ・初回ロード（最初の曲 / 途中再生）は offset 不要（currentTime がそのまま曲内時間）
     //  ・リセット再生（currentTime が 0 に戻る）の場合は RAF ループ側で offset を自動解除
-    if (isInitialLoad) {
+    //  ・Immersion を曲の途中で開いた場合は、この時点の currentTime は
+    //    「新しい曲が始まった video 時間」ではなく「今聴いている位置」。
+    //    これを offset にすると曲内時間が 0 に潰れ、歌詞が頭から流れてしまう
+    //    (シークしてから Immersion を開くとズレる、という不具合の原因)。
+    //    直前まで実際に再生を追えていた時だけ、連続再生の補正を適用する。
+    const sawTransition = wasTrackingBefore && !isInitialLoad;
+    if (!sawTransition) {
       timeOffset = 0;
     } else if (Number.isFinite(currentTime) && currentTime >= 5) {
       timeOffset = currentTime;
@@ -6751,6 +6909,11 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   }
 
   // 2. 背景の明るさ
+  //
+  // 既定値を引き上げた。以前の 0.4 はアートワークの色がほとんど出ず、
+  // この拡張の見どころを一つ潰していたため。
+  // 自分でスライダーを動かした人は保存値がそのまま使われる。
+  // 一度も触っていない人は、既存ユーザーも含めて新しい既定値になる。
   const savedBright = await storage.get('ytm_bg_brightness');
   if (savedBright) {
     config.bgBrightness = savedBright;
@@ -6785,11 +6948,32 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
 
 // ===================== 初期化 =====================
 
+// Windows は日本語が Yu Gothic UI 等にフォールバックし、macOS の Hiragino Sans より
+// 同じ font-weight でも太く見える。CSS 側で補正するための目印を付ける。
+try {
+  const platform = (navigator.userAgentData && navigator.userAgentData.platform)
+    || navigator.platform || '';
+  if (/win/i.test(platform)) document.body.classList.add('ytm-win');
+} catch (e) { /* 判定できなければ補正しないだけ */ }
+
+// 背景アニメーションを、見えていない間は止める。
+// 動かし続けると、上に乗っている backdrop-filter の要素が毎フレーム
+// 裏側のぼかしを計算し直すことになり、そのぶん無駄に電力と CPU を使う。
+const updateAmbientAnimationState = () => {
+  const video = document.querySelector('video');
+  const idle = document.hidden || !!(video && video.paused);
+  document.body.classList.toggle('ytm-anim-idle', idle);
+};
+document.addEventListener('visibilitychange', updateAmbientAnimationState);
+document.addEventListener('play', updateAmbientAnimationState, true);
+document.addEventListener('pause', updateAmbientAnimationState, true);
+updateAmbientAnimationState();
+
 ReplayManager.init();
 QueueManager.init();
 CloudSync.init();
 
-console.log('YTM Immersion loaded.');
+YTMLog.log('YTM Immersion loaded.');
 
 
 const setupObserver = () => {
@@ -6854,7 +7038,7 @@ const setupObserver = () => {
     characterData: true
   });
 
-  console.log('YTM Immersion: Zero-delay observer started.');
+  YTMLog.log('YTM Immersion: Zero-delay observer started.');
 
   tick();
 };

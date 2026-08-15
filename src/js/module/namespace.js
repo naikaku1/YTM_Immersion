@@ -1,5 +1,24 @@
 
 /* globals chrome, browser */
+
+// ── デバッグログ ────────────────────────────────────────────
+// 既定では何も出さない。曲を再生するたびに数十行流れると、利用者の
+// コンソールが埋まり、本当のエラーが埋もれてしまうため。
+// 調べたい時だけ、コンソールで次を実行してからページを再読み込みする:
+//   localStorage.setItem('ytm_debug', '1')
+// 元に戻すには localStorage.removeItem('ytm_debug')
+// なお console.warn / console.error は常に出す(異常の通知は残す)。
+const YTMLog = (() => {
+  let enabled = false;
+  try { enabled = localStorage.getItem('ytm_debug') === '1'; } catch (e) { /* 参照できなければ無効 */ }
+  const noop = () => { };
+  return {
+    enabled,
+    log: enabled ? console.log.bind(console, '%c[YTM]', 'color:#8ab4f8') : noop,
+    info: enabled ? console.info.bind(console, '%c[YTM]', 'color:#8ab4f8') : noop,
+    debug: enabled ? console.debug.bind(console, '%c[YTM]', 'color:#8ab4f8') : noop,
+  };
+})();
   const EXT =
     typeof globalThis.chrome !== 'undefined'
       ? globalThis.chrome

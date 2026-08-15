@@ -528,5 +528,6 @@
         resolve();
       }
     }),
+
     clear: () => confirm('全データを削除しますか？') && storage._api?.clear(() => location.reload())
   };

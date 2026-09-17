@@ -191,7 +191,7 @@ test('srv3 can replace preferred YTM lyrics both immediately and after the 400ms
 
   const loadSource = sourceBetween(
     lyricsUiSource,
-    'const backgroundPromise = new Promise',
+    'const backgroundPromise = safeRuntimeSendMessage',
     "console.error('GET_LYRICS failed', e);",
   )
   assert.match(loadSource, /selectLyricsPayload\(late\)\.mode\s*===\s*'animated'/)
@@ -225,7 +225,12 @@ test('srv3 frames are mirrored to the open PiP stage', () => {
   const renderSource = extractFunctionDeclaration(lyricsUiSource, 'renderAnimatedTimedText')
   const updateSource = extractFunctionDeclaration(lyricsUiSource, 'updateAnimatedCaptionStage')
   assert.match(renderSource, /PipManager\.pipLyricsContainer\.innerHTML\s*=\s*ui\.lyrics\.innerHTML/)
-  assert.match(updateSource, /PipManager\.pipLyricsContainer\.querySelector\('\.ytm-animated-caption-stage'\)/)
+  // 受け皿の取得は findAnimatedCaptionStage 経由(毎フレームの querySelector を避ける)
+  assert.match(updateSource, /findAnimatedCaptionStage\(PipManager\.pipLyricsContainer\)/)
+  assert.match(
+    lyricsUiSource,
+    /const findAnimatedCaptionStage = \(container\) => \{[\s\S]*?querySelector\('\.ytm-animated-caption-stage'\)/,
+  )
   assert.match(updateSource, /availableStages\.forEach/)
   assert.match(pipManagerSource, /body\.ytm-animated-caption-mode #pip-lyrics-container/)
 })
@@ -499,41 +504,48 @@ test('cold start waits for persisted lyric settings before observation and playb
   )
 })
 
-// 候補を選んだ10秒後の取り直しは、LRCHub に報告した時だけ走らせる。
+// 候補を選んだあとの「報告」と「10秒後の取り直し」は削除した。
 //
-// これは「この候補が正しい」とサーバーへ報告したあと、向こうの反映を
-// 拾い直すための処理。報告先が無い取得元(SimpMusic / LyricsPlus / LrcLib)で
-// 走らせると、拾うものが何も無いのに storage.remove で「選んだ」記録ごと
-// 消し、loadLyrics が最初から取り直す。YTM優先なら当然 YTM に戻る。
-// 実際「SimpMusic に切り替えたのに10秒後 YTM に戻る」不具合が出た。
-test('取得元をまたいだ候補を選んでも、あとから取り直して戻さない', () => {
+// LRCHub には匿名で「この候補を選んだ」を受け取る API が無い
+// (/api/record/lock はログイン必須、/api/select 等は 404)。報告が届かないのに
+// storage.remove + loadLyrics だけが走ると、「選んだ」記録ごと消えて
+// 取得が最初からやり直しになる。実際「SimpMusic に切り替えたのに
+// 10秒後 YTM に戻る」不具合が出ていた。
+test('候補を選んでも、あとから取り直して戻さない', () => {
   const fn = sourceBetween(
     lyricsUiSource,
     'async function selectCandidateById(candId) {',
     'let lyricsLockState = null;',
   )
-  assert.match(
-    fn,
-    /const reportsToLrchub = candidateSource === 'lrchub' && !cand\.providerCandidate/,
-  )
-  // 取り直しの手前で打ち切っていること
-  const guardAt = fn.indexOf('if (!reportsToLrchub) return;')
-  const removeAt = fn.indexOf('storage.remove(reloadKey)')
-  const reloadAt = fn.indexOf('loadLyrics(metaNow)')
-  assert.ok(guardAt !== -1, '報告していない時に打ち切る関門が無い')
-  assert.ok(removeAt !== -1 && reloadAt !== -1)
-  assert.ok(guardAt < removeAt && guardAt < reloadAt,
-    'キャッシュ削除と取り直しが関門より前にある')
+  assert.ok(!fn.includes('SELECT_LYRICS_CANDIDATE'), '届かない報告を送っている')
+  assert.ok(!fn.includes('storage.remove'), '選んだ記録を消している')
+  assert.ok(!fn.includes('setTimeout'), '遅れて取り直している')
 })
 
-test('選んだ記録を消す前に、選んだこと自体は保存されている', () => {
+test('選んだこと自体は保存されている', () => {
   const fn = sourceBetween(
     lyricsUiSource,
     'async function selectCandidateById(candId) {',
     'let lyricsLockState = null;',
   )
-  const saveAt = fn.indexOf('manualChoice: true')
-  const guardAt = fn.indexOf('if (!reportsToLrchub) return;')
-  assert.ok(saveAt !== -1 && guardAt !== -1)
-  assert.ok(saveAt < guardAt, '保存より先に打ち切ると選択が残らない')
+  assert.ok(fn.indexOf('manualChoice: true') !== -1, '選択の記録が保存されていない')
+})
+
+// 遅れて届いた差し替え(特に YouTube Music)には候補一覧・requests・config・
+// 翻訳が入っていない。無条件に代入すると、LrcLib で暫定表示していた時の
+// 候補メニューや翻訳が丸ごと消える。loadLyrics と同じ「あれば更新」に揃える。
+test('遅着の差し替えで候補メニュー・requests・翻訳を消さない', () => {
+  const fn = extractFunctionDeclaration(lyricsUiSource, 'applyLateLyricsUpgrade')
+  assert.match(
+    fn,
+    /if \(Array\.isArray\(payload\.candidates\) && payload\.candidates\.length\) lyricsCandidates = payload\.candidates;/,
+  )
+  assert.match(fn, /if \(Array\.isArray\(payload\.requests\)\) lyricsRequests = payload\.requests;/)
+  assert.match(fn, /if \(payload\.config\) lyricsConfig = payload\.config;/)
+  assert.ok(
+    !/lyricsCandidates = Array\.isArray\(payload\.candidates\) \? payload\.candidates : null/.test(fn),
+    '候補一覧を null で潰す形に戻っている',
+  )
+  // 翻訳も既存のものを残したうえで重ねること
+  assert.match(fn, /lyricsTranslationMap = \{\s*\n\s*\.\.\.\(lyricsTranslationMap \|\| \{\}\),/)
 })

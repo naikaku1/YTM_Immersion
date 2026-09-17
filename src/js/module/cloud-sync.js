@@ -325,6 +325,29 @@
       }
     }
 
+    // 曲が変わるたびに全履歴(最大 10,000 件)を POST していた。
+    // サーバー側 API は全件受け取る作りなので差分は送れない。せめて間隔を空ける。
+    const AUTO_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+    let lastAutoSyncAt = 0;
+    let autoSyncInFlight = false;
+
+    // 自動同期の入口。手動の「同期」ボタンは今までどおり syncNow を直接呼ぶ。
+    function syncIfDue() {
+      const now = Date.now();
+      if (autoSyncInFlight) return Promise.resolve(null);
+      if (now - lastAutoSyncAt < AUTO_SYNC_INTERVAL_MS) return Promise.resolve(null);
+      lastAutoSyncAt = now;
+      autoSyncInFlight = true;
+      return syncNow()
+        .catch((e) => {
+          console.warn('[DailyReplay Cloud] auto sync failed', e);
+          return null;
+        })
+        .finally(() => {
+          autoSyncInFlight = false;
+        });
+    }
+
     function loadInitialState() {
       EXT.runtime.sendMessage({ type: 'GET_CLOUD_STATE' }, (resp) => {
         if (!resp || !resp.ok || !resp.state) {
@@ -362,6 +385,7 @@
 
       const startAutoSync = () => {
         // 起動時自動同期（トークンが無いときはサーバー側で NO_TOKEN になり、トーストも出さない）
+        lastAutoSyncAt = Date.now();
         syncNow()
           .then((result) => {
             if (!result || !result.ok) return;
@@ -390,7 +414,7 @@
       }
     }
 
-    return { init, openPanel, syncNow };
+    return { init, openPanel, syncNow, syncIfDue };
   })();
 
   // ===================== ここから既存 Immersion ロジック =====================
@@ -411,6 +435,11 @@
   let lyricsData = [];
   let hasTimestamp = false;
   let dynamicLines = null;
+  // 正規化(文字単位への展開・行末の補完)を通す前の生データ。
+  // dynamicLines は描画用に加工されるので、届いたレスポンスとの突き合わせや
+  // キャッシュへの保存はこちらを使う。加工後と比べると必ず不一致になり、
+  // 同じ歌詞でも毎回描き直してスクロール位置が飛んでいた。
+  let dynamicLinesRaw = null;
   // duet: raw sub vocal LRC (sub.txt) - only lines to show on the right
   let duetSubLyricsRaw = '';
   // duet: dynamic lines for sub.txt (1文字追尾用)
@@ -418,21 +447,16 @@
   // keep last raw lyrics text so we can re-render when sub lyrics arrive later
   let lastRawLyricsText = null;
 
-  // dynamicLyrics helper: time->line map (rebuild when reference changes)
-  let _dynMapSrc = null;
-  let _dynMap = null;
   let _duetExcludedTimes = new Set();
   let lyricsCandidates = null;
   let selectedCandidateId = null;
   let lastActiveIndex = -1;
-  let lastTimeForChars = -1;
   let lyricRafId = null;
 
   let timeOffset = 0;
 
   let isFirstSongDetected = true;
 
-  let isFallbackLyrics = false;
   let currentLyricsSource = null;
 
   let lyricsRequests = null;
@@ -527,7 +551,8 @@
       } else {
         resolve();
       }
-    }),
-
-    clear: () => confirm('全データを削除しますか？') && storage._api?.clear(() => location.reload())
+    })
+    // clear は置かない。「設定をリセット」から呼ばれて再生履歴も歌詞キャッシュも
+    // クラウドの復活の呪文も巻き添えで消していた。設定だけを消す処理は
+    // lyrics-ui.js の SETTINGS_STORAGE_KEYS 側にある。
   };

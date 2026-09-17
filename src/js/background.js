@@ -35,20 +35,9 @@ const EARLY_HUB_WAIT_MS = 1500;
 // LrcLib の歌詞が手元にあるのに最大 2.9 秒あとまで出せなかった。
 const POST_FALLBACK_GRACE_MS = 800;
 
-// 文字(語)単位の時刻を実際に持っているか。
+// 文字(語)単位の時刻を実際に持っているか。本体は api.js。
 // GET_LYRICS と FIND_ALTERNATE_LYRICS の両方から使うのでモジュール直下に置く。
-const hasCharacterSyncedLines = (value) => (
-  Array.isArray(value) && value.some(line => (
-    Array.isArray(line?.chars) && line.chars.some(char => {
-      const hasText = [char?.c, char?.char, char?.text, char?.caption, char?.value]
-        .some(text => String(text ?? '').length > 0);
-      const hasTime = [char?.t, char?.startTimeMs, char?.start_ms, char?.startMs, char?.time]
-        .some(time => time !== null && time !== undefined &&
-          !(typeof time === 'string' && !time.trim()) && Number.isFinite(Number(time)));
-      return hasText && hasTime;
-    })
-  ))
-);
+const hasCharacterSyncedLines = API.hasCharacterSyncedLines;
 
 // ── 別の曲のデータを弾く ──────────────────────────────────
 // 取得元によっては、videoId に紐づいたレコードの中身が別の曲ということが
@@ -120,15 +109,8 @@ const buildProviderCandidate = (providerId, res) => {
   };
 };
 
-const getLrchubRecordId = (value) => {
-  if (typeof API.getLrchubRecordId === 'function') return API.getLrchubRecordId(value);
-  if (!value || typeof value !== 'object') return null;
-  const id = value.record_id || value.recordId ||
-    value.provider_meta?.record_id || value.provider_meta?.recordId ||
-    value.providerMeta?.record_id || value.providerMeta?.recordId ||
-    value.record?.record_id || value.record?.id || null;
-  return id === null || id === undefined || id === '' ? null : String(id);
-};
+// 本体は api.js。ここで二重に持つと、拾うキーが片方だけ増えた時に食い違う。
+const getLrchubRecordId = API.getLrchubRecordId;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(CloudSync.CLOUD_STORAGE_KEY, (items) => {
@@ -158,14 +140,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true;
   }
 
-  if (req.type === 'SET_SERVER_BASE_URL') {
-    const url = typeof req.serverBaseUrl === 'string' ? req.serverBaseUrl.trim() : '';
-    CloudSync.saveCloudState({ serverBaseUrl: url || CloudSync.DEFAULT_CLOUD_STATE.serverBaseUrl })
-      .then(state => sendResponse({ ok: true, state }))
-      .catch(err => sendResponse({ ok: false, error: String(err) }));
-    return true;
-  }
-
   if (req.type === 'OPEN_LOGIN_PAGE') {
     (async () => {
       try {
@@ -179,18 +153,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         });
       } catch (e) {
         sendResponse({ ok: false, error: String(e) });
-      }
-    })();
-    return true;
-  }
-
-  if (req.type === 'GET_COMMUNITY_REMAINING') {
-    (async () => {
-      try {
-        const data = await API.fetchCommunityRemaining();
-        sendResponse({ ok: true, data });
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e && e.message ? e.message : e) });
       }
     })();
     return true;
@@ -657,22 +619,37 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to, video_id: resolvedVideoId }),
         'LRCHub search'
       );
-      const retryRawTask = makeRawHubTask(
-        'LRCHub retry',
-        API.fetchFromLrchub({
-          track,
-          artist,
-          youtube_url,
-          video_id: resolvedVideoId,
-          offset_ms,
-          translate_to,
-          translation_source,
-          method: lrchubLyricsMethod,
-        }),
-        'LRCHub retry'
-      );
+      // 引き直しは primary が答えられなかった時だけ。
+      // 以前は同じパラメータの2本を必ず同時に投げていたので、LRCHub が
+      // 素直に答えた曲でも1曲あたり常に2往復していた。
+      let retryStarted = null;
+      const startRetry = () => {
+        if (!retryStarted) {
+          retryStarted = makeRawHubTask(
+            'LRCHub retry',
+            API.fetchFromLrchub({
+              track,
+              artist,
+              youtube_url,
+              video_id: resolvedVideoId,
+              offset_ms,
+              translate_to,
+              translation_source,
+              method: lrchubLyricsMethod,
+            }),
+            'LRCHub retry'
+          );
+        }
+        return retryStarted;
+      };
+      // 関門は primarySelectionTask(8秒で必ず決着する)側に置く。生の
+      // primaryRawTask を待つと、LRCHub が黙り込んだ時に引き直しも
+      // それを待つ形になり、下の allSettled がいつまでも返らない。
       const searchSelectionTask = API.withTimeout(searchRawTask, 5000, 'lrchub search').catch(() => null);
-      const retrySelectionTask = API.withTimeout(retryRawTask, 5000, 'lrchub retry').catch(() => null);
+      const retryRawTask = primarySelectionTask.then(result => (result ? null : startRetry()));
+      const retrySelectionTask = primarySelectionTask.then(result => (
+        result ? null : API.withTimeout(startRetry(), 5000, 'lrchub retry').catch(() => null)
+      ));
       const hubSelectionTask = firstValidResult([
         primarySelectionTask,
         searchSelectionTask,
@@ -989,29 +966,4 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true;
   }
 
-  if (req.type === 'REGISTER_TRANSLATION') {
-    const { youtube_url, video_id, lang, lyrics } = req.payload;
-    const body = { lang, lyrics };
-    if (youtube_url) body.youtube_url = youtube_url;
-    else if (video_id) body.video_id = video_id;
-
-    fetch(`https://lrchub.coreone.work/api/translation?_=${API.getCacheBuster()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(r => r.json())
-      .then(json => {
-        sendResponse({ success: !!json.ok, raw: json });
-      })
-      .catch(err => sendResponse({ success: false, error: err.toString() }));
-    return true;
-  }
-
-});
-
-self.addEventListener('fetch', (event) => {
-  if (event.preloadResponse) {
-    event.waitUntil(event.preloadResponse);
-  }
 });

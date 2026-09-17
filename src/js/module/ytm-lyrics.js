@@ -95,14 +95,41 @@
   //   匿名だと counterpart が丸ごと欠落し、歌詞タブは unselectable のままになる。
   //   SAPISID は music.youtube.com 自身の JS も読んでいる非 HttpOnly Cookie で、
   //   ハッシュ計算はこのページ内で完結する(外部には一切送らない)。
-  let authDisabled = false;
+  // 認証を拒否されたら一旦やめるが、永久にはやめない。
+  //
+  // 以前は 401/403 で無効フラグを立てたきり戻す口が無く、
+  // ログインし直してもそのタブが開いている限り匿名のままだった。
+  // ログイン限定の歌詞がセッション中ずっと取れなくなる。
+  // Cookie が変わったら(=入り直した)すぐ、そうでなくても一定時間後に試し直す。
+  const AUTH_RETRY_MS = 30 * 60 * 1000;
+  let authDisabledUntil = 0;
+  let authDisabledCookie = '';
+
+  const currentAuthCookie = () => readCookie('SAPISID') || readCookie('__Secure-3PAPISID') || '';
+
+  const isAuthDisabled = () => {
+    if (!authDisabledUntil) return false;
+    const resume = currentAuthCookie() !== authDisabledCookie || Date.now() >= authDisabledUntil;
+    if (resume) {
+      authDisabledUntil = 0;
+      authDisabledCookie = '';
+      return false;
+    }
+    return true;
+  };
+
+  const disableAuthForNow = () => {
+    authDisabledCookie = currentAuthCookie();
+    authDisabledUntil = Date.now() + AUTH_RETRY_MS;
+  };
+
   const canAuthenticate = () => (
-    !authDisabled &&
-    !!(readCookie('SAPISID') || readCookie('__Secure-3PAPISID')) &&
+    !isAuthDisabled() &&
+    !!currentAuthCookie() &&
     !!(self.crypto && self.crypto.subtle)
   );
   const buildAuthHeaders = async () => {
-    if (authDisabled) return null;
+    if (isAuthDisabled()) return null;
     const sapisid = readCookie('SAPISID') || readCookie('__Secure-3PAPISID');
     if (!sapisid || !self.crypto || !self.crypto.subtle) return null;
     const ts = Math.floor(Date.now() / 1000);
@@ -162,8 +189,8 @@
       if (!res.ok) {
         if (auth && (res.status === 401 || res.status === 403)) {
           // 認証そのものを拒否された(ログアウト・Cookie 失効)。以後は匿名で通す。
-          console.warn(`[YTM] 認証が拒否された (HTTP ${res.status})。以後は匿名で取得する`);
-          authDisabled = true;
+          console.warn(`[YTM] 認証が拒否された (HTTP ${res.status})。しばらく匿名で取得する`);
+          disableAuthForNow();
           clearTimeout(timer);
           return post(endpoint, client, extra, { ...opts, auth: false });
         }
@@ -426,13 +453,14 @@
   // カタログ解決の結果をセッション中だけ覚えておく。
   // カタログ楽曲が存在しない曲(MV しか無い曲)では検索+アルバム走査が毎回空振りし、
   // 再生のたびに1秒以上を捨てることになるため、失敗も含めて記憶する。
+  const RESOLVE_CACHE_LIMIT = 200;
   const resolveCache = new Map();
 
   const resolveCatalogVideoId = async (videoId, src, deadline) => {
     if (resolveCache.has(videoId)) return resolveCache.get(videoId);
     const remember = (v) => {
-      if (resolveCache.size > 200) resolveCache.clear();
       resolveCache.set(videoId, v);
+      trimMapToLimit(resolveCache, RESOLVE_CACHE_LIMIT, (id) => id === videoId);
       return v;
     };
     if (!src || !src.title) return null;
@@ -744,6 +772,13 @@
   // 曲を戻す・リピートする・キューを行き来するたびに数リクエスト撃ち直すのは
   // 待ち時間の丸損なので、2回目以降は即座に返す。
   // 同時に走った同一 videoId のリクエストも1本にまとめる。
+  // 上限を超えたら古い順に落とす。丸ごと消すと、いま再生している曲のぶんまで
+  // 巻き添えになって取り直しが走る。差し替え待ち(upgradeWaiters)が付いている
+  // ものも残す。消すと待っている側へ届かなくなる。
+  //
+  // 1曲ぶんの中身は歌詞本文と srv3 の XML で、長い曲だと数十 KB になる。
+  // 聴き続けたぶんだけ増えるので、上限は控えめにする。
+  const LYRICS_CACHE_LIMIT = 60;
   const lyricsCache = new Map();
   const upgradeWaiters = new Map();
 
@@ -756,6 +791,8 @@
   // 1ページ約50件。再生リストは尽きるまで追い、ラジオは打ち切る。
   const QUEUE_MAX_PAGES = 20;
   const QUEUE_RADIO_PAGES = 3;
+  // 1件が最大 1000 曲ぶんの配列になる。再生リストを渡り歩くと効いてくる。
+  const QUEUE_CACHE_LIMIT = 8;
 
   const getQueue = (videoId, onReady) => {
     let listId = null;
@@ -792,8 +829,8 @@
       };
       collect()
         .then(entries => {
-          if (queueCache.size > 20) queueCache.clear();
           queueCache.set(key, entries);
+          trimMapToLimit(queueCache, QUEUE_CACHE_LIMIT, (k) => k === key);
           // キューが分かった今が、次の曲を温める一番早いタイミング
           const at = entries.findIndex(e => e.videoId === videoId);
           entries.slice(at + 1, at + 3).forEach(e => {
@@ -828,15 +865,25 @@
       if (!upgradeWaiters.has(videoId)) upgradeWaiters.set(videoId, new Set());
       upgradeWaiters.get(videoId).add(opts.onUpgrade);
     }
-    if (lyricsCache.has(videoId)) return lyricsCache.get(videoId);
+    if (lyricsCache.has(videoId)) {
+      // 使ったものを新しい側へ回す。よく戻る曲が古い扱いで落ちないように。
+      const hit = lyricsCache.get(videoId);
+      lyricsCache.delete(videoId);
+      lyricsCache.set(videoId, hit);
+      return hit;
+    }
     const task = fetchYtmLyrics(videoId, opts).catch(err => {
       console.warn('[YTM] lyrics fetch failed:', err);
       // 失敗は覚えない。次の再生でやり直せるようにする。
       lyricsCache.delete(videoId);
       return null;
     });
-    if (lyricsCache.size > 100) lyricsCache.clear();
     lyricsCache.set(videoId, task);
+    trimMapToLimit(
+      lyricsCache,
+      LYRICS_CACHE_LIMIT,
+      (id) => id === videoId || upgradeWaiters.has(id),
+    );
     return task;
   };
 
@@ -846,6 +893,16 @@
   // この content script は music.youtube.com 上で動くので同一オリジンで通る。
   window.YTMLyrics = {
     fetch: fetchYtmLyricsCached,
+    // InnerTube の検索。「代替バージョンを検索」から使う。
+    // 以前はあちらが API キー直書き・hl/gl 固定・タイムアウト無しの
+    // 別実装を持っていた。ここを通せば、ページの設定・認証の扱い・
+    // タイムアウトが 1 箇所に揃う(検索は匿名。履歴を汚さない)。
+    search: (query, params) => post(
+      'search',
+      CLIENT_WEB,
+      params ? { query, params } : { query },
+      { auth: false }
+    ),
     // キュー(videoId・曲名・アーティスト・アートワークURL)。
     // YTM のキュー DOM からは videoId もサムネイルも取れないため、表示側はこれを使う。
     // 同期的に「今あるぶん」を返し、未取得なら裏で引いて onReady で知らせる。

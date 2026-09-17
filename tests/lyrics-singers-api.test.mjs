@@ -152,7 +152,8 @@ test('loaded singer metadata is retained for the same track/video/record context
   assert.match(source, /currentSingerMetadataKey = requestKey/);
 
   const queueSource = fs.readFileSync(new URL('../src/js/module/queue-manager.js', import.meta.url), 'utf8');
-  assert.match(queueSource, /cacheVersion:\s*2/);
+  // 本再生側と同じ定数を使う(数値の直書きだと片方だけ上げた時に食い違う)
+  assert.match(queueSource, /cacheVersion:\s*LYRICS_CACHE_VERSION/);
   assert.match(queueSource, /record_id:\s*res\.record_id \|\| null/);
   assert.match(queueSource, /lyricsSource:\s*res\.lyricsSource \|\| res\.source \|\| 'lrchub'/);
   assert.match(queueSource, /fallbackUsed:\s*!!res\.fallbackUsed/);

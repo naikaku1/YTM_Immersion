@@ -8,6 +8,13 @@ const backgroundSource = fs.readFileSync(
   'utf8',
 ).replace(/^import .*?;\r?$/gm, '')
 
+globalThis.chrome = globalThis.chrome || {
+  storage: { local: { get: (keys, cb) => cb({}) } },
+}
+// background.js が api.js から受け取る素の道具。stub で潰すと、
+// 実際には API 側にある実装が抜けたまま通ってしまう。
+const RealAPI = await import('../src/js/module/api.js')
+
 function deferred() {
   let resolve
   let reject
@@ -61,6 +68,8 @@ function createBackgroundHarness({ api = {} } = {}) {
     delay: async () => undefined,
     normalizeLrchubMeaningPayload: () => null,
     normalizeLrchubTranslations: () => ({}),
+    hasCharacterSyncedLines: RealAPI.hasCharacterSyncedLines,
+    getLrchubRecordId: RealAPI.getLrchubRecordId,
   }
 
   const context = {

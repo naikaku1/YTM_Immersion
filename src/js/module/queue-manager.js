@@ -12,6 +12,9 @@ const QUEUE_OPEN_DWELL_MS = 160;
     _prefetchLastAt: new Map(),
     _prefetchInFlight: new Set(),
     PREFETCH_DEDUP_MS: 6000,
+    // 「いつ先読みしたか」は曲ごとに 1 件ずつ増え、消える口が無かった。
+    // 覚えておく意味があるのは直近ぶんだけなので上限を置く。
+    PREFETCH_HISTORY_LIMIT: 200,
 
     // YTM のキュー DOM からは videoId もサムネイル URL も取れない
     // (実測: ytmusic-player-queue-item の中に a 要素が1つも無く、
@@ -76,6 +79,7 @@ const QUEUE_OPEN_DWELL_MS = 160;
       if (this._prefetchInFlight.has(key)) return;
 
       this._prefetchLastAt.set(key, now);
+      trimMapToLimit(this._prefetchLastAt, this.PREFETCH_HISTORY_LIMIT, (k) => k === key);
       this._prefetchInFlight.add(key);
 
       const videoId = meta && meta.videoId ? meta.videoId : null;
@@ -106,7 +110,7 @@ const QUEUE_OPEN_DWELL_MS = 160;
         const lyr = (res.lyrics || '');
         if (typeof lyr === 'string' && lyr.trim()) {
           storage.set(key, {
-            cacheVersion: 2,
+            cacheVersion: LYRICS_CACHE_VERSION,
             record_id: res.record_id || null,
             video_id: videoId,
             lyrics: lyr,
@@ -157,12 +161,9 @@ const QUEUE_OPEN_DWELL_MS = 160;
     },
 
     // 曲名に < > & が含まれると innerHTML でマークアップが壊れる
+    // 本体は namespace.js の escapeHtml。ここは既存の呼び出し口を残すだけ。
     _escapeHtml: function (value) {
-      return String(value == null ? '' : value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+      return escapeHtml(value);
     },
 
     _applyLoadedLyricsHighlight: function (row, key) {
@@ -427,7 +428,11 @@ const QUEUE_OPEN_DWELL_MS = 160;
         if (!titleEl) return;
 
         const title = titleEl.textContent.trim();
-        const artist = artistEl ? artistEl.textContent.trim() : '';
+        // byline は「アーティスト • アルバム • 年」のことがある。本再生側
+        // (getMetadata)は先頭だけをアーティストとして扱うので、ここも揃える。
+        // 揃えないと歌詞キャッシュのキーが食い違い、先読みが一度も当たらない。
+        const bylineText = artistEl ? artistEl.textContent.trim() : '';
+        const artist = parseBylineArtist(bylineText);
         const queueEntry = queueIndex.get(this._normalizeTitleForQueue(title)) || null;
         const videoId = this._extractVideoIdFromQueueItem(item)
           || (queueEntry ? queueEntry.videoId : null);
@@ -442,10 +447,13 @@ const QUEUE_OPEN_DWELL_MS = 160;
         // 先読みは重複除去後の「次の曲」に対して行う。
         // 以前は除去前の idx===1 を見ていたため、その行が重複で消えると
         // 画面に出ていない曲を先読みしていた。
-        if (renderedCount === 1) {
+        // videoId が取れた時だけ先読みする。無いと本再生側の
+        // cacheMatchesVideo(video_id の一致)が false になり、せっかく
+        // 取ったキャッシュが使われないまま storage に溜まるだけになる。
+        if (renderedCount === 1 && videoId) {
           this._prefetchLyrics({
             title, artist, videoId,
-            youtubeUrl: videoId ? `https://youtu.be/${videoId}` : null,
+            youtubeUrl: `https://youtu.be/${videoId}`,
           });
         }
 
@@ -493,7 +501,7 @@ const QUEUE_OPEN_DWELL_MS = 160;
           </div>
           <div class="queue-info">
             <div class="queue-title">${this._escapeHtml(title)}</div>
-            <div class="queue-artist">${this._escapeHtml(artist)}</div>
+            <div class="queue-artist">${this._escapeHtml(bylineText)}</div>
           </div>
         `;
 

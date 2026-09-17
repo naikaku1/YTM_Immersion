@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTM-Immersion",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",
@@ -15,13 +15,8 @@
     "https://lyricsplus.prjktla.my.id/*",
     "https://api-lyrics.simpmusic.org/*",
     "https://lrchub.coreone.work/*",
-    "http://lrchub.coreone.work/*",
-    "https://immersionproject.coreone.work/*",
-    "http://immersionproject.coreone.work/*",
     "https://api-free.deepl.com/*",
-    "https://api.deepl.com/*",
-    "http://127.0.0.1:5678/*",
-    "http://localhost:5678/*"
+    "https://api.deepl.com/*"
   ],
   "background": {
     "service_worker": "src/js/background.js",
@@ -35,6 +30,7 @@
       "js": [
         "src/js/module/namespace.js",
         "src/js/module/cloud-sync.js",
+        "src/js/module/lyrics-cache.js",
         "src/js/module/replay-manager.js",
         "src/js/module/queue-manager.js",
         "src/js/module/pip-manager.js",
@@ -55,7 +51,7 @@
         "src/assets/icons/*.png"
       ],
       "matches": [
-        "<all_urls>"
+        "https://music.youtube.com/*"
       ]
     }
   ],

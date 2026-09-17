@@ -5,6 +5,13 @@ import vm from 'node:vm'
 
 const read = rel => fs.readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8')
 
+globalThis.chrome = globalThis.chrome || {
+  storage: { local: { get: (keys, cb) => cb({}) } },
+}
+// background.js が api.js から受け取る素の道具。stub で潰すと、
+// 実際には API 側にある実装が抜けたまま通ってしまう。
+const RealAPI = await import('../src/js/module/api.js')
+
 const lyricsUiSource = read('src/js/module/lyrics-ui.js')
 const namespaceSource = read('src/js/module/namespace.js')
 const styleSource = read('src/css/style.css')
@@ -799,6 +806,8 @@ function createBackgroundHarness({ api = {} } = {}) {
     delay: ms => new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 10))),
     normalizeLrchubMeaningPayload: () => null,
     normalizeLrchubTranslations: () => ({}),
+    hasCharacterSyncedLines: RealAPI.hasCharacterSyncedLines,
+    getLrchubRecordId: RealAPI.getLrchubRecordId,
   }
 
   vm.runInNewContext(backgroundSource, {

@@ -138,3 +138,60 @@ test('曲名の表記ゆれ(全角空白・大文字小文字)を吸収する', 
   })
   assert.equal(hit.id, spaced.id)
 })
+
+// アーティスト名が取れない曲(MediaSession 未設定・UGC など)がある。
+// 以前は target が空の時点で null を返していたので、検索結果があっても
+// 歌詞が採用されなかった。候補メニューには並ぶのに何も出ない状態になる。
+test('アーティスト名が無くても曲名と尺で選ぶ', () => {
+  const right = {
+    id: 20,
+    trackName: 'テスト曲',
+    artistName: '誰か',
+    duration: 249,
+    syncedLyrics: synced,
+  }
+  const wrong = {
+    id: 21,
+    trackName: 'ぜんぜん違う曲',
+    artistName: '別の誰か',
+    duration: 400,
+    syncedLyrics: synced,
+  }
+  const hit = API.pickBestLrcLibHit([wrong, right], '', {
+    track: 'テスト曲',
+    durationSec: 249,
+  })
+  assert.ok(hit, 'アーティスト名が無いだけで諦めている')
+  assert.equal(hit.id, right.id)
+})
+
+test('アーティスト名が無い時も同期歌詞を時刻なしより優先する', () => {
+  const plainOnly = {
+    id: 22,
+    trackName: 'テスト曲',
+    artistName: '誰か',
+    duration: 249,
+    plainLyrics: plain,
+  }
+  const syncedHit = {
+    id: 23,
+    trackName: 'テスト曲',
+    artistName: '別の誰か',
+    duration: 249,
+    syncedLyrics: synced,
+  }
+  const hit = API.pickBestLrcLibHit([plainOnly, syncedHit], null, {
+    track: 'テスト曲',
+    durationSec: 249,
+  })
+  assert.equal(hit.id, syncedHit.id)
+})
+
+test('候補が空なら今までどおり null', () => {
+  assert.equal(API.pickBestLrcLibHit([], '', { track: 'テスト曲' }), null)
+  assert.equal(
+    API.pickBestLrcLibHit([{ id: 24, trackName: 'テスト曲' }], '', { track: 'テスト曲' }),
+    null,
+    '歌詞を持たない項目を拾っている',
+  )
+})

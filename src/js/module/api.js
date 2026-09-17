@@ -16,13 +16,6 @@ const YTMLog = (() => {
   return api;
 })();
 
-export const COMMUNITY_REMAINING_ENDPOINTS = [
-  'https://immersionproject.coreone.work/api/community/remaining',
-  'https://immersionproject.coreone.work/api/community/remaining/',
-  'https://immersionproject.coreone.work/api/community/remaining',
-  'https://immersionproject.coreone.work/api/community/remaining/',
-];
-
 export const normalizeArtist = (s) =>
   (s || '').toLowerCase().replace(/\s+/g, '').trim();
 
@@ -124,7 +117,16 @@ export const pickBestLrcLibHit = (items, artist, options = {}) => {
   const getArtistName = (it) =>
     it.artistName || it.artist || it.artist_name || '';
 
-  if (!target) return null;
+  // アーティスト名が取れない曲(MediaSession 未設定・UGC など)がある。
+  // 以前はここで諦めていたので、検索結果があっても歌詞が採用されず、
+  // 候補は並ぶのに何も出ない状態になっていた。曲名と尺だけで選ぶ。
+  if (!target) {
+    const synced = items.filter(it => !!(it.syncedLyrics || it.synced_lyrics));
+    const plain = items.filter(it => !!(it.plainLyrics || it.plain_lyrics));
+    if (synced.length) return rankLrcLibTier(synced, track, durationSec);
+    if (plain.length) return rankLrcLibTier(plain, track, durationSec);
+    return null;
+  }
 
   const exactArtist = (it) => {
     const a = normalizeArtist(getArtistName(it));
@@ -838,6 +840,21 @@ export const getLrchubSearchCandidates = (res) => {
   return candidates;
 };
 
+// 文字(語)単位の時刻を実際に持っているか。
+// background.js が同じものを持っていたので、こちらに寄せた。
+export const hasCharacterSyncedLines = (value) => (
+  Array.isArray(value) && value.some(line => (
+    Array.isArray(line?.chars) && line.chars.some(char => {
+      const hasText = [char?.c, char?.char, char?.text, char?.caption, char?.value]
+        .some(text => String(text ?? '').length > 0);
+      const hasTime = [char?.t, char?.startTimeMs, char?.start_ms, char?.startMs, char?.time]
+        .some(time => time !== null && time !== undefined &&
+          !(typeof time === 'string' && !time.trim()) && Number.isFinite(Number(time)));
+      return hasText && hasTime;
+    })
+  ))
+);
+
 export const getLrchubRecordId = (candidate) => {
   if (!candidate || typeof candidate !== 'object') return null;
   const id = (
@@ -1039,6 +1056,13 @@ export const searchLrchub = (track, artist, limit = 30) => {
     });
 };
 
+// 検索でぶら下がった候補を1件ずつ /api/record で引き直す時の上限。
+// 以前は最大 30 件を直列に引いていた。1曲あたり 30 往復で、しかも
+// 選定のタイムアウトが明けたあとも最後まで走り続ける。
+// 検索結果は妥当な順に並んでいるので、前の数件で当たらなければ
+// そのあとも当たらない。
+const LRCHUB_CANDIDATE_LOOKUP_LIMIT = 3;
+
 export const fetchFromLrchubSearch = async (params = {}) => {
   const { track, artist, limit = 30, translate_to, video_id } = params;
   if (!track) return null;
@@ -1054,7 +1078,8 @@ export const fetchFromLrchubSearch = async (params = {}) => {
     };
   }
 
-  for (let i = 0; i < candidates.length; i++) {
+  const lookupCount = Math.min(candidates.length, LRCHUB_CANDIDATE_LOOKUP_LIMIT);
+  for (let i = 0; i < lookupCount; i++) {
     const cand = candidates[i];
     const normalized = await fetchLrchubCandidateLyrics(cand, translate_to, video_id);
     if (normalized && normalized.lyrics && normalized.lyrics.trim()) {
@@ -1116,19 +1141,6 @@ export const fetchLrchubRecord = (record_id, translate_to) => {
     .catch(err => {
       console.error('[BG] LRCHub record error:', err);
       return null;
-    });
-};
-
-export const saveLrchubExplanations = (record_id, explanations, song_summary) => {
-  return fetch('https://lrchub.coreone.work/api/record/explanations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ record_id, explanations, song_summary }),
-  })
-    .then(r => r.json())
-    .catch(err => {
-      console.error('[BG] LRCHub explanations error:', err);
-      return { ok: false, error: String(err) };
     });
 };
 
@@ -1303,27 +1315,6 @@ export const withTimeout = (promise, ms, label) => {
 export const delay = (ms) => new Promise(resolve => {
   setTimeout(resolve, Math.max(0, ms || 0));
 });
-
-export async function fetchCommunityRemaining() {
-  let lastErr = null;
-  for (const url of COMMUNITY_REMAINING_ENDPOINTS) {
-    try {
-      const cbUrl = new URL(url);
-      cbUrl.searchParams.set('_', getCacheBuster());
-      const res = await withTimeout(fetch(cbUrl.toString(), { method: 'GET', cache: 'no-store' }), 20000, 'community remaining timeout');
-      if (!res.ok) {
-        const msg = await res.text().catch(() => res.statusText);
-        throw new Error(`community remaining failed: ${res.status} ${msg}`);
-      }
-      const data = await res.json().catch(() => null);
-      if (!data || typeof data !== 'object') throw new Error('community remaining: invalid json');
-      return data;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error('community remaining failed');
-}
 
 // ============================================================
 // 追加の歌詞プロバイダー (SimpMusic / LyricsPlus)

@@ -14,12 +14,16 @@ const resolveDeepLTargetLang = (lang) => {
 const parseLRCInternal = (lrc) => {
   if (!lrc) return { lines: [], hasTs: false };
   const tagTest = /\[\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/;
+  // Enhanced LRC の語タグ。ここに来る時点で「行同期として読む」と決まって
+  // いるので(語同期は isDynamicLrcFormat 側で先に分岐する)、表示する文字列
+  // からは落とす。残すと画面に <00:12.34> がそのまま並ぶ。
+  const LRC_WORD_TAG = /<\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,3}\s*)?>/g;
 
   // タイムスタンプがない場合
   if (!tagTest.test(lrc)) {
     // 空行も保持して、翻訳時に行が詰まらないようにする
     const lines = lrc.split(/\r?\n/).map((line, sourceIndex) => {
-      const text = (line ?? '').replace(/^\s+|\s+$/g, '');
+      const text = (line ?? '').replace(LRC_WORD_TAG, '').replace(/^\s+|\s+$/g, '');
       return { time: null, text, source_index: sourceIndex };
     });
     return { lines, hasTs: false };
@@ -50,7 +54,10 @@ const parseLRCInternal = (lrc) => {
     if (tags.length > 0) {
       const currentSourceIndex = sourceIndex++;
       // Strip all tags to get the line text
-      const text = line.replace(/\[\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/g, '').trim();
+      const text = line
+        .replace(/\[\s*\d{1,3}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/g, '')
+        .replace(LRC_WORD_TAG, '')
+        .trim();
       tags.forEach(time => {
         result.push({ time, text, source_index: currentSourceIndex });
       });
@@ -343,12 +350,6 @@ const applySingerMetadataToRow = (row, line, metadata) => {
 };
 
 // ===== duet helpers =====
-const timeKey = (t) => {
-  if (typeof t !== 'number' || Number.isNaN(t)) return 'NaN';
-  // milliseconds precision is enough for LRC tags
-  return t.toFixed(3);
-};
-
 const DUET_TIME_TOLERANCE = 0.15;
 const DUET_DUPLICATE_TOLERANCE = 1.0;
 const SAME_TIMESTAMP_TOLERANCE = 0.05;
@@ -476,10 +477,6 @@ const isLineDynamicallyActiveAtTime = (line, timeSec, tolerance = DYNAMIC_OVERLA
 // 「同期が細かい曲ほど見え方が悪くなる」という逆転になっていた。
 //
 // 他に本当に歌っている行があるならそちらに譲る(デュエット・重なり)。
-//
-// これは画面だけの判断。Discord などへ渡す「いま歌っている文字列」は
-// getCurrentPlaybackLyricText 側で別に決める。あちらは誰も歌っていない
-// 間は空にするのが正しい(古い行を出すと、まだ歌っていると嘘になる)。
 const isPrimaryRowLitAtTime = (lines, primaryIndex, timeSec) => {
   const primary = Array.isArray(lines) ? lines[primaryIndex] : null;
   if (!primary) return false;
@@ -715,6 +712,12 @@ const parseDynamicLrcForSub = (text) => {
       let endMs = nextLineMs;
       if (typeof endMs !== 'number') endMs = prevMs + 1500;
       if (endMs <= prevMs) endMs = prevMs + 200;
+      // 行末の文字を「次の行が始まるまで」で割ると、間奏に入る行で破綻する。
+      // 最後の 1〜2 文字が数秒後の時刻を持ち、歌い終わってだいぶ経ってから点く。
+      // メイン側(api.js の parseDynamicLrc)は同じ補正を持っているのに、
+      // ここ(sub = デュエットの右側)だけ抜けていた。右側の行末だけ遅れて点く。
+      const tailCount = Math.max(1, Array.from(chunk).length);
+      endMs = Math.min(endMs, prevMs + estimateCharDurationMs(chars) * tailCount);
       pushDistributed(chars, chunk, prevMs, endMs);
     }
 
@@ -757,66 +760,6 @@ const parseSubLRC = (lrc) => {
   duetSubDynamicLines = null;
   const { lines, hasTs } = parseLRCInternal(lrc);
   return { lines: Array.isArray(lines) ? lines : [], hasTs: !!hasTs, dynamicLines: null };
-};
-
-const mergeDuetLines = (mainLines, subLines) => {
-  // タイムスタンプの許容誤差 (秒)
-  const TIME_TOLERANCE = 0.5;
-
-  const subLinesWithTime = (subLines || []).filter(l => typeof l?.time === 'number');
-
-  // サブ歌詞のタイムスタンプセットを作成（高速検索用）
-  const subTimeSet = new Set();
-  subLinesWithTime.forEach(sub => {
-    // 許容誤差を考慮して、0.1秒刻みでキーを追加
-    const baseMs = Math.round(sub.time * 10);
-    for (let i = -5; i <= 5; i++) {
-      subTimeSet.add(baseMs + i);
-    }
-  });
-
-  // sub歌詞と時間が被るメイン歌詞を除外する
-  // また、除外されたメイン歌詞のタイムスタンプを記録
-  const excludedMainTimes = new Set();
-  const filteredMain = (mainLines || []).filter(l => {
-    if (typeof l?.time !== 'number') return true;
-    // 時間が近似しているサブ歌詞があるかチェック
-    const keyMs = Math.round(l.time * 10);
-    const collision = subTimeSet.has(keyMs);
-    if (collision) {
-      excludedMainTimes.add(Math.round(l.time * 1000)); // ミリ秒精度で記録
-    }
-    return !collision;
-  });
-
-  // dynamicLinesからも除外されたメイン行に対応するものを除外
-  // （グローバル変数dynamicLinesを直接変更せず、フィルタ用のセットを保存）
-  _duetExcludedTimes = excludedMainTimes;
-
-  _duetExcludedTimes = excludedMainTimes;
-
-  _duetExcludedTimes = excludedMainTimes;
-
-  _duetExcludedTimes = excludedMainTimes;
-
-  const merged = [];
-  filteredMain.forEach(l => merged.push({ ...l, duetSide: 'left' }));
-  (subLines || []).forEach(l => merged.push({ ...l, duetSide: 'right' }));
-
-  merged.sort((a, b) => {
-    const at = (typeof a.time === 'number') ? a.time : Number.POSITIVE_INFINITY;
-    const bt = (typeof b.time === 'number') ? b.time : Number.POSITIVE_INFINITY;
-
-    // 時間がほぼ同じ場合は、Left(メイン) -> Right(サブ) の順に並べる
-    if (Math.abs(at - bt) < 0.05) {
-      const ap = a.duetSide === 'right' ? 1 : 0;
-      const bp = b.duetSide === 'right' ? 1 : 0;
-      return ap - bp;
-    }
-    return at - bt;
-  });
-
-  return merged;
 };
 
 const mergeDuetLinesWithSimultaneousSupport = (mainLines, subLines) => {
@@ -867,20 +810,9 @@ const mergeDuetLinesWithSimultaneousSupport = (mainLines, subLines) => {
   for (const line of merged) {
     const duplicateIdx = findCrossSideDuplicateIndex(deduped, line);
     const prev = duplicateIdx >= 0 ? deduped[duplicateIdx] : null;
+    // 同内容の重複だけ落とす。別歌詞の同時進行は残す。
     if (duplicateIdx >= 0) {
       deduped[duplicateIdx] = preferDuplicateMainLine(prev, line);
-      continue;
-    }
-    if (duplicateIdx >= 0) {
-      deduped[duplicateIdx] = preferDuplicateMainLine(prev, line);
-      continue;
-    }
-
-    if (duplicateIdx >= 0) {
-      // 同内容の重複だけ落とす。別歌詞の同時進行は残す。
-      if (prev?.duetSide === 'left' && line?.duetSide === 'right') {
-        deduped[duplicateIdx] = preferDuplicateMainLine(prev, line);
-      }
       continue;
     }
 
@@ -907,106 +839,6 @@ const collapseCrossSideDuplicateLyrics = (lines) => {
   }
 
   return deduped;
-};
-
-const getDynamicLineForTime = (sec) => {
-  if (!dynamicLines || !Array.isArray(dynamicLines) || !dynamicLines.length) return null;
-
-  // デュエットモードで除外されたタイムスタンプかチェック
-  const isDuetMode = document.body.classList.contains('ytm-duet-mode');
-  if (isDuetMode && _duetExcludedTimes && _duetExcludedTimes.size > 0) {
-    const secMs = Math.round(sec * 1000);
-    // 許容誤差50ms以内で除外されたタイムスタンプをチェック
-    for (let offset = -50; offset <= 50; offset += 10) {
-      if (_duetExcludedTimes.has(secMs + offset)) {
-        return null; // このタイムスタンプはsub.txtで上書きされているので無視
-      }
-    }
-  }
-
-  // マップキャッシュの再構築（参照が変わった時のみ）
-  if (_dynMapSrc !== dynamicLines) {
-    _dynMapSrc = dynamicLines;
-    _dynMap = new Map();
-
-    dynamicLines.forEach(dl => {
-      let ms = null;
-      if (typeof dl?.startTimeMs === 'number') {
-        ms = dl.startTimeMs;
-      } else if (typeof dl?.startTimeMs === 'string') {
-        const n = Number(dl.startTimeMs);
-        if (!Number.isNaN(n)) ms = n;
-      } else if (Array.isArray(dl?.chars) && dl.chars.length) {
-        const ts = dl.chars.map(c => (typeof c?.t === 'number' ? c.t : null)).filter(v => v != null);
-        if (ts.length) ms = Math.min(...ts);
-      }
-
-      if (typeof ms === 'number') {
-        _dynMap.set(timeKey(ms / 1000), dl);
-      }
-    });
-  }
-
-  // 1. 完全一致トライ
-  const exact = _dynMap?.get(timeKey(sec));
-  if (exact) return exact;
-
-  // 2. 近似値トライ (前後0.15秒)
-  const TOLERANCE = 0.15;
-  const found = dynamicLines.find(dl => {
-    let startS = 0;
-    if (typeof dl.startTimeMs === 'number') startS = dl.startTimeMs / 1000;
-    else if (dl.time) startS = dl.time;
-    return Math.abs(startS - sec) <= TOLERANCE;
-  });
-
-  return found || null;
-};
-
-// サブボーカル用のdynamicLine取得（sub.txtのDynamic.lrc対応）
-let _subDynMapSrc = null;
-let _subDynMap = null;
-
-const getSubDynamicLineForTime = (sec) => {
-  if (!duetSubDynamicLines || !Array.isArray(duetSubDynamicLines) || !duetSubDynamicLines.length) return null;
-
-  // マップキャッシュの再構築（参照が変わった時のみ）
-  if (_subDynMapSrc !== duetSubDynamicLines) {
-    _subDynMapSrc = duetSubDynamicLines;
-    _subDynMap = new Map();
-
-    duetSubDynamicLines.forEach(dl => {
-      let ms = null;
-      if (typeof dl?.startTimeMs === 'number') {
-        ms = dl.startTimeMs;
-      } else if (typeof dl?.startTimeMs === 'string') {
-        const n = Number(dl.startTimeMs);
-        if (!Number.isNaN(n)) ms = n;
-      } else if (Array.isArray(dl?.chars) && dl.chars.length) {
-        const ts = dl.chars.map(c => (typeof c?.t === 'number' ? c.t : null)).filter(v => v != null);
-        if (ts.length) ms = Math.min(...ts);
-      }
-
-      if (typeof ms === 'number') {
-        _subDynMap.set(timeKey(ms / 1000), dl);
-      }
-    });
-  }
-
-  // 1. 完全一致トライ
-  const exact = _subDynMap?.get(timeKey(sec));
-  if (exact) return exact;
-
-  // 2. 近似値トライ (前後0.15秒)
-  const TOLERANCE = 0.15;
-  const found = duetSubDynamicLines.find(dl => {
-    let startS = 0;
-    if (typeof dl.startTimeMs === 'number') startS = dl.startTimeMs / 1000;
-    else if (dl.time) startS = dl.time;
-    return Math.abs(startS - sec) <= TOLERANCE;
-  });
-
-  return found || null;
 };
 
 // 歌詞ソースの優先設定。'ytm' か 'lrchub' の2択で、どちらも他ソースへフォールバックする。
@@ -1429,11 +1261,22 @@ function renderAnimatedTimedText(captionData) {
   updateAnimatedCaptionStage(typeof now === 'number' ? now : 0, true);
 }
 
+// 字幕の受け皿は毎フレーム同じ要素。入れ替わるのは歌詞を組み直した時だけなので、
+// container に覚えさせて querySelector を毎フレーム走らせない。
+const findAnimatedCaptionStage = (container) => {
+  if (!container) return null;
+  const cached = container._ytmCaptionStage;
+  if (cached && cached.isConnected && container.contains(cached)) return cached;
+  const found = container.querySelector('.ytm-animated-caption-stage');
+  container._ytmCaptionStage = found;
+  return found;
+};
+
 function updateAnimatedCaptionStage(currentTime, force = false) {
   if (!animatedCaptionData || !ui.lyrics) return;
-  const stages = [ui.lyrics.querySelector('.ytm-animated-caption-stage')];
+  const stages = [findAnimatedCaptionStage(ui.lyrics)];
   if (PipManager.pipWindow && PipManager.pipLyricsContainer) {
-    stages.push(PipManager.pipLyricsContainer.querySelector('.ytm-animated-caption-stage'));
+    stages.push(findAnimatedCaptionStage(PipManager.pipLyricsContainer));
   }
   const availableStages = stages.filter(Boolean);
   if (!availableStages.length) return;
@@ -1646,22 +1489,26 @@ function changeUIWithMovieMode(changed) {
     window.dispatchEvent(new Event('resize'));
   }, 300);
 }
+// 動画/曲の切り替えが使える状態か。
+//
+// 以前はサイドガイドの項目数(childNodes.length >= 4)で非 Premium と
+// 判断していた。YTM の UI が変わるだけで判定が裏返り、動画モードの
+// セットアップが走らなくなったり、走るべきでない時に走ったりする。
+//
+// 判断材料は切り替えトグルそのものにする。存在して playback-mode を
+// 持っていれば、実際に切り替えられる。
 function isYTMPremiumUser() {
   const switcher = document.querySelector("ytmusic-av-toggle");
-  const requireSignIn = !!document.querySelector('ytmusic-guide-signin-promo-renderer');
-  const primarySection = document.querySelector('#mini-guide ytmusic-guide-section-renderer[is-primary] div#items');
-  const notPremium = primarySection ? primarySection.childNodes.length >= 4 : false;
-  if (!requireSignIn && !notPremium) {
-    if (switcher) switcher.classList.remove('notpremium');
-  }
-  else {
-    if (switcher) switcher.classList.add('notpremium');
-  }
-  return !requireSignIn || !notPremium;
+  const canSwitch = !!switcher && switcher.hasAttribute('playback-mode');
+  if (switcher) switcher.classList.toggle('notpremium', !canSwitch);
+  return canSwitch;
 }
 
 function preferLyricsDefault(targetKey, attempt = 0) {
   if (!targetKey || currentKey !== targetKey) return;
+  // 設定で切れるようにした。以前は曲が変わるたびに必ず「曲」へ寄せていたので、
+  // 「動画」を選んでいても毎曲戻され、動画モードに留まる手段が無かった。
+  if (!config.preferSongMode) return;
 
   const switcher = document.querySelector("ytmusic-av-toggle");
   if (!switcher) {
@@ -1696,25 +1543,51 @@ function preferLyricsDefault(targetKey, attempt = 0) {
     }, 250);
   }
 }
+// 目当ての要素が現れるまで待つ。
+// 1 秒ごとの setInterval で探し続けると、見つかるまでの数十秒ずっと
+// 空振りのクエリを回すことになる。DOM が動いた時だけ見に行く。
+const waitForDomCondition = (check, timeoutMs) => new Promise((resolve) => {
+  const first = check();
+  if (first) { resolve(first); return; }
+
+  let settled = false;
+  const finish = (value) => {
+    if (settled) return;
+    settled = true;
+    observer.disconnect();
+    clearTimeout(timer);
+    resolve(value);
+  };
+  const observer = new MutationObserver(() => {
+    const value = check();
+    if (value) finish(value);
+  });
+  const timer = setTimeout(() => finish(null), timeoutMs);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+});
+
 const hoverTimeInfoSetup = () => {
+  // "m:ss" と "h:mm:ss" の両方を受ける。1 時間を超える曲(ライブ音源・
+  // ミックス)で後ろの2つしか見ていなかったため、ホバーの時刻が NaN になっていた。
   const timeToSeconds = (str) => {
-    const [m, s] = str.split(":").map(Number);
-    return m * 60 + s;
+    const parts = String(str || '').split(':').map(Number);
+    if (!parts.length || parts.some(n => !Number.isFinite(n))) return 0;
+    return parts.reduce((total, n) => total * 60 + n, 0);
+  };
+  const formatHoverTime = (totalSeconds) => {
+    const sec = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`;
   };
   const removeHoverTimeInfo = () => {
-    let attempts = 0;
-    const interval = setInterval(() => {
-      const info = document.querySelector('#hover-time-info');
-      if (info) {
-        info.remove();
-        clearInterval(interval);
-      } else {
-        attempts++;
-        if (attempts > 30) {
-          clearInterval(interval);
-        }
-      }
-    }, 1000);
+    void waitForDomCondition(
+      () => document.querySelector('#hover-time-info'),
+      30000
+    ).then(info => { if (info) info.remove(); });
   };
   const createHoverTimeInfo = () => {
     let info = document.querySelector('#hover-time-info-new');
@@ -1727,8 +1600,7 @@ const hoverTimeInfoSetup = () => {
     }
   };
   const adjustHoverTimeInfoPosition = () => {
-    let attempts = 0;
-    const interval = setInterval(() => {
+    const findParts = () => {
       const progresshandle = document.querySelector('tp-yt-paper-slider#progress-bar #sliderKnob');
       const info = document.querySelector('#hover-time-info-new');
       const sliderBar = document.querySelector(
@@ -1736,40 +1608,34 @@ const hoverTimeInfoSetup = () => {
       );
       const slider = sliderBar?.parentElement?.parentElement;
       const playerBar = document.querySelector('ytmusic-player-bar');
+      if (!(slider && info && progresshandle && playerBar)) return null;
+      return { progresshandle, info, slider, playerBar };
+    };
 
-      if (slider && info && progresshandle && playerBar) {
-        const refresh = () => {
-          const onMove = (e) => {
-            const marginLeft = (playerBar.parentElement.offsetWidth - playerBar.offsetWidth) / 2;
-            const infoLeft = e.clientX;
-            const relativeMouseX = e.clientX - marginLeft;
-            const timeinfo = document.querySelector('#left-controls > span');
-            if (!timeinfo) return;
-            const songLengthSeconds = timeToSeconds(timeinfo.textContent.replace(/^[^/]+\/\s*/, ""));
-            const relativePosition = Math.round((Math.min(1, Math.max(0, (relativeMouseX / slider.offsetWidth)))) * 1000) / 1000;
-            const hoverTimeSeconds = Math.floor(songLengthSeconds * relativePosition);
-            const hoverTimeString = `${String(Math.floor(hoverTimeSeconds / 60))}:${String(hoverTimeSeconds % 60).padStart(2, '0')}`;
-            info.style.display = 'block';
-            info.style.left = `${infoLeft}px`;
-            info.textContent = hoverTimeString;
-          };
-          const hide = () => {
-            info.style.display = 'none';
-          };
-          slider.addEventListener('mousemove', onMove);
-          slider.addEventListener('mouseout', hide);
-          progresshandle.addEventListener('mousemove', onMove);
-          progresshandle.addEventListener('mouseout', hide);
-        };
-        refresh();
-        clearInterval(interval);
-      } else {
-        attempts++;
-        if (attempts > 60) {
-          clearInterval(interval);
-        }
-      }
-    }, 1000);
+    void waitForDomCondition(findParts, 60000).then((parts) => {
+      if (!parts) return;
+      const { progresshandle, info, slider, playerBar } = parts;
+      const onMove = (e) => {
+        const marginLeft = (playerBar.parentElement.offsetWidth - playerBar.offsetWidth) / 2;
+        const infoLeft = e.clientX;
+        const relativeMouseX = e.clientX - marginLeft;
+        const timeinfo = document.querySelector('#left-controls > span');
+        if (!timeinfo) return;
+        const songLengthSeconds = timeToSeconds(timeinfo.textContent.replace(/^[^/]+\/\s*/, ""));
+        const relativePosition = Math.round((Math.min(1, Math.max(0, (relativeMouseX / slider.offsetWidth)))) * 1000) / 1000;
+        const hoverTimeSeconds = Math.floor(songLengthSeconds * relativePosition);
+        info.style.display = 'block';
+        info.style.left = `${infoLeft}px`;
+        info.textContent = formatHoverTime(hoverTimeSeconds);
+      };
+      const hide = () => {
+        info.style.display = 'none';
+      };
+      slider.addEventListener('mousemove', onMove);
+      slider.addEventListener('mouseout', hide);
+      progresshandle.addEventListener('mousemove', onMove);
+      progresshandle.addEventListener('mouseout', hide);
+    });
   };
   removeHoverTimeInfo();
   createHoverTimeInfo();
@@ -1859,12 +1725,9 @@ const translateMixedSegments = async (lines, indexes, langCode, targetLang) => {
       perLineSegments[idx] = segMeta;
     });
     if (!segmentsToTranslate.length) return null;
-    const res = await new Promise(resolve => {
-      chrome.runtime.sendMessage(
-        { type: 'TRANSLATE', payload: { text: segmentsToTranslate, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } },
-        resolve
-      );
-    });
+    const res = await safeRuntimeSendMessage(
+      { type: 'TRANSLATE', payload: { text: segmentsToTranslate, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } }
+    );
     if (!res?.success || !Array.isArray(res.translations) || res.translations.length !== segmentsToTranslate.length) {
       return null;
     }
@@ -1903,6 +1766,29 @@ const dedupePrimarySecondary = (lines) => {
   return lines;
 };
 
+// DeepL の結果置き場。曲(currentKey)と言語と歌詞本文が同じなら叩き直さない。
+// 歌詞本文まで見るのは、取得元が差し替わって行が変わることがあるため。
+const DEEPL_CACHE_MAX = 8;
+const deepLTranslationCache = new Map();
+
+const deepLCacheKey = (lines, langCode) => {
+  const body = lines.map(l => (l && l.text !== undefined && l.text !== null) ? String(l.text) : '').join('\n');
+  return `${currentKey || ''}///${langCode}///${body}`;
+};
+
+const translateWithDeepLCached = async (lines, langCode) => {
+  const key = deepLCacheKey(lines, langCode);
+  if (deepLTranslationCache.has(key)) return deepLTranslationCache.get(key);
+  const translated = await translateTo(lines, langCode);
+  if (!translated) return null;
+  // 古いものから落とす。曲を跨いで無制限に溜めない。
+  if (deepLTranslationCache.size >= DEEPL_CACHE_MAX) {
+    deepLTranslationCache.delete(deepLTranslationCache.keys().next().value);
+  }
+  deepLTranslationCache.set(key, translated);
+  return translated;
+};
+
 const translateTo = async (lines, langCode) => {
   if (!config.deepLKey || !lines.length) return null;
   const targetLang = resolveDeepLTargetLang(langCode);
@@ -1922,12 +1808,9 @@ const translateTo = async (lines, langCode) => {
     let translated = new Array(lines.length).fill('');
 
     if (requestTexts.length) {
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage(
-          { type: 'TRANSLATE', payload: { text: requestTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } },
-          resolve
-        );
-      });
+      const res = await safeRuntimeSendMessage(
+        { type: 'TRANSLATE', payload: { text: requestTexts, apiKey: config.deepLKey, targetLang, useSharedTranslateApi: false } }
+      );
 
       if (!res?.success || !Array.isArray(res.translations) || res.translations.length !== requestTexts.length) {
         return null;
@@ -1980,10 +1863,7 @@ const getMetadata = () => {
   const aEl = document.querySelector('.byline.style-scope.ytmusic-player-bar');
   if (!(tEl && aEl)) return null;
 
-  const parts = (aEl.textContent || '')
-    .split('•')
-    .map(s => (s || '').trim())
-    .filter(Boolean);
+  const parts = splitBylineParts(aEl.textContent);
 
   return {
     title: (tEl.textContent || '').trim(),
@@ -2414,10 +2294,14 @@ async function applyLateLyricsUpgrade(payload) {
   currentLyricsResultPriority = 2;
   currentLyricsQuality = selected.quality;
 
-  lyricsCandidates = Array.isArray(payload.candidates) ? payload.candidates : null;
-  lyricsRequests = Array.isArray(payload.requests) ? payload.requests : null;
-  lyricsConfig = payload.config || null;
+  // 遅れて届いた差し替え(特に YouTube Music)には候補一覧・requests・config・
+  // 翻訳が入っていない。無条件に代入すると、LrcLib で暫定表示していた時の
+  // 候補メニューが丸ごと消える。loadLyrics と同じく「あれば更新」に揃える。
+  if (Array.isArray(payload.candidates) && payload.candidates.length) lyricsCandidates = payload.candidates;
+  if (Array.isArray(payload.requests)) lyricsRequests = payload.requests;
+  if (payload.config) lyricsConfig = payload.config;
   lyricsTranslationMap = {
+    ...(lyricsTranslationMap || {}),
     ...normalizeTranslationsToLrcMapLocal(payload.translations),
     ...normalizeTranslationsToLrcMapLocal(payload.lrcMap),
   };
@@ -2467,12 +2351,13 @@ async function applyLateLyricsUpgrade(payload) {
           noLyrics: false,
           subLyrics: duetSubLyricsRaw,
           meaningData: lyricsMeaning || null,
-          candidates: lyricsCandidates || null,
+          candidates: LyricsCache.stripCandidateLyrics(lyricsCandidates) || null,
           lrcMap: lyricsTranslationMap || null,
           requests: lyricsRequests || null,
           config: lyricsConfig || null,
           lockState: lyricsLockState || null,
           lyricsSource: lateSource,
+          fetchedAt: Date.now(),
           fallbackUsed: false,
           lyricsQuality: selected.quality,
           offset_ms: Number.isFinite(Number(payload.offset_ms)) ? Number(payload.offset_ms) : 0,
@@ -2484,13 +2369,6 @@ async function applyLateLyricsUpgrade(payload) {
     console.warn('[YTM] Failed to cache late LRCHub lyrics:', error);
   }
 }
-
-const escapeHtml = (value) => String(value ?? '')
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
 
 const parseMeaningTimeToSecLocal = (value) => {
   if (typeof value === 'number') {
@@ -2677,13 +2555,24 @@ const getMeaningSegments = () => (
     : []
 );
 
+// video の時刻を曲内ローカル時間に直す。
+//
+// timeOffset(この曲が始まった video 時間)を書き換えるのは
+//   ・曲が変わった時の tick
+//   ・巻き戻りを見つけた rAF ループ
+//   ・シーク(seeked)
+// の 3 箇所だけ。表示のために時刻を読むだけの経路がついでに書き換えると、
+// どこで値が変わったのか追えなくなる。ここでは読むだけ。
+const toLocalPlaybackTime = (rawTime) => {
+  // offset を下回っているなら、その曲は頭から掛け直されている
+  const offset = (timeOffset > 0 && rawTime < timeOffset) ? 0 : timeOffset;
+  return Math.max(0, rawTime - offset);
+};
+
 const getCurrentPlaybackTimeSec = () => {
   const v = document.querySelector('video');
   if (!v || typeof v.currentTime !== 'number' || Number.isNaN(v.currentTime)) return null;
-  let t = v.currentTime;
-  // 連続再生対応: 曲開始オフセットを引いて曲内ローカル時間にする（全歌詞共通）
-  if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
-  t = Math.max(0, t - timeOffset);
+  let t = toLocalPlaybackTime(v.currentTime);
   const duration = Number.isFinite(v.duration) ? v.duration : null;
   t = Math.max(0, t + (config.syncOffset / 1000));
   if (typeof duration === 'number' && duration > 0) {
@@ -2795,6 +2684,34 @@ function hideMeaningSummaryPopup() {
 let summaryButtonAttentionTimer = null;
 let summaryButtonAttentionKey = null;
 const MEANING_ALWAYS_SHOW_KEY = 'ytm_meaning_always_show';
+// 「設定をリセット」で消すキー。ここに挙げたものだけを消す。
+// 再生履歴(ytm_local_history)・歌詞キャッシュ("曲名///アーティスト")・
+// クラウドの復活の呪文・解説のピン留めは設定ではないので入れない。
+const SETTINGS_STORAGE_KEYS = [
+  'ytm_deepl_key',
+  'ytm_trans_enabled',
+  'ytm_shared_trans_enabled',
+  'ytm_left_align',
+  'ytm_keep_past_lyrics',
+  'ytm_prefer_song_mode',
+  'ytm_apple_bg',
+  'ytm_low_cpu_mode',
+  'ytm_apple_sync_style',
+  'ytm_animated_captions_enabled',
+  'ytm_singer_colors_enabled',
+  'ytm_lrclib_fallback',
+  'ytm_meaning_always_show',
+  'ytm_main_lang',
+  'ytm_sub_lang',
+  'ytm_ui_lang',
+  'ytm_lyric_weight',
+  'ytm_bg_brightness',
+  'ytm_ui_scale',
+  'ytm_sync_offset',
+  'ytm_save_sync_offset',
+  'ytm_lyric_source_mode',
+  'ytm_queue_pinned',
+];
 const MEANING_PINNED_SONGS_KEY = 'ytm_meaning_pinned_songs';
 let meaningPinnedSongs = new Set();
 let meaningPreferencesPromise = null;
@@ -3326,19 +3243,17 @@ async function applyTranslations(baseLines, youtubeUrl) {
       const missingLangs = langsToFetch.filter(lang => !lrcMap[normalizeTranslationLangKey(lang)]);
       if (missingLangs.length) {
         const metaNow = getMetadata();
-        const track = metaNow?.title ? metaNow.title.replace(/\s*[\(-\[].*?[\)-]].*/, '') : '';
+        const track = normalizeSearchTrackTitle(metaNow?.title);
         const artist = metaNow?.artist || '';
-        const res = await new Promise(resolve => {
-          chrome.runtime.sendMessage({
-            type: 'GET_TRANSLATION',
-            payload: {
-              track,
-              artist,
-              youtube_url: youtubeUrl,
-              video_id: getCurrentVideoId(),
-              langs: missingLangs
-            }
-          }, resolve);
+        const res = await safeRuntimeSendMessage({
+          type: 'GET_TRANSLATION',
+          payload: {
+            track,
+            artist,
+            youtube_url: youtubeUrl,
+            video_id: getCurrentVideoId(),
+            langs: missingLangs
+          }
         });
         if (res?.success) {
           lrcMap = {
@@ -3370,22 +3285,16 @@ async function applyTranslations(baseLines, youtubeUrl) {
 
   if (needDeepL.length && config.deepLKey) {
     for (const lang of needDeepL) {
-      const translatedTexts = await translateTo(baseLines, lang);
+      // applyTranslations は遅着の差し替え・sub 歌詞の到着・設定保存でも
+      // 走る。毎回 DeepL を叩くと同じ曲で何度も API 枠を消費するので、
+      // 同じ歌詞・同じ言語なら前の結果を使い回す。
+      const translatedTexts = await translateWithDeepLCached(baseLines, lang);
       if (translatedTexts && translatedTexts.length === baseLines.length) {
         const lines = baseLines.map((l, i) => ({
           time: l.time,
           text: translatedTexts[i]
         }));
         transLinesByLang[lang] = lines;
-        const plain = translatedTexts.join('\n');
-        if (plain.trim()) {
-          chrome.runtime.sendMessage({
-            type: 'REGISTER_TRANSLATION',
-            payload: { youtube_url: youtubeUrl, lang, lyrics: plain }
-          }, (res) => {
-            YTMLog.log('[CS] REGISTER_TRANSLATION', lang, res);
-          });
-        }
       }
     }
   }
@@ -4413,6 +4322,16 @@ const DYNAMIC_TAIL_MIN_MS = 200;
 const DYNAMIC_TAIL_MAX_MS = 900;
 const DYNAMIC_TAIL_GUARD_MS = 50;
 
+// 正規化は行をその場で書き換えるので、必ず複製に対して行う。
+const deepCopyDynamicLines = (lines) => {
+  if (!Array.isArray(lines)) return lines;
+  try {
+    return structuredClone(lines);
+  } catch (e) {
+    try { return JSON.parse(JSON.stringify(lines)); } catch (e2) { return lines; }
+  }
+};
+
 const dynamicLineCharTimes = (line) => (
   (Array.isArray(line?.chars) ? line.chars : [])
     .map(char => (typeof char?.t === 'number' && Number.isFinite(char.t) ? char.t : null))
@@ -4567,10 +4486,17 @@ async function applyLyricsText(rawLyrics) {
   finalLines = collapseCrossSideDuplicateLyrics(finalLines);
 
   // Normalize Dynamic lyrics: expand "word chunks" into character-level timings
+  //
+  // 正規化は行オブジェクトをその場で書き換える。生データのまま持っておかないと、
+  // あとから届いたレスポンスと JSON.stringify で比べた時に必ず不一致になり、
+  // 同じ歌詞でも毎回 renderLyrics が走ってスクロール位置が飛ぶ。
+  // キャッシュに入る中身も「正規化前/後」のどちらか不定になっていた。
   try {
     if (Array.isArray(dynamicLines) && dynamicLines.length) {
-      dynamicLines = normalizeDynamicLinesToCharLevel(dynamicLines);
-      dynamicLines = fillDynamicLineEnds(dynamicLines);
+      dynamicLinesRaw = dynamicLines;
+      dynamicLines = fillDynamicLineEnds(normalizeDynamicLinesToCharLevel(deepCopyDynamicLines(dynamicLines)));
+    } else {
+      dynamicLinesRaw = dynamicLines;
     }
   } catch (e) { }
 
@@ -4846,128 +4772,10 @@ const getCurrentPlaybackSeconds = () => {
     const v = document.querySelector('video');
     if (v && Number.isFinite(v.currentTime)) {
       // 連続再生対応: 曲開始オフセットを引いて曲内ローカル時間で返す
-      return Math.max(0, v.currentTime - timeOffset);
+      return toLocalPlaybackTime(v.currentTime);
     }
   } catch (e) { }
   return null;
-};
-
-// Resolve the active lyric from the media clock. This remains accurate when a
-// background tab throttles rAF and its highlighted DOM row becomes stale.
-// null means timed lyric data is unavailable; '' is an intentional lyric gap.
-const getCurrentPlaybackLyricText = () => {
-  const meta = getMetadata();
-  if (meta) {
-    const metadataKey = `${meta.title}///${meta.artist}`;
-    if (currentKey && currentKey !== metadataKey) return '';
-  }
-
-  const currentTime = getCurrentPlaybackTimeSec();
-  if (!Number.isFinite(currentTime)) return null;
-
-  if (
-    config.useAnimatedCaptions &&
-    animatedCaptionData &&
-    Array.isArray(animatedCaptionData.events)
-  ) {
-    const tMs = Math.max(0, currentTime * 1000);
-    const activeEvents = getActiveTimedTextEvents(animatedCaptionData.events, tMs);
-    return activeEvents
-      .map(event => String(
-        typeof event?.visibleText === 'string' ? event.visibleText : event?.text || ''
-      ).trim())
-      .filter((text, index, values) => text && values.indexOf(text) === index)
-      .join(' / ');
-  }
-
-  if (!Array.isArray(lyricsData) || !lyricsData.length || !hasTimestamp) return null;
-
-  let primaryIndex = -1;
-  for (let i = 0; i < lyricsData.length; i++) {
-    const lineTime = lyricsData[i]?.time;
-    if (typeof lineTime !== 'number' || !Number.isFinite(lineTime)) continue;
-    if (lineTime > currentTime) break;
-    primaryIndex = i;
-  }
-  if (primaryIndex < 0) return '';
-
-  const primaryLine = lyricsData[primaryIndex];
-  const primaryHasDynamicRange = Number.isFinite(primaryLine?._dynamicRenderStartSec) &&
-    Number.isFinite(primaryLine?._dynamicRenderEndSec);
-  const primaryIsActive = !primaryHasDynamicRange ||
-    isLineDynamicallyActiveAtTime(primaryLine, currentTime);
-  const activeIndices = new Set();
-  if (primaryIsActive) activeIndices.add(primaryIndex);
-  const currentLineTime = lyricsData[primaryIndex]?.time;
-  if (primaryIsActive && typeof currentLineTime === 'number') {
-    for (let i = primaryIndex - 1; i >= 0; i--) {
-      if (!isSameTimestamp(lyricsData[i]?.time, currentLineTime)) break;
-      activeIndices.add(i);
-    }
-    for (let i = primaryIndex + 1; i < lyricsData.length; i++) {
-      if (!isSameTimestamp(lyricsData[i]?.time, currentLineTime)) break;
-      activeIndices.add(i);
-    }
-  }
-
-  if (primaryIsActive && activeIndices.size === 1 && primaryIndex > 0) {
-    const previousIndex = primaryIndex - 1;
-    const previousTime = lyricsData[previousIndex]?.time;
-    const currentSide = lyricsData[primaryIndex]?.duetSide;
-    const previousSide = lyricsData[previousIndex]?.duetSide;
-    const isClosePreviousLine = typeof currentLineTime === 'number' &&
-      typeof previousTime === 'number' &&
-      (currentLineTime - previousTime) <= 1.0;
-    const isDifferentDuetSide = currentSide && previousSide && currentSide !== previousSide;
-
-    if (isClosePreviousLine && !isDifferentDuetSide) {
-      const currentText = normalizeLyricCompareTextStrict(lyricsData[primaryIndex]?.text);
-      const previousText = normalizeLyricCompareTextStrict(lyricsData[previousIndex]?.text);
-      const sameDisplayedLyric = !!currentText &&
-        !!previousText &&
-        scoreLyricTextMatch(currentText, previousText) >= 100;
-      if (!sameDisplayedLyric) activeIndices.add(previousIndex);
-    }
-  }
-
-  lyricsData.forEach((line, lineIndex) => {
-    if (!activeIndices.has(lineIndex) && isLineDynamicallyActiveAtTime(line, currentTime)) {
-      activeIndices.add(lineIndex);
-    }
-  });
-
-  if (activeIndices.size > 1) {
-    const activeList = Array.from(activeIndices).sort((a, b) => a - b);
-    activeList.forEach((activeIndex) => {
-      const activeLine = lyricsData[activeIndex];
-      if (activeLine?.duetSide !== 'right') return;
-      const activeText = normalizeLyricCompareTextStrict(activeLine?.text);
-      if (!activeText) return;
-      const dedupeTolerance = Array.isArray(dynamicLines) && dynamicLines.length > 0
-        ? 5.0
-        : DUET_DUPLICATE_TOLERANCE;
-      const hasMatchingLeft = activeList.some((otherIndex) => {
-        if (otherIndex === activeIndex) return false;
-        const otherLine = lyricsData[otherIndex];
-        if (otherLine?.duetSide !== 'left') return false;
-        if (!isSameTimestamp(otherLine?.time, activeLine?.time, dedupeTolerance)) return false;
-        const otherText = normalizeLyricCompareTextStrict(otherLine?.text);
-        return !!otherText && scoreLyricTextMatch(otherText, activeText) >= 100;
-      });
-      if (hasMatchingLeft) activeIndices.delete(activeIndex);
-    });
-  }
-
-  return Array.from(activeIndices)
-    .sort((a, b) => a - b)
-    .map(index => String(lyricsData[index]?.text || lyricsData[index]?.rawLine || '').trim())
-    .filter((text, index, lines) => text && lines.indexOf(text) === index)
-    .join(' / ');
-};
-
-globalThis.YTMImmersionDiscordLyrics = {
-  ...(globalThis.YTMImmersionDiscordLyrics || {}),
-  getCurrentPlaybackLyricText,
 };
 
 const getCurrentRenderedLyricText = () => {
@@ -5046,7 +4854,7 @@ const pickPreviewInfoFromLyrics = (rawLyrics) => {
     const v = document.querySelector('video');
     if (v && Number.isFinite(v.currentTime) && Number.isFinite(v.duration) && v.duration > 0) {
       // 連続再生対応: 曲内ローカル時間で進捗比率を計算
-      const localTime = Math.max(0, v.currentTime - timeOffset);
+      const localTime = toLocalPlaybackTime(v.currentTime);
       const ratio = Math.max(0, Math.min(1, localTime / v.duration));
       const idx = Math.max(0, Math.min(nonEmpty.length - 1, Math.round((nonEmpty.length - 1) * ratio)));
       return {
@@ -5399,58 +5207,19 @@ async function selectCandidateById(candId) {
       manualChoice: true,
       // 候補一覧も持たせる。次に開いた時、裏の取得が返ってくる前でも
       // メニューから選び直せるようにするため。
-      candidates: Array.isArray(lyricsCandidates) ? lyricsCandidates : null,
+      candidates: Array.isArray(lyricsCandidates) ? LyricsCache.stripCandidateLyrics(lyricsCandidates) : null,
       lyricsSource: candidateSource,
+      fetchedAt: Date.now(),
       fallbackUsed: false,
       lyricsQuality: selectedPayload.quality,
       offset_ms: Number.isFinite(Number(cand.offset_ms)) ? Number(cand.offset_ms) : 0,
     });
   }
   await applyLyricsText(nextLyricsText);
-  if (
-    currentKey !== selectionKey ||
-    (currentLyricsVideoId || getCurrentVideoId() || '') !== selectionVideoId
-  ) return;
-  const youtube_url = getCurrentVideoUrl();
-  const video_id = selectionVideoId;
-  const candidate_id = cand.id || candId;
-  // LRCHub のレコードに対する「この候補を選んだ」報告。他の取得元の候補で
-  // 投げると、向こうに存在しない ID を送ることになる。
-  const reportsToLrchub = candidateSource === 'lrchub' && !cand.providerCandidate;
-  if (reportsToLrchub) {
-    try {
-      chrome.runtime.sendMessage(
-        { type: 'SELECT_LYRICS_CANDIDATE', payload: { youtube_url, video_id, candidate_id } },
-        (res) => YTMLog.log('[CS] SELECT_LYRICS_CANDIDATE result:', res)
-      );
-    } catch (e) {
-      console.warn('[CS] SELECT_LYRICS_CANDIDATE failed to send', e);
-    }
-  }
-  // 報告した時だけ取り直す。サーバー側がその候補を正として反映するので、
-  // 10 秒後に引き直して canonical な状態を拾う。
-  //
-  // 報告していない取得元(SimpMusic / LyricsPlus / LrcLib)で走らせてはいけない。
-  // 拾い直すものが何も無いのに storage.remove で「選んだ」記録ごと消し、
-  // loadLyrics が最初から取り直す。YTM優先なら当然 YTM に戻る。
-  // 実際「SimpMusic に切り替えたのに10秒後 YTM に戻る」報告が出た。
-  if (!reportsToLrchub) return;
-
-  const reloadKey = currentKey;
-  const reloadVideoId = selectionVideoId;
-  setTimeout(() => {
-    const metaNow = getMetadata();
-    if (!metaNow) return;
-    const keyNow = `${metaNow.title}///${metaNow.artist}`;
-    if (
-      keyNow !== reloadKey ||
-      currentKey !== reloadKey ||
-      (currentLyricsVideoId || getCurrentVideoId() || '') !== reloadVideoId ||
-      (getCurrentVideoId() || '') !== reloadVideoId
-    ) return;
-    storage.remove(reloadKey);
-    loadLyrics(metaNow);
-  }, 10000);
+  // 「この候補を選んだ」の報告はしない。LRCHub 側に匿名で受け取る API が無く
+  // (/api/record/lock はログイン必須、他は 404)、送っても届かないため。
+  // 以前はここから 10 秒後にキャッシュを消して取り直していたが、報告が
+  // 届かない以上、選んだ記録を捨てて最初から引き直すだけの動きだった。
 }
 
 let lyricsLockState = null;
@@ -5511,19 +5280,6 @@ function buildLyricsLockState(requests, config, prevState) {
 function syncLyricsLockState() {
   lyricsLockState = buildLyricsLockState(lyricsRequests, lyricsConfig, lyricsLockState);
   return lyricsLockState;
-}
-
-function isLockRequestLocked(req, state = lyricsLockState) {
-  const target = inferLockRequestTarget(req);
-  const requestId = normalizeLockRequestId(req);
-
-  if (requestId && state?.byRequest && Object.prototype.hasOwnProperty.call(state.byRequest, requestId)) {
-    return !!state.byRequest[requestId];
-  }
-  if (target && state && Object.prototype.hasOwnProperty.call(state, target)) {
-    return !!state[target];
-  }
-  return !!req?.locked;
 }
 
 function refreshCandidateMenu() {
@@ -5619,50 +5375,14 @@ function refreshCandidateMenu() {
   }
 }
 
+// 「歌詞を確定」ボタンは削除した。LRCHub 側に匿名で受け取る API が無く
+// (/api/record/lock はログイン必須)、押しても必ず失敗していたため。
+// 確定済みかどうかの状態は「歌詞同期を追加」の可否にだけ使う。
 function refreshLockMenu() {
   if (!ui.uploadMenu) return;
-  const lockSection = ui.uploadMenu.querySelector('.ytm-upload-menu-locks');
-  const lockList = lockSection ? lockSection.querySelector('.ytm-upload-menu-lock-list') : null;
   const addSyncBtn = ui.uploadMenu.querySelector('.ytm-upload-menu-item[data-action="add-sync"]');
-  if (!lockSection || !lockList || !addSyncBtn) return;
+  if (!addSyncBtn) return;
   const lockState = syncLyricsLockState();
-  lockList.innerHTML = '';
-  const mergedRequests = [];
-  if (Array.isArray(lyricsRequests)) {
-    lyricsRequests.forEach(r => { if (r) mergedRequests.push({ ...r }); });
-  }
-  const ensureRequest = (id, label, target) => {
-    const idLower = String(id).toLowerCase();
-    if (mergedRequests.some(r => String(r.request || r.id || '').toLowerCase() === idLower)) return;
-    mergedRequests.push({ request: id, label, target });
-  };
-  // ensureRequest for lock_current_sync and lock_current_dynamic removed as per user request
-  const activeReqs = mergedRequests.filter(r => {
-    if (!r) return false;
-    if (r.has_lyrics) return true;
-    if (r.target === 'sync' || r.target === 'dynamic') return true;
-    const key = String(r.request || r.id || '').toLowerCase();
-    if (!key) return false;
-    return key.startsWith('lock_current_');
-  });
-  if (!activeReqs.length) {
-    lockSection.style.display = 'none';
-  } else {
-    lockSection.style.display = 'block';
-    activeReqs.forEach(r => {
-      const btn = document.createElement('button');
-      btn.className = 'ytm-upload-menu-item';
-      btn.dataset.action = 'lock-request';
-      btn.dataset.requestId = r.request || r.id || '';
-      btn.textContent = r.label || r.request || r.id || '歌詞を確定';
-      const locked = isLockRequestLocked(r, lockState);
-      if (locked) {
-        btn.classList.add('ytm-upload-menu-item-disabled');
-        btn.title = 'すでに確定された歌詞です';
-      }
-      lockList.appendChild(btn);
-    });
-  }
   const shouldDisableAddSync = !!lockState?.sync && !!lockState?.dynamic;
   addSyncBtn.classList.toggle('ytm-upload-menu-item-disabled', shouldDisableAddSync);
   if (shouldDisableAddSync) {
@@ -5701,10 +5421,6 @@ function setupUploadMenu(uploadBtn) {
           <button class="ytm-offset-btn" data-action="offset-plus" title="歌詞を遅らせる">＋</button>
           <button class="ytm-offset-btn ytm-offset-reset" data-action="offset-reset" title="0 に戻す">⟲</button>
         </div>
-      </div>
-      <div class="ytm-upload-menu-locks" style="display:none;">
-        <div class="ytm-upload-menu-subtitle">歌詞を確定 / Confirm</div>
-        <div class="ytm-upload-menu-lock-list"></div>
       </div>
       <div class="ytm-upload-menu-candidates" style="display:none;">
         <div class="ytm-upload-menu-subtitle">別の歌詞を選択</div>
@@ -5746,7 +5462,6 @@ function setupUploadMenu(uploadBtn) {
     }
     const action = target.dataset.action;
     const candId = target.dataset.candidateId || null;
-    const reqId = target.dataset.requestId || null;
     toggleMenu(false);
     hideCandidateHoverPreview();
     if (action === 'local') {
@@ -5760,8 +5475,6 @@ function setupUploadMenu(uploadBtn) {
       void findAlternateLyricSources();
     } else if (action === 'candidate' && candId) {
       selectCandidateById(candId);
-    } else if (action === 'lock-request' && reqId) {
-      sendLockRequest(reqId);
     }
   });
 
@@ -5967,83 +5680,6 @@ async function initSettings() {
 }
 
 
-// ===== 共有翻訳: 残り文字数表示 =====
-const COMMUNITY_REMAINING_TTL_MS = 60 * 1000; // 60s
-let communityRemainingCache = { ts: 0, data: null, error: null };
-let communityRemainingTimer = null;
-
-function ensureCommunityRemainingTimer() {
-  if (communityRemainingTimer) return;
-  communityRemainingTimer = setInterval(() => {
-    try {
-      // 設定パネルが開いているときだけ更新（無駄な通信を減らす）
-      if (ui.settings && ui.settings.classList.contains('active')) {
-        updateCommunityRemainingUI(false);
-      }
-    } catch (_) { }
-  }, 60 * 1000);
-}
-
-async function getCommunityRemaining(force = false) {
-  const now = Date.now();
-  if (!force && communityRemainingCache.data && (now - communityRemainingCache.ts) < COMMUNITY_REMAINING_TTL_MS) {
-    return communityRemainingCache.data;
-  }
-
-  if (!EXT || !EXT.runtime || typeof EXT.runtime.sendMessage !== 'function') {
-    throw new Error('extension runtime is not available');
-  }
-
-  const resp = await new Promise((resolve) => {
-    try {
-      EXT.runtime.sendMessage({ type: 'GET_COMMUNITY_REMAINING' }, (r) => resolve(r));
-    } catch (e) {
-      resolve(null);
-    }
-  });
-
-  if (!resp || !resp.ok) {
-    const msg = resp && resp.error ? resp.error : 'failed';
-    communityRemainingCache = { ts: now, data: null, error: msg };
-    throw new Error(msg);
-  }
-
-  const data = resp.data || resp.remaining || resp;
-  communityRemainingCache = { ts: now, data, error: null };
-  return data;
-}
-
-async function updateCommunityRemainingUI(force = false) {
-  const valEl = document.getElementById('community-remaining-val');
-  if (!valEl) return;
-
-  // 初回だけ「取得中…」
-  if (!valEl.textContent || valEl.textContent === '--') {
-    valEl.textContent = '取得中…';
-  }
-
-  try {
-    const data = await getCommunityRemaining(force);
-
-    const remaining =
-      (data && (data.total_remaining ?? data.totalRemaining ?? data.total_remaining_total ?? data.total ?? data.free_remaining_total)) ?? null;
-
-    if (remaining != null && !Number.isNaN(Number(remaining))) {
-      valEl.textContent = Number(remaining).toLocaleString();
-    } else {
-      valEl.textContent = '--';
-    }
-
-    // 生データは hover で見れるように
-    try {
-      valEl.title = JSON.stringify(data, null, 2);
-    } catch (_) { }
-  } catch (e) {
-    valEl.textContent = '--';
-    valEl.title = e && e.message ? e.message : String(e);
-  }
-}
-
 function renderSettingsPanel() {
   if (!ui.settings) return;
 
@@ -6122,6 +5758,10 @@ function renderSettingsPanel() {
                 <span class="setting-name">${t('settings_keep_past_lyrics')}</span>
                 <input type="checkbox" id="keep-past-lyrics-toggle">
               </label>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_prefer_song_mode')}</span>
+                <input type="checkbox" id="prefer-song-mode-toggle">
+              </label>
               <div class="setting-row stacked">
                 <div class="setting-row-top">
                   <span class="setting-name">UIサイズ (UI Size)</span>
@@ -6197,16 +5837,10 @@ function renderSettingsPanel() {
                 <span class="setting-name">${t('settings_trans')}</span>
                 <input type="checkbox" id="trans-toggle">
               </label>
-              <div class="setting-row stacked" id="shared-trans-row">
-                <label class="setting-row-top toggle-label">
-                  <span class="setting-name">${t('settings_shared_trans')}</span>
-                  <input type="checkbox" id="shared-trans-toggle">
-                </label>
-                <div class="setting-row-top setting-subline" style="display:none">
-                  <span class="setting-desc">共有翻訳 残り文字数</span>
-                  <span id="community-remaining-val" class="setting-value-badge">--</span>
-                </div>
-              </div>
+              <label class="setting-row toggle-label">
+                <span class="setting-name">${t('settings_shared_trans')}</span>
+                <input type="checkbox" id="shared-trans-toggle">
+              </label>
             </div>
 
             <div class="settings-group-card">
@@ -6311,6 +5945,7 @@ function renderSettingsPanel() {
   document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
   document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
   document.getElementById('keep-past-lyrics-toggle').checked = !!config.keepPastLyrics;
+  document.getElementById('prefer-song-mode-toggle').checked = !!config.preferSongMode;
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('apple-sync-toggle').checked = !!config.appleSyncStyle;
@@ -6318,8 +5953,6 @@ function renderSettingsPanel() {
   document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
 
-  // 共有翻訳の残り文字数（保存済み値を表示）
-  document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-save-toggle').checked = config.saveSyncOffset;
 
@@ -6428,6 +6061,7 @@ function renderSettingsPanel() {
     config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
     config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
     config.keepPastLyrics = document.getElementById('keep-past-lyrics-toggle').checked;
+    config.preferSongMode = document.getElementById('prefer-song-mode-toggle').checked;
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.appleSyncStyle = document.getElementById('apple-sync-toggle').checked;
@@ -6450,6 +6084,7 @@ function renderSettingsPanel() {
       storage.set('ytm_shared_trans_enabled', config.useSharedTranslateApi),
       storage.set('ytm_left_align', config.leftAlignInfo),
       storage.set('ytm_keep_past_lyrics', config.keepPastLyrics),
+      storage.set('ytm_prefer_song_mode', config.preferSongMode),
       storage.set('ytm_apple_bg', config.appleBg),
       storage.set('ytm_low_cpu_mode', config.lowCpuMode),
       storage.set('ytm_apple_sync_style', config.appleSyncStyle),
@@ -6553,7 +6188,15 @@ function renderSettingsPanel() {
   };
 
   // リセットボタン
-  document.getElementById('clear-all-btn').onclick = storage.clear;
+  //
+  // 以前は storage.clear で全部消していた。説明文は「設定を初期状態に戻す」と
+  // しか書いていないのに、再生履歴も歌詞キャッシュもクラウドの復活の呪文も
+  // 巻き添えで消えていた。消すのは設定のキーだけにする。
+  document.getElementById('clear-all-btn').onclick = async () => {
+    if (!confirm('設定を初期状態に戻しますか？\n（再生履歴と保存済みの歌詞は残ります）')) return;
+    await Promise.all(SETTINGS_STORAGE_KEYS.map(key => storage.remove(key)));
+    location.reload();
+  };
 
   // すべての歌詞データを削除ボタンの処理
   const clearLyricsBtn = document.getElementById('clear-all-lyrics-cache-btn');
@@ -6677,27 +6320,20 @@ function _filterSwitchResults(items, meta) {
 async function searchYTMAlternatives(meta) {
   const q = _switchQueryForMeta(meta);
   if (!q) return [];
-  // Use YouTube Music's InnerTube API — same endpoint the web app itself uses
+  // InnerTube の検索は ytm-lyrics.js の post に任せる。
+  //
+  // 以前はここに API キー直書き・hl/gl を 'ja'/'JP' 固定・タイムアウト無しの
+  // 別実装を置いていた。同じ InnerTube を二重に実装していたので、
+  // 片方だけ直すと食い違う。あちらはページの設定(言語・地域・
+  // clientVersion・visitorData)を使い、タイムアウトも持っている。
+  if (!window.YTMLyrics || typeof window.YTMLyrics.search !== 'function') {
+    console.warn('[Switch] YTMLyrics.search が使えない');
+    return [];
+  }
   try {
-    const resp = await fetch('https://music.youtube.com/youtubei/v1/search?key=AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', 'X-YouTube-Client-Name': '67', 'X-YouTube-Client-Version': '1.20240101.01.00' },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: 'WEB_REMIX',
-            clientVersion: '1.20240101.01.00',
-            hl: 'ja',
-            gl: 'JP',
-          }
-        },
-        query: q
-        // No params = search all types (songs, videos, albums, etc.)
-      })
-    });
-    if (!resp.ok) { console.warn('[Switch] InnerTube API error:', resp.status); return []; }
-    const data = await resp.json();
+    // params 無し = 曲・動画・アルバムなど全種類を返す
+    const data = await window.YTMLyrics.search(q);
+    if (!data) return [];
 
     const results = [];
     const walk = (obj, depth = 0) => {
@@ -6744,7 +6380,7 @@ function setupSwitchPanel(triggerBtn) {
   panel.className = 'ytm-switch-panel';
   panel.innerHTML = `
       <div class="ytm-switch-header">
-        <span>🔄 代替バージョンを検索: ${escHtml(meta.title)}</span>
+        <span>🔄 代替バージョンを検索: ${escapeHtml(meta.title)}</span>
         <button class="ytm-switch-close ytm-unified-close-btn size-26" id="ytm-switch-close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <div class="ytm-switch-list" id="ytm-switch-list">
@@ -6802,16 +6438,16 @@ function renderSwitchItems(listEl, items, clearFirst) {
   if (clearFirst) listEl.innerHTML = '';
   const video = document.querySelector('video');
   // 連続再生対応: 曲開始オフセットを引いて曲内ローカル位置で別バージョンに飛ばす
-  const currentTime = video && Number.isFinite(video.currentTime) ? Math.max(0, video.currentTime - timeOffset) : 0;
+  const currentTime = video && Number.isFinite(video.currentTime) ? toLocalPlaybackTime(video.currentTime) : 0;
 
   items.forEach(item => {
     const row = document.createElement('button');
     row.className = 'ytm-switch-item';
     row.innerHTML = `
-        ${item.thumb ? `<img class="ytm-switch-thumb" src="${escHtml(item.thumb)}" alt="">` : '<div class="ytm-switch-thumb"></div>'}
+        ${item.thumb ? `<img class="ytm-switch-thumb" src="${escapeHtml(item.thumb)}" alt="">` : '<div class="ytm-switch-thumb"></div>'}
         <div class="ytm-switch-info">
-          <div class="ytm-switch-title">${escHtml(item.title)}</div>
-          <div class="ytm-switch-channel">${escHtml(item.channel)}</div>
+          <div class="ytm-switch-title">${escapeHtml(item.title)}</div>
+          <div class="ytm-switch-channel">${escapeHtml(item.channel)}</div>
         </div>
       `;
     row.onclick = () => {
@@ -6824,11 +6460,19 @@ function renderSwitchItems(listEl, items, clearFirst) {
   });
 }
 
-function escHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 function initLayout() {
+  // 既に組んだ UI がそのまま画面に居るなら、参照を取り直す必要は無い。
+  // この関数は tick から毎回呼ばれるので、下の拾い直し(getElementById を
+  // 十数回)が player-bar が動くたびに走っていた。
+  // YTM が作り直した時は id で引いた結果が別物になるので、そこで通す。
+  if (
+    ui.wrapper && ui.wrapper.isConnected &&
+    ui.lyrics && ui.lyrics.isConnected &&
+    document.getElementById('ytm-custom-wrapper') === ui.wrapper
+  ) {
+    return;
+  }
+
   const existingWrapper = document.getElementById('ytm-custom-wrapper');
   if (existingWrapper && !ui.wrapper) {
     existingWrapper.remove();
@@ -6856,7 +6500,12 @@ function initLayout() {
     ui.deleteDialog = document.getElementById('ytm-delete-dialog');
     setupAutoHideEvents();
     setupMeaningPanelHoverEvents();
-    refreshMeaningUi();
+    // ここで refreshMeaningUi() は呼ばない。
+    //
+    // initLayout は tick から毎回通る(player-bar の属性が動くたび)。
+    // 既存の UI を拾い直すだけのこの経路で解説パネルを作り直すと、
+    // 開いている間ずっと、ホバー中もスクロール中も中身が innerHTML ごと
+    // 組み直される。中身の更新は初回生成時と setLyricsMeaningData に任せる。
     return;
   }
   ui.bg = createEl('div', 'ytm-custom-bg');
@@ -6964,6 +6613,16 @@ function initLayout() {
   setupAutoHideEvents();
   setupScrollResumeEvents();
   if (isYTMPremiumUser()) setupMovieMode(); //moviemode setup
+
+  // ここまで来たのは、器を新しく組んだ時だけ(既にあるならもっと上で帰っている)。
+  // 組み直した直後の器は空なので、いま出していた歌詞をそのまま出し直す。
+  // これが無いと、YTM 側の作り直しに巻き込まれて器ごと入れ替わった時、
+  // 曲は鳴っているのに次の曲まで歌詞が出ないままになる。
+  // applyLyricsText を通すのは、srv3(アニメーション字幕)とふつうの歌詞で
+  // 組み方が違うため。あちらが今の設定に合わせて出し分ける。
+  if (typeof lastRawLyricsText === 'string' && lastRawLyricsText.trim()) {
+    void applyLyricsText(lastRawLyricsText);
+  }
 }
 
 let lyricsLateRetryTimer = null;
@@ -7047,6 +6706,7 @@ async function loadLyrics(meta, options = {}) {
     requestId !== activeLyricsRequestId
   ) return;
   dynamicLines = null;
+  dynamicLinesRaw = null;
   duetSubDynamicLines = null;
   _duetExcludedTimes = new Set();
   singerMetadataRequestSequence += 1;
@@ -7160,7 +6820,7 @@ async function loadLyrics(meta, options = {}) {
   // Always fetch fresh data from URL as requested
   let gotLyrics = false;
   try {
-    const track = meta.title.replace(/\s*[\(-\[].*?[\)-]].*/, '');
+    const track = normalizeSearchTrackTitle(meta.title);
     const artist = meta.artist;
     const youtube_url = getCurrentVideoUrl();
     const video_id = requestVideoId;
@@ -7256,12 +6916,7 @@ async function loadLyrics(meta, options = {}) {
       }).catch(() => { /* 遅れて届く方の失敗は表示に影響しない */ });
     };
 
-    const backgroundPromise = new Promise(resolve => {
-      chrome.runtime.sendMessage(
-        { type: 'GET_LYRICS', payload },
-        resolve
-      );
-    });
+    const backgroundPromise = safeRuntimeSendMessage({ type: 'GET_LYRICS', payload });
 
     // YTM優先で YTM が同期歌詞を持っているなら、LRCHub の完了を待つ意味はない。
     // 以前はここで background を無条件に await していたため、YTM が 250ms で
@@ -7428,8 +7083,11 @@ async function loadLyrics(meta, options = {}) {
     if (typeof res?.subLyrics === 'string' && res.subLyrics.trim()) duetSubLyricsRaw = res.subLyrics;
 
     if (hasResponseLyrics) {
+      // 比べるのは生データ同士。描画用に正規化した dynamicLines と比べると
+      // 中身が同じでも必ず不一致になり、毎回描き直しになる。
+      const shownDynamicLines = dynamicLinesRaw !== null ? dynamicLinesRaw : dynamicLines;
       const isDifferent = (preferredLyrics !== data) ||
-        (JSON.stringify(selectedResponse.dynamicLines) !== JSON.stringify(dynamicLines)) ||
+        (JSON.stringify(selectedResponse.dynamicLines) !== JSON.stringify(shownDynamicLines)) ||
         (res.subLyrics && res.subLyrics !== duetSubLyricsRaw);
 
       currentLyricsResultPriority = responsePriority;
@@ -7463,12 +7121,13 @@ async function loadLyrics(meta, options = {}) {
           noLyrics: false,
           subLyrics: (typeof duetSubLyricsRaw === 'string' ? duetSubLyricsRaw : ''),
           meaningData: lyricsMeaning || null,
-          candidates: lyricsCandidates || null,
+          candidates: LyricsCache.stripCandidateLyrics(lyricsCandidates) || null,
           lrcMap: lyricsTranslationMap || null,
           requests: lyricsRequests || null,
           config: lyricsConfig || null,
           lockState: lyricsLockState || null,
           lyricsSource: res.lyricsSource || null,
+          fetchedAt: Date.now(),
           fallbackUsed: !!res.fallbackUsed,
           lyricsQuality: selectedResponse.quality,
           offset_ms: Number.isFinite(Number(res.offset_ms)) ? Number(res.offset_ms) : 0,
@@ -7543,8 +7202,17 @@ async function loadLyrics(meta, options = {}) {
   }
 }
 
-// Segmenter の生成は重いため1回だけ作って使い回す
-const _jaWordSegmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+// Segmenter の生成は重いため1回だけ作って使い回す。
+// 無防備に new すると、Intl.Segmenter が無い環境ではこのファイル全体の
+// 読み込みが落ちて拡張が起動しない。lyricUnitSegmenter と同じ守り方にする。
+const _jaWordSegmenter = (() => {
+  try {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      return new Intl.Segmenter('ja', { granularity: 'word' });
+    }
+  } catch (e) { /* 使えなければ折り返しのまとめを諦める */ }
+  return null;
+})();
 
 // ── 行の折り返し位置 ────────────────────────────────────────
 // 「を」「の」で行が始まったり、拗音が行頭に落ちたりしないように、
@@ -7612,6 +7280,10 @@ const groupLyricUnitsIntoPhrases = (units) => {
 const optimizeLineBreaks = (text) => {
   if (!text) return '';
 
+  // 語区切りが使えない環境では、まとめずに1行を1つの span にする。
+  // 折り返しの見た目は落ちるが、歌詞は出る。
+  if (!_jaWordSegmenter) return `<span class="lyric-phrase">${escapeHtml(text)}</span>`;
+
   const segments = Array.from(_jaWordSegmenter.segment(text));
 
   let html = '';
@@ -7624,13 +7296,13 @@ const optimizeLineBreaks = (text) => {
     buffer += word;
 
     if (!next) {
-      html += `<span class="lyric-phrase">${buffer}</span>`;
+      html += `<span class="lyric-phrase">${escapeHtml(buffer)}</span>`;
       break;
     }
 
     if (shouldMergeLyricSegments(word, next.segment)) continue;
 
-    html += `<span class="lyric-phrase">${buffer}</span>`;
+    html += `<span class="lyric-phrase">${escapeHtml(buffer)}</span>`;
     buffer = '';
   }
 
@@ -7822,7 +7494,9 @@ function renderLyrics(data) {
     row.appendChild(mainSpan);
 
     if (line && line.translation) {
-      const subSpan = createEl('span', '', 'lyric-translation', line.translation);
+      // 翻訳文はそのまま innerHTML に入れない。"<" を含むと以降が消える。
+      const subSpan = createEl('span', '', 'lyric-translation');
+      subSpan.textContent = line.translation;
       row.appendChild(subSpan);
       row.classList.add('has-translation');
     }
@@ -7875,9 +7549,10 @@ function renderLyrics(data) {
 const handleUpload = (e) => {
   const file = e.target.files[0];
   if (!file || !currentKey) return;
+  const uploadKey = currentKey;
   const r = new FileReader();
-  r.onload = (ev) => {
-    storage.set(currentKey, {
+  r.onload = async (ev) => {
+    await storage.set(uploadKey, {
       cacheVersion: LYRICS_CACHE_VERSION,
       video_id: currentLyricsVideoId || getCurrentVideoId() || null,
       lyrics: String(ev.target.result || ''),
@@ -7887,7 +7562,17 @@ const handleUpload = (e) => {
       fallbackUsed: false,
       noLyrics: false,
     });
-    currentKey = null;
+    // 読み込んだ曲のままなら、そのまま出す。
+    //
+    // 以前は currentKey を潰して「曲が変わった」ことにし、tick に任せていた。
+    // だが tick は player-bar の DOM が動いた時だけ走るので、何も触らないと
+    // 読み込んだ歌詞がいつまでも出ない。走ったら走ったで初回ロード扱いになり、
+    // 連続再生オフセットと同期オフセットが 0 に戻って歌詞がずれる。
+    if (currentKey !== uploadKey) return;
+    const metaNow = getMetadata();
+    if (!metaNow) return;
+    // manualLyrics はキャッシュ優先度 3。裏の取得で上書きされることはない。
+    loadLyrics(metaNow);
   };
   r.readAsText(file);
   e.target.value = '';
@@ -7958,6 +7643,39 @@ const resetLyricScrollState = (container, top = 0) => {
   container._scrollVel = 0;
   container._scrollPos = container.scrollTop;
   container._scrollLastWritten = container.scrollTop;
+};
+
+// ── 歌っている行を止める位置 ────────────────────────────────
+// 既定は器の中央。狭い画面(縦積み)では、中央に置くと上半分が歌い終わった行で
+// 埋まってしまい、これから来る歌詞の見える量が半分になる。CSS 側で
+//   --ytm-lyrics-anchor-top-lines: 0.5
+// のように「上から何行ぶん下げた所に置くか」を指定できるようにして、
+// 画面の形ごとの判断は CSS(メディアクエリ)に持たせる。
+//
+// 行の高さを単位にしているので、文字サイズや UI サイズを変えても
+// 上に残る余白の見た目が変わらない。
+const LYRICS_ANCHOR_VAR = '--ytm-lyrics-anchor-top-lines';
+
+const readLyricAnchorTopLines = (container) => {
+  if (container._ytmAnchorLines !== undefined) return container._ytmAnchorLines;
+  let value = null;
+  try {
+    const raw = container.ownerDocument.defaultView
+      .getComputedStyle(container)
+      .getPropertyValue(LYRICS_ANCHOR_VAR)
+      .trim();
+    const n = Number(raw);
+    if (raw && Number.isFinite(n) && n >= 0) value = n;
+  } catch (e) { /* 読めなければ中央に置く */ }
+  container._ytmAnchorLines = value;
+  return value;
+};
+
+// 器の上端から、その行の上端までの距離
+const lyricAnchorOffset = (container, rowHeight) => {
+  const lines = readLyricAnchorTopLines(container);
+  if (lines === null) return (container.clientHeight / 2) - (rowHeight / 2);
+  return lines * rowHeight;
 };
 
 const requestLyricScroll = (container, target, instant) => {
@@ -8052,7 +7770,12 @@ function startLyricRafLoop() {
       }
 
       const isPlaying = v.readyState > 0 && !v.paused && !v.ended;
-      document.body.classList.toggle('ytm-music-paused', !isPlaying);
+      // 毎フレーム書かない。値が同じでも classList への代入は
+      // スタイルの再計算対象になるので、変わった時だけ触る。
+      if (isPlaying !== _lastPlayingStateForBodyClass) {
+        _lastPlayingStateForBodyClass = isPlaying;
+        document.body.classList.toggle('ytm-music-paused', !isPlaying);
+      }
 
       if (isPlaying) {
         _playbackRateForMotion = (Number.isFinite(v.playbackRate) && v.playbackRate > 0)
@@ -8065,7 +7788,7 @@ function startLyricRafLoop() {
         // 現在の曲が始まった video 時間(timeOffset)を引いて曲内ローカル時間にする。
         // currentTime が offset を下回ったら曲がリセットされたとみなし offset を解除。
         if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
-        t = Math.max(0, t - timeOffset);
+        t = toLocalPlaybackTime(t);
         // v.duration は曲ごとの長さ。ローカル時間はそれを超えないのでそのままクランプ
         t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
 
@@ -8092,13 +7815,8 @@ function startLyricRafLoop() {
           console.warn('[YTM] lyric highlight update failed:', err);
         }
 
-        if (PipManager.pipWindow && PipManager.progressRing) {
-          const radius = 32;
-          const circumference = radius * 2 * Math.PI;
-          const progress = t / duration;
-          const offset = circumference - (progress * circumference);
-          PipManager.progressRing.style.strokeDashoffset = offset;
-        }
+        // PipManager.progressRing を更新する処理がここにあったが、
+        // その要素はどこでも生成されていないので毎フレーム空振りしていた。
 
         if (PipManager.pipWindow) {
           lyricRafWindow = PipManager.pipWindow;
@@ -8133,6 +7851,28 @@ function startLyricRafLoop() {
   }
 }
 
+// 窓の大きさが変わったら、いまの行へ寄せ直す。
+//
+// 行を画面の真ん中に置く量は、その時の器の高さと行の位置から px で出している。
+// 窓の幅が変わると縦積み↔横並びでレイアウトごと変わるので、前の大きさで
+// 出した位置は意味を失う。それでも「この行へはもう寄せた」という印
+// (_lastScrolledIndex)が残っているせいで、次の行が始まるまで誰も直さない。
+// 実際、幅を変えて戻すと歌詞が画面の下に取り残されて消えたように見えた。
+const recenterLyricsAfterResize = () => {
+  for (const container of [ui.lyrics, PipManager.pipLyricsContainer]) {
+    if (!container) continue;
+    // 画面の形が変わるとメディアクエリごと変わる。止める位置も読み直す。
+    container._ytmAnchorLines = undefined;
+    // 印を戻すと次のフレームで今の行へ寄せ直す。
+    container._lastScrolledIndex = -1;
+    // 直前の位置から流すと、変わったあとの見当違いな所から動き出す。
+    container._instantNextScroll = true;
+    // 追いかけている途中の目標も、前の大きさで出した px なので捨てる。
+    container._scrollTarget = undefined;
+    container._scrollVel = 0;
+  }
+};
+
 // 窓の大きさが変わると語の横位置が動く。次に主役になった時に測り直させる。
 let _sweepResizeTimer = null;
 window.addEventListener('resize', () => {
@@ -8140,6 +7880,7 @@ window.addEventListener('resize', () => {
   _sweepResizeTimer = setTimeout(() => {
     _sweepResizeTimer = null;
     invalidateLyricLineSweeps();
+    recenterLyricsAfterResize();
   }, 200);
 });
 
@@ -8155,8 +7896,16 @@ document.addEventListener('playing', (e) => {
   }
 }, true);
 
+// シークで offset を下回ったら、その曲は頭から掛け直されている。
+// rAF ループは再生中しか回らないので、止めたままシークした時はここで直す。
+document.addEventListener('seeked', (e) => {
+  if (e.target.tagName !== 'VIDEO') return;
+  const t = e.target.currentTime;
+  if (typeof t === 'number' && timeOffset > 0 && t < timeOffset) timeOffset = 0;
+}, true);
 
-let lastScrolledIndex = -1;
+
+
 let isUserScrolling = false;
 let userScrollTimeout = null;
 let isProgrammaticScrolling = false;
@@ -8262,6 +8011,61 @@ function suppressUserScrollDetection(ms = 500) {
 // rAF ループが更新した値をここで使う。
 let _playbackRateForMotion = 1;
 
+// body のクラスを毎フレーム書き直さないための控え。
+// null は「まだ一度も書いていない」= 次は必ず書く。
+let _lastPlayingStateForBodyClass = null;
+
+// アクティブ行の塗り(文字・語の進み)を1行ぶん更新する。
+// 毎フレーム必要なのはここだけなので、行の状態が変わっていないフレームは
+// この関数をアクティブ行にだけ当てる(全行の走査をしない)。
+// 戻り値は「この行が文字単位の塗りを持っていたか」。
+function paintActiveLyricRow(r, t) {
+  // 行要素にキャッシュした配列を使う（毎フレームの querySelectorAll を回避）
+  // PIP の行は複製なので _ytmWordSpans を持たない。クラスで見分けて
+  // 一度だけ組み直す(rehydrate は paintLyricWordRow の中でやる)。
+  const isWordSync = r._ytmWordSpans
+    ? r._ytmWordSpans.length > 0
+    : r.classList.contains('ytm-word-sync');
+  if (isWordSync) {
+    paintLyricWordRow(r, t, _playbackRateForMotion);
+    return true;
+  }
+
+  let charSpans = r._ytmCharSpans;
+  if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));
+  if (charSpans.length === 0) return false;
+
+  charSpans.forEach(sp => {
+    if (sp._ytmTime === undefined) sp._ytmTime = parseFloat(sp.dataset.time || '0');
+    const tt = sp._ytmTime;
+    if (Number.isFinite(tt) && tt <= t) {
+      if (!sp.classList.contains('char-active')) {
+        sp.classList.add('char-active');
+        sp.classList.remove('char-pending');
+      }
+    } else {
+      if (!sp.classList.contains('char-pending')) {
+        sp.classList.remove('char-active');
+        sp.classList.add('char-pending');
+      }
+    }
+  });
+  return true;
+}
+
+// 行どうしの突き合わせに使う文字列。NFKC 正規化と記号落としを毎フレーム
+// やり直していた(アクティブ行と 1 つ前の行で毎フレーム 2 回)。
+// 元の text が変わらない限り結果も変わらないので、行に覚えさせる。
+const lyricCompareText = (line) => {
+  if (!line || typeof line !== 'object') return normalizeLyricCompareTextStrict(line?.text);
+  const raw = line.text;
+  if (line._ytmCmpSrc === raw && typeof line._ytmCmpText === 'string') return line._ytmCmpText;
+  const value = normalizeLyricCompareTextStrict(raw);
+  line._ytmCmpSrc = raw;
+  line._ytmCmpText = value;
+  return value;
+};
+
 function updateLyricHighlight(currentTime) {
   if (!lyricsData.length) return;
   if (!hasTimestamp) return;
@@ -8330,8 +8134,8 @@ function updateLyricHighlight(currentTime) {
         const prevSide = lyricsData[prevIdx]?.duetSide;
         const isDifferentDuetSide = currentSide && prevSide && currentSide !== prevSide;
         if (!isDifferentDuetSide) {
-          const currentText = normalizeLyricCompareTextStrict(lyricsData[idx]?.text);
-          const prevText = normalizeLyricCompareTextStrict(lyricsData[prevIdx]?.text);
+          const currentText = lyricCompareText(lyricsData[idx]);
+          const prevText = lyricCompareText(lyricsData[prevIdx]);
           const sameDisplayedLyric = !!currentText && !!prevText && scoreLyricTextMatch(currentText, prevText) >= 100;
           if (!sameDisplayedLyric) activeIndices.add(prevIdx);
         }
@@ -8352,7 +8156,7 @@ function updateLyricHighlight(currentTime) {
         const activeLine = lyricsData[activeIdx];
         if (activeLine?.duetSide !== 'right') return;
 
-        const activeText = normalizeLyricCompareTextStrict(activeLine?.text);
+        const activeText = lyricCompareText(activeLine);
         if (!activeText) return;
 
         const hasMatchingLeft = activeList.some((otherIdx) => {
@@ -8366,7 +8170,7 @@ function updateLyricHighlight(currentTime) {
             : DUET_DUPLICATE_TOLERANCE;
           if (!isSameTimestamp(otherLine?.time, activeLine?.time, dedupeTol)) return false;
 
-          const otherText = normalizeLyricCompareTextStrict(otherLine?.text);
+          const otherText = lyricCompareText(otherLine);
           return !!otherText && scoreLyricTextMatch(otherText, activeText) >= 100;
         });
 
@@ -8394,9 +8198,28 @@ function updateLyricHighlight(currentTime) {
 
   let sawActiveCharSpans = false;
 
+  // 行の状態が変わっていないフレームでやることは、アクティブ行の塗り直しだけ。
+  //
+  // それでも今までは毎フレーム全行を走査していた。1曲 60〜100 行として
+  // 秒 60 回、行ごとにクラス判定と past 判定が走る。歌詞が長い曲ほど重い。
+  //
+  // active の集合が変わらず、スクロールの追従も済んでいるなら、
+  // 「どの行が past か」も前のフレームから変わらない(idx が動けば
+  //  _lastScrolledIndex とずれて scrollPending が立つ)。塗る行だけ見る。
+  const needsFullRowPass = activeChanged || scrollPending;
+
   targets.forEach(container => {
     const rows = container.children;
     if (rows.length === 0) return;
+
+    if (!needsFullRowPass) {
+      activeIndices.forEach(i => {
+        const r = rows[i];
+        if (!r || !r.classList.contains('lyric-line')) return;
+        if (paintActiveLyricRow(r, t)) sawActiveCharSpans = true;
+      });
+      return;
+    }
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
@@ -8415,7 +8238,12 @@ function updateLyricHighlight(currentTime) {
       // 次の行が始まれば idx が進み、この行は i < idx で past になる。
       // 消える時機が「自分が終わった時」から「次が始まる時」に変わるだけ。
       const isPast = idx >= 0 && !isActive && i < idx;
-      r.classList.toggle('lyric-past', isPast);
+      // 値が同じでも classList への代入はスタイルの再計算対象になる。
+      // 行数ぶん毎フレーム書いていたので、変わった時だけ触る。
+      if (r._ytmIsPast !== isPast) {
+        r._ytmIsPast = isPast;
+        r.classList.toggle('lyric-past', isPast);
+      }
 
       if (isActive) {
         // 状態遷移時のみクラス操作（active でなかった→active になった）
@@ -8440,7 +8268,8 @@ function updateLyricHighlight(currentTime) {
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - containerRect.top - (container.clientHeight / 2) + (rRect.height / 2);
+            const targetScroll = container.scrollTop + rRect.top - containerRect.top
+              - lyricAnchorOffset(container, rRect.height);
 
             isProgrammaticScrolling = true;
             clearTimeout(programmaticScrollTimeout);
@@ -8469,38 +8298,7 @@ function updateLyricHighlight(currentTime) {
           }
         }
 
-        // char-level アニメーション（アクティブ行のみ、毎フレーム必要）
-        // 行要素にキャッシュした配列を使う（毎フレームの querySelectorAll を回避）
-        // PIP の行は複製なので _ytmWordSpans を持たない。クラスで見分けて
-        // 一度だけ組み直す(rehydrate は paintLyricWordRow の中でやる)。
-        const isWordSync = r._ytmWordSpans
-          ? r._ytmWordSpans.length > 0
-          : r.classList.contains('ytm-word-sync');
-        if (isWordSync) {
-          sawActiveCharSpans = true;
-          paintLyricWordRow(r, t, _playbackRateForMotion);
-        } else {
-          let charSpans = r._ytmCharSpans;
-          if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));
-          if (charSpans.length > 0) {
-            sawActiveCharSpans = true;
-            charSpans.forEach(sp => {
-              if (sp._ytmTime === undefined) sp._ytmTime = parseFloat(sp.dataset.time || '0');
-              const tt = sp._ytmTime;
-              if (Number.isFinite(tt) && tt <= t) {
-                if (!sp.classList.contains('char-active')) {
-                  sp.classList.add('char-active');
-                  sp.classList.remove('char-pending');
-                }
-              } else {
-                if (!sp.classList.contains('char-pending')) {
-                  sp.classList.remove('char-active');
-                  sp.classList.add('char-pending');
-                }
-              }
-            });
-          }
-        }
+        if (paintActiveLyricRow(r, t)) sawActiveCharSpans = true;
       } else if (activeChanged && _previousActiveIndices.has(i)) {
         // 状態遷移: active→非active になった行のみリセット
         r.classList.remove('active');
@@ -8532,48 +8330,6 @@ function updateLyricHighlight(currentTime) {
     syncMeaningPanelToPlayback(false, t);
   }
 }
-
-async function sendLockRequest(requestId) {
-  const youtube_url = getCurrentVideoUrl();
-  const video_id = getCurrentVideoId();
-  const reqInfo = Array.isArray(lyricsRequests)
-    ? lyricsRequests.find(r => r.id === requestId || r.request === requestId || (r.aliases || []).includes(requestId))
-    : null;
-  const requestTarget = inferLockRequestTarget(reqInfo || { request: requestId });
-  try {
-    const res = await new Promise(resolve => {
-      chrome.runtime.sendMessage(
-        { type: 'SELECT_LYRICS_CANDIDATE', payload: { youtube_url, video_id, request: requestId } },
-        resolve
-      );
-    });
-    if (res?.success) {
-      showToast('歌詞を確定しました');
-      if (reqInfo) {
-        reqInfo.locked = true;
-        reqInfo.available = false;
-      }
-      const currentState = syncLyricsLockState();
-      const nextState = {
-        ...(currentState || { sync: false, dynamic: false, byRequest: {} }),
-        byRequest: { ...(currentState?.byRequest || {}) }
-      };
-      nextState.byRequest[String(requestId || '').toLowerCase()] = true;
-      if (requestTarget === 'sync') nextState.sync = true;
-      if (requestTarget === 'dynamic') nextState.dynamic = true;
-      lyricsLockState = nextState;
-      refreshLockMenu();
-    } else {
-      const msg = res?.error || (res?.raw && (res.raw.message || res.raw.code)) || '歌詞の確定に失敗しました';
-      showToast(msg);
-    }
-  } catch (e) {
-    console.error('lock request error', e);
-    showToast('歌詞の確定に失敗しました');
-  }
-}
-
-
 
 function setupPlayerBarBlankClickGuard() {
   const bar = document.querySelector('ytmusic-player-bar');
@@ -8677,9 +8433,10 @@ const tick = async () => {
     // 初回ロード（曲の途中から開いた場合など）は再生位置のリセットを待たない
     const isInitialLoad = (currentKey === null);
 
-    // クラウド同期
-    if (currentKey !== null && CloudSync && typeof CloudSync.syncNow === 'function') {
-      CloudSync.syncNow();
+    // クラウド同期。曲が変わるたびに全履歴を送ると通信量が跳ねるので、
+    // 前回から一定時間空いた時だけ走らせる(間隔は CloudSync 側)。
+    if (currentKey !== null && CloudSync && typeof CloudSync.syncIfDue === 'function') {
+      CloudSync.syncIfDue();
     }
 
     const v = document.querySelector('video');
@@ -8755,7 +8512,6 @@ const tick = async () => {
     hideMeaningSummaryPopup();
     lastActiveIndex = -1;
     _previousActiveIndices.clear();
-    lastScrolledIndex = -1;
     if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
     if (PipManager && PipManager.pipLyricsContainer) {
       PipManager.pipLyricsContainer._lastScrolledIndex = -1;
@@ -8766,7 +8522,6 @@ const tick = async () => {
     isProgrammaticScrolling = false;
     if (programmaticScrollTimeout) clearTimeout(programmaticScrollTimeout);
     if (programmaticScrollMaxTimeout) clearTimeout(programmaticScrollMaxTimeout);
-    lastTimeForChars = -1;
     // 曲切替処理が走ったので巻き戻り検出の基準をリセットし、
     // この後の scrollTop=0 / innerHTML 差し替えによる scroll イベントを
     // ユーザースクロールとして誤検出しないようにする
@@ -8883,22 +8638,25 @@ function updateMetaUI(meta) {
     });
 
     if (artistLinks.length > 0) {
-      let artistHTML = '';
+      // アーティスト名も URL も YTM の DOM から来る文字列なので、
+      // innerHTML に埋め込まず要素として組む。名前に "<" が入るだけで
+      // 以降が消えたり、href に細工が入ったりする。
+      const frag = document.createDocumentFragment();
 
       artistLinks.forEach((link, index) => {
-        const name = link.textContent.trim();
-        const url = link.href;
-
-        artistHTML += `<a href="${url}" 
-          style="color:inherit; text-decoration:none;"
-          target="_blank">
-          ${name}
-        </a>`;
+        const a = document.createElement('a');
+        a.href = link.href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.style.color = 'inherit';
+        a.style.textDecoration = 'none';
+        a.textContent = link.textContent.trim();
+        frag.appendChild(a);
         if (index < artistLinks.length - 1) {
-          artistHTML += ' • ';
+          frag.appendChild(document.createTextNode(' • '));
         }
       });
-      ui.artist.innerHTML = artistHTML;
+      ui.artist.replaceChildren(frag);
       return;
     }
 
@@ -8972,6 +8730,10 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   const keepPastStored = await storage.get('ytm_keep_past_lyrics');
   if (keepPastStored !== null && keepPastStored !== undefined) config.keepPastLyrics = !!keepPastStored;
   document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
+  const preferSongModeStored = await storage.get('ytm_prefer_song_mode');
+  if (preferSongModeStored !== null && preferSongModeStored !== undefined) {
+    config.preferSongMode = !!preferSongModeStored;
+  }
 
   // 4. Apple Music風背景オプション
   const appleBgStored = await storage.get('ytm_apple_bg');
@@ -9056,6 +8818,10 @@ const setupObserver = () => {
     );
   };
   const observer = new MutationObserver((mutations) => {
+    // 既に次の tick を予約済みなら、中身を見る意味が無い。
+    // 再生中はシークバーの属性変化が絶えず届くので、その回ぶんの
+    // closest() をまるごと省ける。
+    if (_tickScheduled) return;
     const hasRelevantMutation = mutations.some(mutation => {
       const target = mutation.target;
       if (!target) return false;

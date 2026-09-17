@@ -10,7 +10,15 @@ const readSource = relativePath => fs.readFileSync(
 const namespaceSource = readSource('src/js/module/namespace.js')
 const lyricsUiSource = readSource('src/js/module/lyrics-ui.js')
 const styleSource = readSource('src/css/style.css')
-const uiTranslations = JSON.parse(readSource('src/lang/ui.json'))
+
+// 文言は namespace.js の LOCAL_FALLBACK_TEXTS が唯一の置き場。
+// 以前は src/lang/ui.json も見ていたが、あちらはコードから一度も読まれず
+// 中身も古いままだったので削除した。
+const localeBlock = (lang) => {
+  const at = namespaceSource.indexOf(`${lang}: {`)
+  assert.notEqual(at, -1, `${lang} の文言がない`)
+  return namespaceSource.slice(at, namespaceSource.indexOf('\n    },', at))
+}
 
 test('singer color reflection is enabled by default and persisted through settings', () => {
   assert.match(namespaceSource, /useSingerColors:\s*true/)
@@ -28,8 +36,7 @@ test('singer color reflection is enabled by default and persisted through settin
 
 test('singer color setting has labels in every supported UI locale', () => {
   for (const lang of ['ja', 'en', 'ko', 'zh']) {
-    assert.equal(typeof uiTranslations[lang]?.settings_singer_colors, 'string')
-    assert.ok(uiTranslations[lang].settings_singer_colors.length > 0)
+    assert.match(localeBlock(lang), /settings_singer_colors: "[^"]+"/, `${lang} の文言がない`)
   }
 
   assert.match(namespaceSource, /settings_singer_colors:\s*"歌手ごとの色を歌詞に反映する"/)

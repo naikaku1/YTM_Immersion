@@ -191,13 +191,7 @@ test('srv3 cues preserve explicit newlines and do not override frame opacity or 
     'function updateAnimatedCaptionStage',
     'function setupMovieMode',
   )
-  const playbackResolver = sourceBetween(
-    lyricsUiSource,
-    'const getCurrentPlaybackLyricText',
-    'const getCurrentRenderedLyricText',
-  )
   assert.match(stageUpdate, /getActiveTimedTextEvents\(animatedCaptionData\.events, tMs\)/)
-  assert.match(playbackResolver, /getActiveTimedTextEvents\(animatedCaptionData\.events, tMs\)/)
 })
 
 test('the supplied animated srv3 fixture and its short frames stay in the regression suite', () => {

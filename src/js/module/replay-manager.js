@@ -40,7 +40,37 @@
       const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       a.download = `ytm_history_${date}.json`;
       a.click();
-      URL.revokeObjectURL(url);
+      // クリックの直後に revoke すると、ブラウザが読み出す前に URL が
+      // 無効になって保存が空振りすることがある。1 秒だけ残す。
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+
+    // Restore で読む JSON は利用者のファイル。中身は何でも入り得るので、
+    // 履歴として成立する要素だけを通す。timestamp が無い要素が混ざると
+    // 並べ替えが NaN になり、getStats の new Date(NaN) まで巻き込む。
+    _isValidHistoryEntry: function (entry) {
+      if (!entry || typeof entry !== 'object') return false;
+      if (typeof entry.id !== 'string' || !entry.id) return false;
+      if (typeof entry.title !== 'string') return false;
+      if (typeof entry.artist !== 'string') return false;
+      if (!Number.isFinite(Number(entry.timestamp))) return false;
+      return true;
+    },
+
+    _sanitizeHistoryEntry: function (entry) {
+      const num = (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+      return {
+        id: String(entry.id),
+        title: String(entry.title),
+        artist: String(entry.artist),
+        src: typeof entry.src === 'string' ? entry.src : null,
+        duration: num(entry.duration),
+        lyricLines: num(entry.lyricLines),
+        timestamp: num(entry.timestamp),
+      };
     },
 
     importHistory: function () {
@@ -55,10 +85,19 @@
           try {
             const data = JSON.parse(ev.target.result);
             if (Array.isArray(data)) {
-              if (confirm('履歴を復元しますか？\n[OK] 現在の履歴に結合 (マージ)\n[キャンセル] キャンセル')) {
+              const valid = data
+                .filter(entry => this._isValidHistoryEntry(entry))
+                .map(entry => this._sanitizeHistoryEntry(entry));
+              const skipped = data.length - valid.length;
+              if (!valid.length) {
+                alert('復元できる履歴がありませんでした。');
+                return;
+              }
+              const note = skipped > 0 ? `\n（読めない ${skipped} 件は飛ばします）` : '';
+              if (confirm(`履歴を復元しますか？${note}\n[OK] 現在の履歴に結合 (マージ)\n[キャンセル] キャンセル`)) {
                 const current = await storage.get(this.HISTORY_KEY) || [];
                 const existingIds = new Set(current.map(i => i.id + '_' + i.timestamp));
-                const newData = data.filter(i => !existingIds.has(i.id + '_' + i.timestamp));
+                const newData = valid.filter(i => !existingIds.has(i.id + '_' + i.timestamp));
                 const merged = current.concat(newData);
                 merged.sort((a, b) => a.timestamp - b.timestamp);
                 await storage.set(this.HISTORY_KEY, merged);
@@ -192,12 +231,14 @@
         const duration = typeof h.duration === 'number' ? h.duration : 0;
         countMap[key].totalDuration += duration;
 
+        // 初出でも 1 回として数える。以前は { count: 0 } で作って else 側でしか
+        // 加算していなかったので、全アーティストが 1 回ずつ少なく出ていた
+        // (1 回しか聴いていないアーティストは 0 回)。シェア % もずれる。
         if (!artistMap[h.artist]) {
           artistMap[h.artist] = { count: 0, src: h.src };
-        } else {
-          artistMap[h.artist].count++;
-          if (h.src) artistMap[h.artist].src = h.src;
         }
+        artistMap[h.artist].count++;
+        if (h.src) artistMap[h.artist].src = h.src;
 
         uniqueArtists.add(h.artist);
         totalSeconds += duration;
@@ -344,30 +385,22 @@
         };
       }
 
-
-      document.getElementById('replay-reset-action').onclick = async () => {
-        if (confirm(t('replay_reset_confirm'))) {
-          await storage.remove(ReplayManager.HISTORY_KEY);
-          ReplayManager.renderUI();
-        }
-      };
-      document.getElementById('replay-export-btn').onclick = () => this.exportHistory();
-      document.getElementById('replay-import-btn').onclick = () => this.importHistory();
-
       if (stats.totalPlays === 0) {
         container.innerHTML = `<div class="replay-empty"><div style="font-size:40px; margin-bottom:10px;">🎧</div><div>${t('replay_empty')}</div><div style="font-size:12px; opacity:0.6; margin-top:5px;">${t('replay_no_data_sub')}</div></div>`;
         return;
       }
 
-      const heroImage = stats.mostPlayedSong?.src || '';
+      // 曲名・アーティスト名・画像 URL は再生履歴から来る。履歴は Restore で
+      // 利用者のファイルからも入るので、任意のマークアップが混ざり得る。
+      const heroImage = escapeHtml(stats.mostPlayedSong?.src || '');
 
       const artistBgStyle = `background: linear-gradient(135deg, rgba(50,100,255,0.1), rgba(255,255,255,0.03));`;
 
       let topArtistsSubHtml = '';
       if (stats.topArtists.length > 1) {
         topArtistsSubHtml = `<div style="margin-top:auto; padding-top:10px; border-top:1px solid rgba(255,255,255,0.1); font-size:12px; font-weight:600; color:rgba(255,255,255,0.9);">`;
-        if (stats.topArtists[1]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:4px; align-items:center;"><span style="opacity:0.9;">#2 ${stats.topArtists[1].name}</span><span style="opacity:0.7;">${stats.topArtists[1].count}回</span></div>`;
-        if (stats.topArtists[2]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="opacity:0.9;">#3 ${stats.topArtists[2].name}</span><span style="opacity:0.7;">${stats.topArtists[2].count}回</span></div>`;
+        if (stats.topArtists[1]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:4px; align-items:center;"><span style="opacity:0.9;">#2 ${escapeHtml(stats.topArtists[1].name)}</span><span style="opacity:0.7;">${Number(stats.topArtists[1].count) || 0}回</span></div>`;
+        if (stats.topArtists[2]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="opacity:0.9;">#3 ${escapeHtml(stats.topArtists[2].name)}</span><span style="opacity:0.7;">${Number(stats.topArtists[2].count) || 0}回</span></div>`;
         topArtistsSubHtml += `</div>`;
       }
 
@@ -383,15 +416,15 @@
           <div class="bento-item hero-song" style="background-image: url('${heroImage}');">
             <div class="bento-overlay">
               <div class="bento-label">${t('replay_topSong')}</div>
-              <div class="bento-song-title">${stats.mostPlayedSong?.title}</div>
-              <div class="bento-song-artist">${stats.mostPlayedSong?.artist}</div>
-              <div class="bento-badge">${stats.mostPlayedSong?.count} ${t('replay_plays')}</div>
+              <div class="bento-song-title">${escapeHtml(stats.mostPlayedSong?.title)}</div>
+              <div class="bento-song-artist">${escapeHtml(stats.mostPlayedSong?.artist)}</div>
+              <div class="bento-badge">${Number(stats.mostPlayedSong?.count) || 0} ${t('replay_plays')}</div>
             </div>
           </div>
 
           <div class="bento-item hero-vibe">
             <div class="bento-label">${t('replay_vibe')}</div>
-            <div class="bento-vibe-text" style="font-size:24px; font-weight:900; margin-top:10px; line-height:1.2; word-break:break-all;">${stats.vibeLabel}</div>
+            <div class="bento-vibe-text" style="font-size:24px; font-weight:900; margin-top:10px; line-height:1.2; word-break:break-all;">${escapeHtml(stats.vibeLabel)}</div>
           </div>
 
           <div class="bento-item hero-lyrics">
@@ -405,7 +438,7 @@
               <div class="bento-label" style="color:rgba(255,255,255,0.7);">${t('replay_topArtist')}</div>
               
               <div class="bento-artist-name" style="font-size:28px; font-weight:900; margin: 5px 0 10px 0; color:#fff; line-height:1.1; flex-shrink: 0; min-height: 30px;">
-                ${stats.mostPlayedArtist?.name || 'N/A'}
+                ${escapeHtml(stats.mostPlayedArtist?.name || 'N/A')}
               </div>
               
               <div class="bento-badge" style="font-size:11px; padding:4px 10px; margin-bottom:10px; align-self:flex-start; background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.1);">
@@ -425,13 +458,13 @@
         html += `
           <div class="replay-item">
             <div class="replay-rank">${idx + 1}</div>
-            <div class="replay-img">${song.src ? `<img src="${song.src}" crossorigin="anonymous">` : ''}</div>
+            <div class="replay-img">${song.src ? `<img src="${escapeHtml(song.src)}" crossorigin="anonymous">` : ''}</div>
             <div class="replay-info">
-              <div class="replay-title">${song.title}</div>
-              <div class="replay-artist">${song.artist}</div>
+              <div class="replay-title">${escapeHtml(song.title)}</div>
+              <div class="replay-artist">${escapeHtml(song.artist)}</div>
             </div>
             <div class="replay-count">
-              <div class="replay-count-val">${song.count}${config.uiLang === 'ja' ? '回' : ''}</div>
+              <div class="replay-count-val">${Number(song.count) || 0}${config.uiLang === 'ja' ? '回' : ''}</div>
               <div class="replay-time-val">${timeStr}</div>
             </div>
           </div>`;

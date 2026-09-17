@@ -8,8 +8,9 @@ const lyricsUiSource = fs.readFileSync(
   'utf8',
 )
 
-const functionStart = lyricsUiSource.indexOf('function updateLyricHighlight(currentTime)')
-const functionEnd = lyricsUiSource.indexOf('async function sendLockRequest', functionStart)
+// 1行ぶんの塗りは updateLyricHighlight から切り出してある。実物を一緒に動かす。
+const functionStart = lyricsUiSource.indexOf('function paintActiveLyricRow(r, t)')
+const functionEnd = lyricsUiSource.indexOf('function setupPlayerBarBlankClickGuard', functionStart)
 assert.notEqual(functionStart, -1, 'updateLyricHighlight should be present')
 assert.notEqual(functionEnd, -1, 'updateLyricHighlight end marker should be present')
 const updateSource = lyricsUiSource.slice(functionStart, functionEnd)
@@ -86,6 +87,8 @@ function createHighlightHarness(lyricsData, hasDynamicRanges) {
     },
     scoreLyricTextMatch(a, b) { return a === b ? 100 : 0 },
     syncMeaningPanelToPlayback() {},
+    // 行を止める位置。CSS の指定が無い時の既定(中央)と同じ
+    lyricAnchorOffset: (c, rowHeight) => (c.clientHeight / 2) - (rowHeight / 2),
     clearTimeout() {},
     setTimeout() { return 1 },
   }

@@ -111,6 +111,10 @@ LRCHub の歌詞と同じタイムラインに乗っているため、単語同�
 localStorage.setItem('ytm_debug', '1')  // 元に戻すには removeItem
 ```
 
+この値は `chrome.storage.local` にも写されるので、background
+(Service Worker)のログも同じ操作で出ます。background 側は起動時にしか
+読まないため、切り替えたあとは拡張を読み込み直してください。
+
 ### 歌詞の表示
 
 単語（音節）単位の同期データがある曲では、Apple Music に寄せた表示になります。
@@ -178,8 +182,8 @@ PIP（小窓）でも同じ表示になります。PIP は別ウィンドウ・�
 # 構文チェック
 for f in src/js/*.js src/js/module/*.js; do node --check "$f"; done
 
-# テスト
-node --test tests/
+# テスト (Node 24 ではディレクトリ指定が効かないので glob で渡す)
+node --test tests/*.test.mjs
 ```
 
 ---

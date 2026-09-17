@@ -149,6 +149,10 @@ function createBackgroundHarness({ api = {} } = {}) {
     delay: ms => new Promise(resolve => setTimeout(resolve, Math.min(Number(ms) || 0, 10))),
     normalizeLrchubMeaningPayload: () => null,
     normalizeLrchubTranslations: () => ({}),
+    // background.js が api.js から受け取る素の道具。stub で潰すと、
+    // 実際には API 側にある実装が抜けたまま通ってしまう。
+    hasCharacterSyncedLines: API.hasCharacterSyncedLines,
+    getLrchubRecordId: API.getLrchubRecordId,
   }
 
   vm.runInNewContext(backgroundSource, {

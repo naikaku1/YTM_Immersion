@@ -11,6 +11,21 @@
 const YTMLog = (() => {
   let enabled = false;
   try { enabled = localStorage.getItem('ytm_debug') === '1'; } catch (e) { /* 参照できなければ無効 */ }
+  // background(Service Worker)には localStorage が無く、あちらは
+  // chrome.storage.local の ytm_debug を見る。ここで写しておかないと、
+  // 説明どおり localStorage を立てても background 側のログが一生出ない。
+  // 反映は Service Worker の起動時なので、切り替えたら拡張を読み込み直す。
+  try {
+    const store = globalThis.chrome?.storage?.local;
+    if (store) {
+      store.get(['ytm_debug'], (res) => {
+        const current = res && (res.ytm_debug === '1' || res.ytm_debug === true);
+        if (current === enabled) return;
+        if (enabled) store.set({ ytm_debug: '1' });
+        else store.remove('ytm_debug');
+      });
+    }
+  } catch (e) { /* 書けなければ content 側だけで有効 */ }
   const noop = () => { };
   return {
     enabled,
@@ -19,6 +34,90 @@ const YTMLog = (() => {
     debug: enabled ? console.debug.bind(console, '%c[YTM]', 'color:#8ab4f8') : noop,
   };
 })();
+// ── HTML エスケープ ────────────────────────────────────────
+// 歌詞・曲名・アーティスト名・利用者が読み込んだ JSON は、そのまま
+// innerHTML に入れてはいけない。歌詞に "<" があるだけでその行以降が
+// 消えるし、任意のマークアップが入り込む。
+// 各 module で別々に持っていたものをここに 1 つだけ置く。
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+// ── セッション中のキャッシュを上限で抑える ──────────────────
+// 上限に達したら全部消す、という抑え方だと、いま再生している曲のぶんまで
+// 巻き添えで消える。直後に同じものを取り直すことになるので、古い順に
+// 必要なぶんだけ落とす。isPinned に true を返したキーは残す。
+const trimMapToLimit = (map, limit, isPinned) => {
+  if (!(map instanceof Map) || !Number.isFinite(limit)) return 0;
+  let removed = 0;
+  for (const key of map.keys()) {
+    if (map.size <= limit) break;
+    if (typeof isPinned === 'function' && isPinned(key)) continue;
+    map.delete(key);
+    removed += 1;
+  }
+  return removed;
+};
+
+// ── 1 文字ぶんの妥当な長さ ──────────────────────────────────
+// その行の文字が実際どれくらいの間隔で進んでいるかを見て決める。
+// 行末の文字を「次の行まで」で引き伸ばさないための上限に使う。
+// background 側(api.js の estimateCharDurationMs)と同じ規則。
+// Service Worker と content script はスコープを共有できないので、
+// 同じ値をここにも置く。片方を変えたら必ずもう片方も変えること。
+const CHAR_DURATION_FALLBACK_MS = 300;
+const CHAR_DURATION_MIN_MS = 120;
+const CHAR_DURATION_MAX_MS = 900;
+
+const estimateCharDurationMs = (chars) => {
+  if (!Array.isArray(chars) || chars.length < 2) return CHAR_DURATION_FALLBACK_MS;
+  const gaps = [];
+  for (let i = 1; i < chars.length; i++) {
+    const prev = chars[i - 1]?.t;
+    const cur = chars[i]?.t;
+    if (typeof prev === 'number' && typeof cur === 'number' && cur > prev) gaps.push(cur - prev);
+  }
+  if (!gaps.length) return CHAR_DURATION_FALLBACK_MS;
+  gaps.sort((a, b) => a - b);
+  // 中央値なので、行の中に伸ばした音が1つあっても引きずられない。
+  const median = gaps[Math.floor(gaps.length / 2)];
+  return Math.min(CHAR_DURATION_MAX_MS, Math.max(CHAR_DURATION_MIN_MS, median));
+};
+
+// ── byline(「アーティスト • アルバム • 年」)の切り分け ──────
+// プレイヤーバーもキューも同じ形の文字列を出す。歌詞キャッシュのキーは
+// 「曲名///アーティスト」なので、切り出し方が食い違うと同じ曲でも
+// 別のキーになり、キューの先読みが本再生で一度も当たらなくなる。
+const splitBylineParts = (text) => String(text || '')
+  .split('•')
+  .map(s => (s || '').trim())
+  .filter(Boolean);
+
+const parseBylineArtist = (text) => splitBylineParts(text)[0] || '';
+
+// ── 歌詞検索に投げる曲名の正規化 ────────────────────────────
+// YTM の曲名には "(feat. X)" "[MV]" " - Remix" のような付属物が付く。
+// そのまま LRCHub / LrcLib / LyricsPlus に投げると検索が当たらない。
+//
+// 以前は /\s*[\(-\[].*?[\)-]].*/ を使っていたが、末尾の [\)-]] が
+// 「) または - の直後にリテラルの ]」を要求するため、普通の曲名には
+// 一度も当たっていなかった(= 正規化が効いていなかった)。
+//
+// 全角の（）【】も落とす。日本語の曲名で普通に使われるため。
+// 全部削って空になる曲名("(Interlude)" など)は、元の曲名をそのまま返す。
+const normalizeSearchTrackTitle = (s) => {
+  const raw = String(s || '').trim();
+  const stripped = raw
+    .replace(/\s*[\(\[（【][^\)\]）】]*[\)\]）】]\s*/g, ' ')
+    .replace(/\s+[-–—]\s+.*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return stripped || raw;
+};
+
   const EXT =
     typeof globalThis.chrome !== 'undefined'
       ? globalThis.chrome
@@ -199,6 +298,9 @@ const YTMLog = (() => {
     leftAlignInfo: false,
     // 再生済みの歌詞を残すか。false = 従来どおり消える
     keepPastLyrics: false,
+    // 曲が変わったときに YTM の「動画」を「曲」に切り替えるか。
+    // 既定 ON = 従来どおり。OFF にすると動画モードのまま聴ける。
+    preferSongMode: true,
     appleBg: true,
     useAnimatedCaptions: false,
     // Apple Music 風の文字同期(グラデーションで塗る + 光が尾を引く)。
@@ -259,6 +361,7 @@ const YTMLog = (() => {
       settings_source_lrchub: "LRC Hub 優先",
       settings_apple_sync: "Apple Music 風の文字同期",
       settings_keep_past_lyrics: "再生済みの歌詞を残す",
+      settings_prefer_song_mode: "曲が変わったら「曲」モードに切り替える",
     },
     en: {
       unit_hour: "hours",
@@ -304,6 +407,7 @@ const YTMLog = (() => {
       settings_source_lrchub: "Prefer LRC Hub",
       settings_apple_sync: "Apple Music style word sync",
       settings_keep_past_lyrics: "Keep already-played lyrics visible",
+      settings_prefer_song_mode: "Switch to Song mode when the track changes",
     },
     ko: {
       unit_hour: "시간",
@@ -349,6 +453,7 @@ const YTMLog = (() => {
       settings_source_lrchub: "LRC Hub 우선",
       settings_apple_sync: "Apple Music 스타일 글자 동기화",
       settings_keep_past_lyrics: "재생된 가사를 남겨두기",
+      settings_prefer_song_mode: "곡이 바뀌면 '노래' 모드로 전환",
     },
     zh: {
       unit_hour: "小时",
@@ -394,6 +499,7 @@ const YTMLog = (() => {
       settings_source_lrchub: "优先 LRC Hub",
       settings_apple_sync: "Apple Music 风格逐字同步",
       settings_keep_past_lyrics: "保留已播放的歌词",
+      settings_prefer_song_mode: "切换歌曲时自动切到「歌曲」模式",
     }
   }; 
   

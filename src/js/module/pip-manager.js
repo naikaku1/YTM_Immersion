@@ -13,21 +13,18 @@
         return;
       }
 
+      // 新しい窓のアイコンは初期状態。前の窓で覚えた値が残っていると
+      // 「同じだから触らない」で正しく出ないので、開くたびに忘れる。
+      this._lastPlayStateIsPaused = null;
+
       const pipDoc = this.pipWindow.document;
 
     
-      [...document.styleSheets].forEach((styleSheet) => {
-        try {
-          if (styleSheet.href) {
-            const link = pipDoc.createElement('link');
-            link.rel = 'stylesheet';
-            link.type = styleSheet.type;
-            link.media = styleSheet.media;
-            link.href = styleSheet.href;
-            pipDoc.head.appendChild(link);
-          }
-        } catch (e) { }
-      });
+      // ここで document.styleSheets の href を PIP に複製していたが、
+      // 拾えるのは YTM 本体の CSS だけ。拡張の CSS は manifest 注入なので
+      // styleSheets には href 付きで出てこない。PIP に要らない CSS を
+      // 読み込ませるだけだったので外した。PIP の見た目は下の forceStyle と
+      // updateLyrics 側が全部持っている。
       
       
       
@@ -370,7 +367,11 @@ const forceStyle = pipDoc.createElement('style');
       if (document.body.classList.contains('ytm-keep-past-lyrics')) pipDoc.body.classList.add('ytm-keep-past-lyrics');
       if (document.body.classList.contains('ytm-singer-colors-enabled')) pipDoc.body.classList.add('ytm-singer-colors-enabled');
 
-      const artworkUrl = ui.artwork.querySelector('img')?.src || '';
+      // 曲名・アーティスト名・画像 URL は YTM から来る文字列。そのまま
+      // innerHTML に入れると "<" ひとつで PIP の中身が崩れる。
+      const artworkUrl = escapeHtml(ui.artwork.querySelector('img')?.src || '');
+      const pipTitle = escapeHtml(ui.title.textContent);
+      const pipArtist = escapeHtml(ui.artist.textContent);
       
 pipDoc.body.innerHTML = `
         <div id="pip-container">
@@ -382,8 +383,8 @@ pipDoc.body.innerHTML = `
                     <img id="pip-img" src="${artworkUrl}" alt="">
                 </div>
                 <div class="info-box">
-                    <div id="pip-title">${ui.title.textContent}</div>
-                    <div id="pip-artist">${ui.artist.textContent}</div>
+                    <div id="pip-title">${pipTitle}</div>
+                    <div id="pip-artist">${pipArtist}</div>
                 </div>
                 <button id="pip-like-btn" class="control-btn top-right-btn">
                     <svg viewBox="0 0 24 24"><path id="pip-like-icon-path" d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.01 4.38.38-3.32 2.88 1 4.28L12 15.4z"/></svg>
@@ -502,6 +503,7 @@ pipDoc.body.innerHTML = `
       this.pipWindow.addEventListener('pagehide', () => {
         this.pipWindow = null;
         this.pipLyricsContainer = null;
+        this._lastPlayStateIsPaused = null;
         (window.restartLyricRafLoop || startLyricRafLoop)();
       });
     },
@@ -577,8 +579,14 @@ pipDoc.body.innerHTML = `
       }
     },
 
+    // 毎フレーム呼ばれる。状態が変わっていない回は DOM を触らない
+    // (getElementById 2 回 + style 書き込み 2 回が毎フレーム走っていた)。
+    _lastPlayStateIsPaused: null,
+
     updatePlayState: function (isPaused) {
       if (!this.pipWindow) return;
+      if (isPaused === this._lastPlayStateIsPaused) return;
+      this._lastPlayStateIsPaused = isPaused;
       const playIcon = this.pipWindow.document.getElementById('pip-play-icon');
       const pauseIcon = this.pipWindow.document.getElementById('pip-pause-icon');
       if (playIcon && pauseIcon) {

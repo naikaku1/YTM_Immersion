@@ -89,13 +89,20 @@ body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"])::after {
   animation: none !important;
 }
 
+/* 回る2枚は、画面の対角線より大きい正方形にする。
+   ％で指定すると画面の縦横比がそのまま形に出るので、横長の画面では
+   高さ(160% = 画面高の1.6倍)が画面幅に届かない。rotate(90deg) の位相で
+   その短い辺が横に来て、画面の端に素材の切れ目が出ていた。
+   1vmax は長辺の1%。200vmax あれば、正方形の画面(対角線 ≒ 141vmax)でも
+   キーフレームの translate(最大10%)と scale(最小1.0)を見込んで覆い切れる。
+   親が overflow:hidden なので、はみ出したぶんは画面外で切られる。 */
 body.ytm-apple-bg #ytm-custom-bg::before {
   content: "";
   position: absolute;
-  top: -30%;
-  left: -30%;
-  width: 160%;
-  height: 160%;
+  top: calc(50% - 100vmax);
+  left: calc(50% - 100vmax);
+  width: 200vmax;
+  height: 200vmax;
   background-image: inherit;
   background-size: cover;
   background-position: center;
@@ -108,16 +115,15 @@ body.ytm-apple-bg #ytm-custom-bg::before {
 body.ytm-apple-bg #ytm-custom-bg::after {
   content: "";
   position: absolute;
-  bottom: -30%;
-  right: -30%;
-  width: 150%;
-  height: 150%;
+  top: calc(50% - 100vmax);
+  left: calc(50% - 100vmax);
+  width: 200vmax;
+  height: 200vmax;
   background-image: inherit;
   background-size: cover;
   background-position: center;
   opacity: 0.4;
   border-radius: 45%;
-  /* mix-blend-mode繧貞､悶＠縺ｦ蜆ｪ縺励￥驥阪繧 */
   will-change: transform;
   animation: none;
 }
@@ -2574,107 +2580,237 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
 }
 
 /* 邵ｦ逕ｻ髱｢繝ｬ繧､繧｢繧ｦ繝� */
-@media (orientation: portrait) {
+/* ── 狭い画面(縦積み) ──────────────────────────────────────
+   切り替えは「向き」ではなく「幅」で見る。orientation だと、横長でも狭い窓
+   (800x700 など)は横並びのまま潰れ、幅の広い縦長窓(1200x1400 など)は
+   横並びで足りるのに縦積みにされる。必要なのは横幅であって向きではない。 */
+@media (max-width: 900px) {
+
+  /* 上段=見出し(要るぶんだけ) / 下段=歌詞(残り全部)。
+     以前は wrapper の padding・見出しの高さ・gap・歌詞の 65vh を手で
+     足し合わせていたので、窓の大きさが変わるたびにどこかが溢れ、
+     歌詞の下がプレイヤーバーに潜っていた。残りの計算は 1fr に任せる。 */
   body.ytm-custom-layout #ytm-custom-wrapper {
-    flex-direction: column;
-    justify-content: flex-start;
-    align-items: center;
-    padding: 80px 16px 140px 16px;
-    gap: 24px;
+    /* プレイヤーバー(bottom:24px + 高さ)に被らないための下余白 */
+    --ytm-player-safe: calc(24px + (80px * var(--ytm-ui-scale, 1)) + 16px);
+    /* 上の方に display:flex !important がある(YTM に潰されないため)ので、
+       こちらも !important で上書きする */
+    display: grid !important;
+    /* 列を明示する。書かないと列が「中身なりの幅」になり、曲名が短い曲では
+       見出しも歌詞も画面の真ん中に寄って細くなる(歌詞が数文字で折り返す)。
+       曲名の長さで画面の使い方が変わってはいけない。 */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    justify-items: center;
+    /* 歌っている行が見出しのすぐ下に来るので、少し離す */
+    gap: 20px;
+    /* 横並びの時の align-items:center が残ると、格子でも各段が
+       「中身の高さ」になる。歌詞は container-type:size で中身から
+       高さを取らないので、そのままだと高さ 0 に潰れる。 */
+    align-items: stretch;
+    padding: 20px 12px var(--ytm-player-safe) 12px;
   }
 
+  /* 歌詞が無い曲では下段が消えるので、見出しを真ん中に置く */
+  body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-wrapper {
+    grid-template-rows: auto;
+    align-content: center;
+  }
+
+  /* ── 見出しは 2 段 ──────────────────────────────────────
+       1段目: アートワーク + 曲名/アーティスト + 曲/動画トグル
+       2段目: ボタン列
+     以前は曲名・アーティスト・ボタン列・取得元バッジ・トグルが縦に
+     4〜5 段積み上がり、縦画面で一番足りない縦を食っていた。
+     #ytm-custom-info-area を display:contents にして、その中身
+     (曲名・アーティスト・ボタン列・トグル)を直接この格子に並べる。 */
   body.ytm-custom-layout #ytm-custom-left-col {
-    /* 縦積みレイアウトでは主軸が縦になるため、flex-basis:0 を解除する。
-       残すと高さの基準が 0 になって潰れる。 */
-    flex: 0 0 auto;
-    width: 100%;
-    max-width: 520px;
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "art title  toggle"
+      "art artist toggle"
+      "btns btns  btns";
     align-items: center;
-    justify-content: flex-start;
-    gap: 12px;
+    column-gap: 12px;
+    row-gap: 0;
+    width: 100%;
+    max-width: 560px;
+    min-height: 0;
+    flex: none;
     text-align: left;
-    min-height: 72px;
-  }
-
-  body.ytm-custom-layout #ytm-artwork-container {
-    width: 72px;
-    height: 72px;
-    border-radius: 14px;
-    margin: 0;
-    flex-shrink: 0;
-    align-self: stretch;
-  }
-
-  body.ytm-custom-layout #ytm-meaning-summary-btn.ytm-lyrics-summary-trigger {
-    top: 6px;
-    right: 6px;
-    width: 24px;
-    height: 24px;
-    border-width: 1px;
-    font-size: 15px;
+    /* 歌詞が無い時の拡大(scale 1.1)は、狭い画面では横にはみ出す */
+    transform: none;
   }
 
   body.ytm-custom-layout #ytm-custom-info-area {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: flex-start;
-    min-height: 72px;
+    display: contents;
+  }
+
+  body.ytm-custom-layout #ytm-artwork-container {
+    grid-area: art;
+    width: 64px;
+    height: 64px;
+    border-radius: 12px;
+    margin: 0;
+    flex: none;
+    align-self: center;
+  }
+
+  body.ytm-custom-layout #ytm-meaning-summary-btn.ytm-lyrics-summary-trigger {
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    border-width: 1px;
+    font-size: 14px;
+  }
+
+  /* 長い曲名で 3 列目(トグル)を押し出さないよう、必ず省略する */
+  body.ytm-custom-layout #ytm-custom-title,
+  body.ytm-custom-layout #ytm-custom-artist {
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   body.ytm-custom-layout #ytm-custom-title {
-    font-size: 18px;
+    grid-area: title;
+    align-self: end;
+    font-size: 17px;
     font-weight: 800;
-    text-align: left;
-    margin-bottom: 2px;
+    line-height: 1.25;
   }
 
   body.ytm-custom-layout #ytm-custom-artist {
-    font-size: 13px;
+    grid-area: artist;
+    align-self: start;
+    font-size: 12px;
     font-weight: 500;
-    margin-bottom: 4px;
-    text-align: left;
+    line-height: 1.3;
   }
 
   body.ytm-custom-layout #ytm-btn-area {
+    grid-area: btns;
+    display: flex;
+    flex-wrap: wrap;
     justify-content: flex-start;
-    margin-top: 6px;
+    align-items: center;
     gap: 8px;
+    margin: 10px 0 0 0;
+    max-height: none;
+  }
+
+  /* 文字のボタン(Lyrics / PIP)だけが UI サイズに追従し、アイコンのボタンは
+     8px 12px / 16px の固定だったので、並べると高さも丸みも揃っていなかった。
+     狭い画面では 1 段に並ぶぶん目立つので、同じ高さの粒に揃える。 */
+  body.ytm-custom-layout #ytm-btn-area .ytm-glass-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 38px;
+    padding: 0 14px;
+    font-size: 13px;
+    line-height: 1;
+    border-radius: 19px;
+    flex: 0 0 auto;
+  }
+
+  body.ytm-custom-layout #ytm-btn-area .ytm-glass-btn.icon-btn {
+    width: 38px;
+    padding: 0;
+  }
+
+  body.ytm-custom-layout #ytm-btn-area .ytm-glass-btn svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+  }
+
+  /* 曲/動画トグルは 1 段目の右端へ。moviemode では画面隅に固定される
+     (上の .moviemode の規則)ので、そちらには触らない。 */
+  body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle:not(.moviemode) {
+    grid-area: toggle;
+    align-self: center;
+    justify-self: end;
+    margin: 0;
+  }
+
+  /* 取得元バッジをボタン列の下に流すと、それだけで 1 段ぶん縦を食う。
+     狭い画面では隅に戻す(出るのは手を動かした時だけなので邪魔にならない)。 */
+  body.ytm-custom-layout #ytm-lyrics-source-debug.ytm-source-inline {
+    position: fixed;
+    left: 12px;
+    bottom: calc(24px + (80px * var(--ytm-ui-scale, 1)) + 8px);
+    margin: 0;
+    align-self: auto;
+    max-width: calc(100vw - 24px);
+  }
+
+  /* ── 歌詞 ──────────────────────────────────────────────
+     高さは格子の 1fr から受け取る。65vh のような固定値にすると、
+     見出しやプレイヤーバーとの足し算が合わなくなる。 */
+  body.ytm-custom-layout #ytm-lyrics-stage {
+    width: 100%;
+    max-width: 560px;
+    /* 高さは 2 段目(1fr)から受け取る */
+    height: 100%;
+    min-height: 0;
+    align-self: stretch;
+    flex: none;
+    /* 縦積みでは左右に並んでいないのでオフセットは不要 */
+    transform: none;
+    /* 下の 50cqh の基準にする */
+    container-type: size;
   }
 
   body.ytm-custom-layout #my-lyrics-container {
     width: 100%;
+    height: 100%;
+
+    /* 歌っている行を上から 0.5 行ぶん下げた所に止める(JS がこの値を読む)。
+       縦画面で中央に置くと、上半分が歌い終わった行で埋まって、これから
+       来る歌詞の見える量が半分になる。横画面は中央のまま。 */
+    --ytm-lyrics-anchor-top-lines: 0.5;
+
+    /* 上下の余白は「止める位置」に合わせる。上は 1 行目がその位置まで
+       上がれるぶん、下は最終行が同じ位置まで来られるぶん。
+       ここが足りないと、曲の最初と最後の行だけ違う高さで光る。
+       (以前は上だけ 10vh に上書きされ、下は 30vh のままだった) */
+    padding-top: 6cqh;
+    padding-bottom: 94cqh;
+
+    /* 左右も揃える。片方だけ変えると歌詞の光学中心がずれる */
+    padding-left: 16px;
     padding-right: 16px;
-    padding-top: 10vh;
+
+    /* 上の暈しは薄くする。歌っている行のすぐ上に来るので、
+       横画面と同じ 15% だと光っている行まで透けてしまう。 */
+    mask-image: linear-gradient(to bottom, transparent, black 4%, black 88%, transparent);
   }
 
-  body.ytm-custom-layout #ytm-lyrics-stage {
-    flex: 0 0 auto;
-    width: 100%;
-    max-width: 520px;
-    height: 65vh;
-    /* 縦積みでは左右に並んでいないのでオフセットは不要 */
-    transform: none;
-  }
-
+  /* アニメーション字幕は 16:9 の枠に流し込むので、上下の余白は要らない */
   body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
-    /* 邵ｦ荳ｦ縺ｳ縺ｪ縺ｮ縺ｧ逕ｻ髱｢蟷�↓蝓ｺ縺･縺阪い繧ｹ繝壹け繝域ｯ斐ｒ16:9縺ｫ蝗ｺ螳� */
-    --ytm-animated-width: min(90vw, calc(50vh * 16 / 9));
+    --ytm-animated-width: min(92vw, 560px);
     width: var(--ytm-animated-width);
     height: calc(var(--ytm-animated-width) * 9 / 16);
-    padding-top: 0;
+    padding: 0;
   }
 
+  /* 解説は下に出す。歌っている行が上に来たので、上に出すと重なる。 */
   body.ytm-custom-layout #ytm-meaning-panel {
-    top: 8px;
-    right: 16px;
-    bottom: auto;
-    left: 16px;
+    top: auto;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
     width: auto;
     max-width: none;
     min-width: 0;
-    max-height: min(18vh, 220px);
+    max-height: min(30cqh, 220px);
     transform: none;
   }
 
@@ -2704,6 +2840,50 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
     width: min(640px, calc(100vw - 24px));
     max-height: 82vh;
     padding: 22px 18px 18px;
+  }
+
+  /* ── 重ねて出すもの ────────────────────────────────────
+     設定パネルは 840x620 の固定。狭い画面では画面から食み出し、
+     左のタブ列も右端も画面の外に出て触れなくなる。
+     中身(タブ列 + 本文)の並びは変えずに、入る大きさへ縮める。 */
+  #ytm-settings-panel {
+    width: calc(100vw - 16px);
+    height: min(620px, calc(100vh - 88px));
+  }
+
+  .settings-tabs {
+    width: 130px;
+    padding: 16px 10px 14px;
+  }
+
+  /* アプリ名は畳む。狭い画面では本文に幅を回したい */
+  .settings-tabs-header {
+    display: none;
+  }
+
+  .settings-tab-btn {
+    font-size: 12px;
+    padding: 9px 10px;
+  }
+
+  .settings-tab-btn span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-version {
+    display: none;
+  }
+
+  /* 代替バージョン検索とキューも、画面より広いと端が切れる */
+  #ytm-switch-panel {
+    width: min(360px, calc(100vw - 32px));
+  }
+
+  #ytm-queue-panel {
+    width: min(380px, calc(100vw - 24px));
   }
 }
 

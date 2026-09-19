@@ -1274,7 +1274,8 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
    こちらは親が最大 1200px あり、3つのピルを広げると間延びするので、
    枠の方を中身に合わせる。 */
 #ytm-replay-panel .ytm-lang-group {
-  align-self: flex-start;
+  align-self: center;
+  margin-bottom: 0;
 }
 
 #ytm-lyrics-stage {
@@ -3074,7 +3075,27 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 }
 
 
+/* ── Daily Replay ────────────────────────────────────────────
+   カードは「面と文字」だけで組む。色を持たせるのはジャケット写真の
+   カード 1 枚だけにして、そこが主役だと分かるようにしている。
+   以前はカードごとに別々のグラデーションを敷き、見出しと巨大な数字にも
+   グラデーションの塗りを掛けていた。色が 5 方向に散って主役が決まらず、
+   塗りを掛けた文字はそのぶん読みにくい。
+
+   行の高さを 1fr 1fr 1fr で固定していたのもやめた。日本語の再生時間は
+   formatDuration が「1時間12分10秒」と組み立てるので、1 時間を超えると
+   56px の数字が 2 行になり、カードの上下が切れて見出しと「N 回再生」が
+   読めなくなっていた。高さは中身に合わせる。 */
 #ytm-replay-panel {
+  --dr-ink: #f2efe9;
+  --dr-ink-2: rgba(242, 239, 233, 0.7);
+  --dr-ink-3: rgba(242, 239, 233, 0.5);
+  --dr-card: rgba(255, 255, 255, 0.032);
+  --dr-card-hover: rgba(255, 255, 255, 0.058);
+  --dr-line: rgba(255, 255, 255, 0.08);
+  --dr-line-strong: rgba(255, 255, 255, 0.16);
+  --dr-radius: 14px;
+
   position: fixed;
   top: 50%;
   left: 50%;
@@ -3083,16 +3104,18 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   height: 85vh;
   max-width: 1200px;
   max-height: 900px;
-  padding: 40px;
-  background: rgba(10, 10, 12, 0.96);
-  border-radius: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 30px 32px 24px;
+  background: rgba(12, 12, 14, 0.97);
+  border-radius: 20px;
+  border: 1px solid var(--dr-line);
   z-index: 100000;
   display: none;
   flex-direction: column;
-  color: #fff;
-  /* backdrop-filter: blur(50px) saturate(180%); */
-  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
+  color: var(--dr-ink);
+  /* 影は下にずらさない。パネルの裏は再生中のジャケットを引き伸ばした
+     明るい背景なので、下方向へずらした黒いぼかしが「位置のずれた黒い染み」
+     として見えてしまう。左右対称にして、輪郭の分離だけを担わせる。 */
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
 
@@ -3113,128 +3136,305 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   }
 }
 
+/* 見出しと期間の切り替えを同じ段に置く。縦に積むと、上に 2 段ぶんの
+   帯ができるだけで何も起きていなかった。右端は閉じるボタンのぶん空ける。 */
+.replay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.replay-head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 共有はフッターの管理用ボタン(Restore / Backup / Cloud / リセット)の列から
+   出して、見出しの隣に置いている。いちばん使うものが、めったに使わない
+   ものの間に埋もれていた。 */
+.replay-icon-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.replay-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.replay-icon-btn:active {
+  transform: scale(0.94);
+}
+
+.replay-icon-btn[disabled] {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.replay-icon-btn svg {
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+}
 
 #ytm-replay-panel h3 {
-  margin: 0 0 20px 0;
-  font-size: 32px;
-  font-weight: 900;
-  letter-spacing: -1px;
-  background: linear-gradient(135deg, #fff 0%, #888 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  margin: 0;
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--dr-ink);
 }
 
 .replay-close-btn {
-  position: absolute;
-  right: 30px;
-  top: 30px;
+  position: static;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
 }
 
 .ytm-replay-content {
-  flex: 1;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
 }
 
+/* 3 列。左は小さいカードの積み重ね、中央はジャケット、右はランキング。
+   grid の行を固定する代わりに列ごとの flex にしてある。中身の長さで
+   高さが決まるので、どの言語でも切れない。 */
 .bento-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1.3fr;
-  grid-template-rows: 1fr 1fr 1fr;
-  gap: 20px;
+  display: flex;
+  gap: 14px;
   height: 100%;
   width: 100%;
-  padding-bottom: 20px;
+  min-height: 0;
 }
 
+.bento-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bento-col-side {
+  flex: 0.92 1 0;
+}
+
+.bento-col-song {
+  flex: 1 1 0;
+}
+
+.bento-col-rank {
+  flex: 1.28 1 0;
+}
 
 .bento-item {
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 24px;
-  padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--dr-card);
+  border: 1px solid var(--dr-line);
+  border-radius: var(--dr-radius);
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  transition: transform 0.3s ease;
+  min-height: 0;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 .bento-item:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--dr-card-hover);
+  border-color: var(--dr-line-strong);
 }
 
 .bento-label {
-  font-size: 13px;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
-  margin-bottom: 8px;
-  letter-spacing: 0.5px;
-}
-
-
-.hero-stat-time {
-  grid-column: 1 / 2;
-  grid-row: 1 / 2;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(255, 50, 50, 0.1), rgba(255, 255, 255, 0.03));
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dr-ink-2);
+  letter-spacing: 0;
+  text-transform: none;
+  margin-bottom: 0;
 }
 
 .bento-value-huge {
-  font-size: 56px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -2px;
-  margin: 10px 0;
-  background: linear-gradient(to right, #fff, #bbb);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 10px 0 0 0;
+  color: var(--dr-ink);
+  background: none;
+  -webkit-background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* 再生時間だけは言語で長さが大きく変わる。パネルの幅に追従させる。 */
+.bento-value-time {
+  font-size: clamp(24px, 2.4vw, 38px);
+}
+
+/* 単位は数字と同じ行に置く。別の行に落とすと、行数のカードだけ
+   「3,139」の下に「行」がぽつんと残って落ち着かない。 */
+.bento-unit {
+  font-size: 0.46em;
+  font-weight: 500;
+  color: var(--dr-ink-2);
+  margin-left: 4px;
+  letter-spacing: 0;
 }
 
 .bento-sub {
-  font-size: 15px;
-  opacity: 0.6;
+  font-size: 13px;
+  color: var(--dr-ink-2);
+  margin-top: 8px;
 }
 
+/* 数値に添える小さな札。丸ピルは操作するもの(期間切り替え・フッター)に
+   だけ使い、読むだけのものとは形で区別する。 */
+.bento-tag {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dr-ink);
+  width: fit-content;
+}
 
+/* flex-basis は auto、flex-shrink は 0。中身より小さくならないので、
+   どれだけ長い値が入っても切れない。余った高さだけを 3 枚で分け合う。
+   逆に高さが足りない時は列ごと送れるようにしてある(切るより送る)。 */
+.hero-stat-time,
+.hero-lyrics {
+  flex: 1 0 auto;
+  justify-content: center;
+}
+
+.hero-artist {
+  flex: 1.35 0 auto;
+  justify-content: flex-start;
+}
+
+.bento-col-side {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.bento-col-side::-webkit-scrollbar {
+  width: 6px;
+}
+
+.bento-col-side::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+/* 名前と割合を、見出しと #2/#3 の間で上下の中央に置く。
+   margin-top: auto を name と rest の両方に付けると、余った高さを
+   2 つの auto が等分する。片方だけだと名前が見出しに貼り付いて、
+   カードの上の隅に寄って見えていた。 */
+.bento-artist-name {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: auto 0 10px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.bento-artist-rest {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--dr-line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bento-artist-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.bento-artist-row .name {
+  color: var(--dr-ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bento-artist-row .count {
+  color: var(--dr-ink-2);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 唯一、色を持つカード。
+   ジャケットはカード全体に cover で敷くのではなく、正方形の枠に置く。
+   カードは縦長なので、全面に敷くと正方形の絵の左右が切れる。さらに
+   文字を読ませるために下半分へ黒いグラデーションを重ねていたので、
+   その境目が帯のように見えていた。絵は絵として最後まで見せ、文字は
+   カードの面に置く。 */
 .hero-song {
-  grid-column: 2 / 3;
-  grid-row: 1 / 3;
+  flex: 1 1 auto;
+  padding: 0;
+  justify-content: flex-start;
+}
+
+.hero-song-art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  /* 縦が足りない時だけ縮める。切るのはここが最後。 */
+  max-height: 68%;
+  flex: 0 1 auto;
+  background-color: rgba(255, 255, 255, 0.05);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  padding: 0;
-  border: none;
-  background-color: transparent !important;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
-.hero-song:hover {
-  background-size: cover !important;
-  background-position: center !important;
-  border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-.bento-overlay {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 20%, rgba(0, 0, 0, 0.9) 100%);
-  padding: 30px;
+.hero-song-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 16px 20px 18px;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: center;
+  gap: 7px;
 }
 
 .bento-song-title {
-  font-size: 28px;
-  font-weight: 800;
+  font-size: 25px;
+  font-weight: 700;
   line-height: 1.25;
-  margin-bottom: 4px;
-  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -3244,84 +3444,25 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 }
 
 .bento-song-artist {
-  font-size: 18px;
-  opacity: 0.9;
-  font-weight: 600;
-  margin-bottom: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+  margin-bottom: 4px;
 }
-
-.bento-badge {
-  display: inline-block;
-  background: rgba(255, 255, 255, 0.25);
-  /* backdrop-filter: blur(10px); */
-  padding: 6px 14px;
-  border-radius: 99px;
-  font-size: 12px;
-  font-weight: 700;
-  width: fit-content;
-}
-
-
-.hero-vibe {
-  grid-column: 1 / 2;
-  grid-row: 2 / 3;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
-
-  background: linear-gradient(135deg, rgba(123, 67, 151, 0.2), rgba(220, 36, 48, 0.1)) !important;
-}
-
-.bento-vibe-text {
-  background: linear-gradient(to right, #fff, #ddd);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-
-.hero-artist {
-  grid-column: 1 / 2;
-  grid-row: 3 / 4;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(50, 100, 255, 0.1), rgba(255, 255, 255, 0.03));
-}
-
-.bento-artist-name {
-  font-size: 24px;
-  font-weight: 800;
-  margin: 10px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-
-.hero-lyrics {
-  grid-column: 2 / 3;
-  grid-row: 3 / 4;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
-
-  background: linear-gradient(135deg, rgba(29, 151, 108, 0.2), rgba(147, 249, 185, 0.1)) !important;
-}
-
 
 .ranking-list-container {
-  grid-column: 3 / 4;
-  grid-row: 1 / 4;
-  padding-bottom: 0;
+  flex: 1 1 auto;
+  padding: 18px 8px 10px 20px;
 }
 
 .replay-list {
   overflow-y: auto;
-  padding-right: 10px;
+  padding-right: 12px;
   margin-top: 10px;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
 .replay-list::-webkit-scrollbar {
@@ -3329,68 +3470,71 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 }
 
 .replay-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
   border-radius: 3px;
 }
 
 .replay-item {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 12px;
-  border-radius: 12px;
-  transition: 0.2s;
-  cursor: default;
-  margin-bottom: 4px;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  transition: background 0.15s ease;
+  margin-bottom: 2px;
 }
 
+/* hover で 4px 横に動かしていたのをやめた。1 行だけずれると縦の並びが
+   崩れて見えるうえ、押せるものと誤解させる。背景の変化だけで足りる。 */
 .replay-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: translateX(4px);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .replay-rank {
-  font-size: 16px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.4);
-  width: 24px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dr-ink-3);
+  width: 20px;
   text-align: center;
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
 
 .replay-img {
-  width: 64px !important;
-  height: 64px !important;
-  min-width: 64px !important;
-  max-width: 64px !important;
-  border-radius: 8px;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
   overflow: hidden;
-  background: #000;
+  background: rgba(255, 255, 255, 0.05);
   flex-shrink: 0;
-  margin-right: 16px;
 }
 
 .replay-img img {
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 
+.replay-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .replay-title {
-  font-size: 15px;
-  font-weight: 700;
-  margin-bottom: 2px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 3px;
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .replay-artist {
   font-size: 12px;
-  opacity: 0.6;
+  color: var(--dr-ink-2);
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -3408,39 +3552,66 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 }
 
 .replay-count-val {
-  font-size: 14px;
-  font-weight: 700;
-  opacity: 1;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .replay-time-val {
-  font-size: 10px;
-  font-weight: 500;
-  opacity: 0.5;
-  margin-top: 2px;
-  font-feature-settings: "tnum";
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dr-ink-3);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* フッターは本文の下に流す。以前は position:absolute で右下に浮いていて、
+   ランキングのカードに重なっていた。 */
+.replay-footer-area {
+  position: static;
+  flex: 0 0 auto;
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .replay-footer-btn {
-  position: absolute;
-  bottom: 25px;
-  right: 30px;
+  position: static;
+  padding: 8px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--dr-line);
   background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.2);
-  font-size: 11px;
-  font-weight: 500;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
   cursor: pointer;
-  transition: all 0.3s ease;
-  letter-spacing: 0.5px;
-  padding: 5px 10px;
-  border-radius: 8px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .replay-footer-btn:hover {
-  color: rgba(255, 60, 60, 1);
-  background: rgba(255, 60, 60, 0.1);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dr-ink);
+  border-color: var(--dr-line-strong);
+}
+
+.replay-footer-btn[disabled] {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+#replay-reset-action {
+  color: rgba(255, 138, 138, 0.9);
+  border-color: rgba(255, 138, 138, 0.22);
+}
+
+#replay-reset-action:hover {
+  background: rgba(255, 90, 90, 0.12);
+  color: #ff9d9d;
+  border-color: rgba(255, 138, 138, 0.42);
 }
 
 .replay-empty {
@@ -3449,30 +3620,139 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   justify-content: center;
   align-items: center;
   height: 100%;
-  opacity: 0.5;
+  gap: 6px;
+  color: var(--dr-ink-2);
   font-weight: 600;
 }
 
-/* 邵ｦ逕ｻ髱｢蟇ｾ蠢� */
-@media (orientation: portrait) {
+.replay-empty .replay-empty-sub {
+  font-size: 12px;
+  color: var(--dr-ink-3);
+  font-weight: 400;
+}
+
+/* 共有画像のプレビュー。Daily Replay パネルの上に出す。 */
+.ytm-replay-share {
+  position: fixed;
+  inset: 0;
+  z-index: 100001;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: popIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.replay-share-box {
+  background: rgba(12, 12, 14, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: min(560px, 92vw);
+  max-height: 92vh;
+  color: #f2efe9;
+}
+
+.replay-share-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(242, 239, 233, 0.7);
+  padding: 2px 2px 0;
+}
+
+.replay-share-close {
+  border: none;
+  background: none;
+  color: rgba(242, 239, 233, 0.7);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.replay-share-close:hover {
+  color: #f2efe9;
+}
+
+/* 画像は 1080 角。実寸で出すと画面に入らないので幅に合わせて縮める。 */
+.replay-share-img {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #0d0d10;
+}
+
+.replay-share-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* 背の低いウィンドウ。ジャケットと文字を詰めて、カードから溢れさせない。 */
+@media (max-height: 620px) {
+  .hero-song-art {
+    max-height: 56%;
+  }
+
+  .hero-song-body {
+    padding: 12px 16px 14px;
+    gap: 5px;
+  }
+
+  .bento-song-title {
+    font-size: 20px;
+  }
+
+  .bento-value-huge {
+    font-size: 32px;
+  }
+}
+
+/* 縦画面と、横長でも幅が足りない時。3 列を縦に積む。 */
+@media (orientation: portrait), (max-width: 1000px) {
   #ytm-replay-panel {
     width: 95vw;
     height: 90vh;
-    padding: 24px;
+    padding: 24px 22px 20px;
   }
 
-  .bento-grid {
-    display: flex;
-    flex-direction: column;
+  .ytm-replay-content {
     overflow-y: auto;
   }
 
+  .bento-grid {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .bento-col {
+    flex: 0 0 auto;
+  }
+
+  .bento-col-side {
+    overflow-y: visible;
+  }
+
   .hero-song {
-    min-height: 250px;
+    min-height: 260px;
   }
 
   .ranking-list-container {
-    min-height: 300px;
+    min-height: 320px;
+  }
+
+  .bento-value-time {
+    font-size: 32px;
   }
 }
 
@@ -3745,72 +4025,6 @@ a.settings-link-btn svg {
   text-overflow: ellipsis;
 }
 
-.replay-footer-area {
-  position: absolute;
-  bottom: 30px;
-  right: 30px;
-  display: flex;
-  gap: 12px;
-  z-index: 100;
-}
-
-
-.replay-footer-btn {
-
-  position: static !important;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  letter-spacing: 0.5px;
-  padding: 8px 16px;
-  border-radius: 99px;
-  /* backdrop-filter: blur(4px); */
-}
-
-.replay-footer-btn:hover {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  transform: translateY(-2px);
-}
-
-
-#replay-reset-action:hover {
-  background: rgba(255, 60, 60, 0.2);
-  color: #ff5555;
-  border-color: rgba(255, 60, 60, 0.3);
-}
-
-.replay-footer-area {
-  margin-top: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.replay-footer-btn {
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
-}
-
-.replay-footer-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.replay-footer-btn[disabled] {
-  opacity: 0.6;
-  cursor: wait;
-}
 
 .dr-cloud-sync-btn {
   display: inline-flex;

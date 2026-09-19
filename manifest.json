@@ -32,6 +32,7 @@
         "src/js/module/cloud-sync.js",
         "src/js/module/lyrics-cache.js",
         "src/js/module/replay-manager.js",
+        "src/js/module/replay-share.js",
         "src/js/module/queue-manager.js",
         "src/js/module/pip-manager.js",
         "src/js/module/ytm-lyrics.js",

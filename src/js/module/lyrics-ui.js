@@ -6246,26 +6246,45 @@ function renderSettingsPanel() {
 
 function createReplayPanel() {
   ui.replayPanel = createEl('div', 'ytm-replay-panel', '', `
-      <button class="replay-close-btn ytm-unified-close-btn size-40"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      <h3>Daily Replay</h3>
-      
-      <div class="ytm-lang-group" style="margin-bottom: 20px;">
-        <button class="ytm-lang-pill active" data-range="day">${t('replay_today')}</button>
-        <button class="ytm-lang-pill" data-range="week">${t('replay_week')}</button>
-        <button class="ytm-lang-pill" data-range="all">${t('replay_all')}</button>
+      <div class="replay-head">
+        <h3>Daily Replay</h3>
+        <div class="replay-head-right">
+          <div class="ytm-lang-group">
+            <button class="ytm-lang-pill active" data-range="day">${t('replay_today')}</button>
+            <button class="ytm-lang-pill" data-range="week">${t('replay_week')}</button>
+            <button class="ytm-lang-pill" data-range="all">${t('replay_all')}</button>
+          </div>
+          <button class="replay-share-btn replay-icon-btn" aria-label="${t('replay_share_image')}" title="${t('replay_share_image')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><path d="M8.5 13.4l7 4.1M15.5 6.5l-7 4.1"/></svg></button>
+          <button class="replay-close-btn ytm-unified-close-btn size-40"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
       </div>
 
       <div class="ytm-replay-content">
         <div class="lyric-loading">Calculating...</div>
       </div>
 
-      <button id="replay-reset-action" class="replay-footer-btn">${t('settings_reset')} History</button>
     `);
 
   document.body.appendChild(ui.replayPanel);
 
   ui.replayPanel.querySelector('.replay-close-btn').onclick = () => {
     ui.replayPanel.classList.remove('active');
+  };
+
+  // 共有はフッターの管理用ボタンの列から出して、見出しの隣に置く。
+  // いちばん使うものが Restore / Backup / Cloud / リセット に埋もれていた。
+  ui.replayPanel.querySelector('.replay-share-btn').onclick = async (ev) => {
+    const btn = ev.currentTarget;
+    // 押した時点の期間で作る。パネルを開いたまま期間を切り替えられる。
+    const range = ui.replayPanel.dataset.range || 'day';
+    const stats = await ReplayManager.getStats(range);
+    if (!stats.totalPlays) return;
+    btn.disabled = true;
+    try {
+      await ReplayShare.open(stats, range);
+    } finally {
+      btn.disabled = false;
+    }
   };
 
   const pills = ui.replayPanel.querySelectorAll('.ytm-lang-pill');
@@ -6277,13 +6296,6 @@ function createReplayPanel() {
       ReplayManager.renderUI();
     };
   });
-
-  document.getElementById('replay-reset-action').onclick = async () => {
-    if (confirm(t('replay_reset_confirm'))) {
-      await storage.remove(ReplayManager.HISTORY_KEY);
-      ReplayManager.renderUI();
-    }
-  };
 }
 
 // ===================== Artist Seamless Switch =====================

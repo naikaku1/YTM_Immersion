@@ -1,5 +1,7 @@
   const ReplayManager = {
     HISTORY_KEY: 'ytm_local_history',
+    ARTIST_ALIAS_KEY: 'ytm_artist_alias',
+    _aliasBackfilled: false,
     currentVideoId: null,
     hasRecordedCurrent: false,
     isRecording: false,
@@ -25,6 +27,163 @@
 
     incrementLyricCount: function () {
       this.currentLyricLines++;
+    },
+
+    // 同じアーティストが 2 組に割れる件。
+    //
+    // 実際に music.youtube.com で同じ曲を再生して確かめたところ、
+    //   navigator.mediaSession.metadata.artist → "Yorushika"
+    //   プレイヤーバーの byline            → "ヨルシカ"
+    // と、2 つの取得元が別の表記を返していた。getMetadata は
+    // MediaSession を優先し、取れない時だけ byline を読む(lyrics-ui.js)。
+    // どちらが走るかはタイミング次第なので、同じ人が両方の表記で
+    // 履歴に入り、ランキングに 2 回並んでいた。
+    //
+    // 記録する名前は「画面に出ている方」(byline)に統一し、あわせて
+    // 「この 2 つは同じ人」という対応表を残す。対応表があれば、すでに
+    // ローマ字で入っている過去の履歴も後から束ねられる。
+    _readBylineArtist: function () {
+      const el = document.querySelector('.byline.style-scope.ytmusic-player-bar');
+      if (!el) return '';
+      return parseBylineArtist(el.textContent || '').trim();
+    },
+
+    _hasCjk: function (text) {
+      return /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.test(String(text || ''));
+    },
+
+    // 束ねるのは「片方だけが日本語」の組み合わせに限る。
+    // 両方ラテン文字なら、それは表記ゆれではなく別のアーティスト
+    // (byline 側だけ feat. が付いている等)の可能性がある。
+    _looksSameArtist: function (a, b) {
+      if (!a || !b || a === b) return false;
+      if (a.length > 60 || b.length > 60) return false;
+      return this._hasCjk(a) !== this._hasCjk(b);
+    },
+
+    _loadArtistAlias: async function () {
+      const raw = await storage.get(this.ARTIST_ALIAS_KEY);
+      // Restore や古い形式で配列が入っていることがある。対応表は
+      // 「別表記 → 画面に出る表記」の平たい辞書だけを受け付ける。
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      return raw;
+    },
+
+    // すでに溜まっている履歴だけで対応表を作れるところまで作る。
+    //
+    // 同じ videoId が、ある日は「乃木坂46」、別の日は「Nogizaka46」で
+    // 記録されていることがある(その時どちらの取得元が走ったかによる)。
+    // 同じ曲なら同じアーティストなのは確実なので、これは聴き直さなくても
+    // 判定できる。曲名だけが同じものは別人がいるので使わない。
+    _backfillArtistAlias: async function () {
+      const history = await storage.get(this.HISTORY_KEY) || [];
+      if (!history.length) return 0;
+
+      const namesByVideo = new Map();
+      history.forEach(h => {
+        if (!h || typeof h.id !== 'string' || !h.id) return;
+        if (typeof h.artist !== 'string' || !h.artist) return;
+        const bucket = namesByVideo.get(h.id) || new Set();
+        bucket.add(h.artist);
+        namesByVideo.set(h.id, bucket);
+      });
+
+      const alias = await this._loadArtistAlias();
+      let learned = 0;
+
+      namesByVideo.forEach(names => {
+        if (names.size < 2) return;
+        const list = [...names];
+        const japanese = list.filter(n => this._hasCjk(n));
+        const roman = list.filter(n => !this._hasCjk(n));
+        // 日本語表記が 1 つに定まらない時は触らない。
+        if (japanese.length !== 1 || !roman.length) return;
+
+        roman.forEach(name => {
+          if (!this._looksSameArtist(japanese[0], name)) return;
+          if (alias[name] === japanese[0] && alias[japanese[0]] === japanese[0]) return;
+          alias[name] = japanese[0];
+          alias[japanese[0]] = japanese[0];
+          learned++;
+        });
+      });
+
+      if (learned) await storage.set(this.ARTIST_ALIAS_KEY, alias);
+      return learned;
+    },
+
+    // 履歴に残っているローマ字表記を YTM に問い合わせ、画面に出る表記へ
+    // 揃える。YTM は同じアーティストでも曲ごとに別の表記を付けるので
+    // (公式音源は "aimyon"、MV は「あいみょん」)、履歴の中だけを見比べても
+    // 同じ人だと判定できない。そこだけは YTM に聞くしかない。
+    //
+    // 通信が発生するので自動では走らせない。UI にも出していない。
+    // 直したくなった時に、YTM のコンソールから手で呼ぶ:
+    //   await ReplayManager._syncArtistNamesFromYtm()
+    // 1 回で 30 件まで。続きがあれば呼び直す。
+    // (普段の表記ゆれは記録時と _backfillArtistAlias で足りる。ここが要るのは
+    //  YTM が公式音源と MV で別の表記を付けている場合だけ)
+    _syncArtistNamesFromYtm: async function (onProgress) {
+      const lookup = globalThis.YTMArtistLookup;
+      if (!lookup || typeof lookup.byName !== 'function') return 0;
+
+      const history = await storage.get(this.HISTORY_KEY) || [];
+      const alias = await this._loadArtistAlias();
+
+      const targets = [];
+      const seen = new Set();
+      history.forEach(h => {
+        const name = (h && typeof h.artist === 'string') ? h.artist.trim() : '';
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+        if (this._hasCjk(name)) return;   // すでに画面と同じ表記
+        if (alias[name]) return;          // 解決済み
+        targets.push(name);
+      });
+
+      const batch = targets.slice(0, 30);
+      let learned = 0;
+
+      for (let i = 0; i < batch.length; i++) {
+        const name = batch[i];
+        if (typeof onProgress === 'function') onProgress(i + 1, batch.length);
+
+        let found = null;
+        try {
+          found = await lookup.byName(name);
+        } catch (e) {
+          console.warn('[DailyReplay] アーティスト表記の問い合わせに失敗', name, e);
+          continue;
+        }
+
+        const canonical = (found && typeof found.name === 'string') ? found.name.trim() : '';
+        // 別人を束ねないための条件は記録時と同じものを通す。
+        if (!this._looksSameArtist(canonical, name)) continue;
+
+        alias[name] = canonical;
+        alias[canonical] = canonical;
+        learned++;
+        console.log(`[DailyReplay] 表記を統合: ${name} → ${canonical}`);
+
+        // 連打で叩かない。
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      if (learned) await storage.set(this.ARTIST_ALIAS_KEY, alias);
+      return learned;
+    },
+
+    _rememberArtistAlias: async function (canonical, other) {
+      if (!this._looksSameArtist(canonical, other)) return;
+
+      const alias = await this._loadArtistAlias();
+      if (alias[other] === canonical && alias[canonical] === canonical) return;
+
+      // 別表記だけでなく、正しい表記自身も自分に向けておく。
+      // こうしておくと集計側は alias[name] を引くだけで済む。
+      alias[other] = canonical;
+      alias[canonical] = canonical;
+      await storage.set(this.ARTIST_ALIAS_KEY, alias);
     },
 
     exportHistory: async function () {
@@ -166,10 +325,15 @@
 
       this.recordedLyricLines = this.currentLyricLines;
 
+      // 画面に出ている表記を優先して記録する。読めなかった時だけ
+      // getMetadata(MediaSession)の名前を使う。
+      const shown = this._readBylineArtist();
+      await this._rememberArtistAlias(shown, meta.artist);
+
       const record = {
         id: this.currentVideoId,
         title: meta.title,
-        artist: meta.artist,
+        artist: shown || meta.artist,
         src: meta.src,
         duration: this.currentPlayTime,
         lyricLines: this.currentLyricLines,
@@ -216,16 +380,25 @@
 
       const filtered = history.filter(h => h.timestamp >= threshold);
 
+      // 表記ゆれを束ねる。対応表の値は「画面に出る表記」そのものなので、
+      // 引いた結果をそのままキーにも表示名にも使える。
+      const alias = await this._loadArtistAlias();
+      const artistKeyOf = (h) => {
+        const name = (h && h.artist) || '';
+        const canonical = alias[name];
+        return (typeof canonical === 'string' && canonical) ? canonical : name;
+      };
+
       const countMap = {};
       const artistMap = {};
-      const uniqueArtists = new Set();
       let totalSeconds = 0;
       let totalLyrics = 0;
       const hourCounts = new Array(24).fill(0);
 
       filtered.forEach(h => {
-        const key = h.title + '///' + h.artist;
-        if (!countMap[key]) countMap[key] = { ...h, count: 0, totalDuration: 0 };
+        const artistKey = artistKeyOf(h);
+        const key = h.title + '///' + artistKey;
+        if (!countMap[key]) countMap[key] = { ...h, artistKey, count: 0, totalDuration: 0 };
 
         countMap[key].count++;
         const duration = typeof h.duration === 'number' ? h.duration : 0;
@@ -234,13 +407,12 @@
         // 初出でも 1 回として数える。以前は { count: 0 } で作って else 側でしか
         // 加算していなかったので、全アーティストが 1 回ずつ少なく出ていた
         // (1 回しか聴いていないアーティストは 0 回)。シェア % もずれる。
-        if (!artistMap[h.artist]) {
-          artistMap[h.artist] = { count: 0, src: h.src };
+        if (!artistMap[artistKey]) {
+          artistMap[artistKey] = { count: 0, src: h.src };
         }
-        artistMap[h.artist].count++;
-        if (h.src) artistMap[h.artist].src = h.src;
+        artistMap[artistKey].count++;
+        if (h.src) artistMap[artistKey].src = h.src;
 
-        uniqueArtists.add(h.artist);
         totalSeconds += duration;
 
         if (h.lyricLines && typeof h.lyricLines === 'number') {
@@ -251,16 +423,18 @@
         hourCounts[hour]++;
       });
 
-      const topSongs = Object.values(countMap).sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        return b.totalDuration - a.totalDuration;
-      });
+      const topSongs = Object.values(countMap)
+        .map(song => ({ ...song, artist: song.artistKey || song.artist }))
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          return b.totalDuration - a.totalDuration;
+        });
 
       const topArtists = Object.keys(artistMap)
-        .map(name => ({
-          name,
-          count: artistMap[name].count,
-          src: artistMap[name].src
+        .map(key => ({
+          name: key,
+          count: artistMap[key].count,
+          src: artistMap[key].src
         }))
         .sort((a, b) => b.count - a.count);
 
@@ -270,60 +444,23 @@
       const totalPlays = filtered.length;
       const maxHourVal = Math.max(...hourCounts);
       const peakHour = hourCounts.indexOf(maxHourVal);
-      const totalHours = totalSeconds / 3600;
-      const today = new Date(Date.now());
-      const dayOfWeek = today.getDay();
 
-      let vibeLabel = "分  中...";
+      // 「あなたの雰囲気」(vibeLabel) はここで作っていたが、表示をやめた。
+      // 曜日と時間帯から日本語の決め打ち文を組み立てていたもので、
+      // i18n も通っておらず、他の言語では日本語がそのまま出ていた。
       let topArtistShare = "0%";
-
-      if (totalPlays > 0) {
-        const topArtistRatio = mostPlayedArtist ? (mostPlayedArtist.count / totalPlays) : 0;
-        const topSongRatio = mostPlayedSong ? (mostPlayedSong.count / totalPlays) : 0;
-        const diversityRatio = uniqueArtists.size / totalPlays;
-
-        topArtistShare = Math.round(topArtistRatio * 100) + "%";
-
-        if (totalPlays < 5) {
-          vibeLabel = "音楽探しの途中";
-        }
-        else if (topArtistRatio >= 0.6) {
-          vibeLabel = `${mostPlayedArtist.name} 一筋`;
-        }
-        else if (topSongRatio >= 0.5) {
-          vibeLabel = "一点集中リピート";
-        }
-        else if (diversityRatio >= 0.8) {
-          vibeLabel = "幅広く開拓中";
-        }
-        else if (totalHours >= 4) {
-          vibeLabel = "耐久リスニングマスター";
-        }
-        else if (dayOfWeek === 5) {
-          vibeLabel = "💃 解放のフライデー";
-        }
-        else if (dayOfWeek === 6) {
-          vibeLabel = "🥳 週末お祭りモード";
-        }
-        else if (dayOfWeek === 0) {
-          vibeLabel = "🧘‍♂️ 明日への充電";
-        }
-        else {
-          if (peakHour >= 4 && peakHour < 9) { vibeLabel = "早起きスタイル"; }
-          else if (peakHour >= 9 && peakHour < 12) { vibeLabel = "午前中の集中"; }
-          else if (peakHour >= 12 && peakHour < 17) { vibeLabel = "午後ワーク"; }
-          else if (peakHour >= 17 && peakHour < 23) { vibeLabel = "夜型リスナー"; }
-          else { vibeLabel = "深夜の没頭"; }
-        }
-      } else {
-        vibeLabel = "No Data";
+      if (totalPlays > 0 && mostPlayedArtist) {
+        topArtistShare = Math.round((mostPlayedArtist.count / totalPlays) * 100) + "%";
       }
 
       return {
         totalPlays,
         totalTime: this.formatDuration(totalSeconds),
         totalLyrics: totalLyrics.toLocaleString(),
-        vibeLabel,
+        // topSongs は 50 件で切っているので、曲数はそれとは別に持つ。
+        // 切ったあとの length を曲数として出すと 50 で頭打ちになる。
+        uniqueSongs: Object.keys(countMap).length,
+        uniqueArtistCount: Object.keys(artistMap).length,
         topArtistShare,
         peakHour,
         topSongs: topSongs.slice(0, 50),
@@ -337,6 +474,17 @@
       if (!ui.replayPanel) return;
       const container = ui.replayPanel.querySelector('.ytm-replay-content');
 
+      // 履歴の走査はパネルを開いた最初の 1 回だけ。再生中は renderUI が
+      // 5 秒ごとに走るので、毎回全件を読み直すわけにはいかない。
+      if (!this._aliasBackfilled) {
+        this._aliasBackfilled = true;
+        try {
+          await this._backfillArtistAlias();
+        } catch (e) {
+          console.warn('[DailyReplay] alias backfill failed', e);
+        }
+      }
+
       const range = ui.replayPanel.dataset.range || 'day';
       const stats = await this.getStats(range);
 
@@ -345,132 +493,122 @@
       if (pills[1]) pills[1].textContent = t('replay_week');
       if (pills[2]) pills[2].textContent = t('replay_all');
 
-      let footerArea = document.getElementById('replay-footer-area');
-
-      const oldBtn1 = document.getElementById('replay-reset-action');
-      const oldBtn2 = document.getElementById('replay-export-btn');
-      const oldBtn3 = document.getElementById('replay-import-btn');
-      if (oldBtn1 && !oldBtn1.closest('.replay-footer-area')) oldBtn1.remove();
-      if (oldBtn2) oldBtn2.remove();
-      if (oldBtn3) oldBtn3.remove();
-
-      if (!footerArea) {
-        footerArea = createEl('div', 'replay-footer-area', 'replay-footer-area');
-        ui.replayPanel.appendChild(footerArea);
-      }
-
-      footerArea.innerHTML = `
-        <button id="replay-import-btn" class="replay-footer-btn">📂 Restore</button>
-        <button id="replay-export-btn" class="replay-footer-btn">💾 Backup</button>
-        <button id="replay-cloudsync-btn" class="replay-footer-btn">☁ Cloud</button>
-        <button id="replay-reset-action" class="replay-footer-btn" style="color:#ff6b6b; border-color:rgba(255,107,107,0.3);">🗑️ Reset</button>
-      `;
-
-      document.getElementById('replay-reset-action').onclick = async () => {
-        if (confirm(t('replay_reset_confirm'))) {
-          await storage.remove(ReplayManager.HISTORY_KEY);
-          ReplayManager.renderUI();
-        }
-      };
-      document.getElementById('replay-export-btn').onclick = () => this.exportHistory();
-      document.getElementById('replay-import-btn').onclick = () => this.importHistory();
-
-      const cloudBtn = document.getElementById('replay-cloudsync-btn');
-      if (cloudBtn) {
-        cloudBtn.onclick = () => {
-          CloudSync.init();
-          if (CloudSync.openPanel) {
-            CloudSync.openPanel();
-          }
-        };
-      }
+      this._ensureFooter();
 
       if (stats.totalPlays === 0) {
-        container.innerHTML = `<div class="replay-empty"><div style="font-size:40px; margin-bottom:10px;">🎧</div><div>${t('replay_empty')}</div><div style="font-size:12px; opacity:0.6; margin-top:5px;">${t('replay_no_data_sub')}</div></div>`;
+        container.innerHTML = `
+          <div class="replay-empty">
+            <div>${t('replay_empty')}</div>
+            <div class="replay-empty-sub">${t('replay_no_data_sub')}</div>
+          </div>`;
         return;
       }
 
       // 曲名・アーティスト名・画像 URL は再生履歴から来る。履歴は Restore で
       // 利用者のファイルからも入るので、任意のマークアップが混ざり得る。
       const heroImage = escapeHtml(stats.mostPlayedSong?.src || '');
+      const unitCount = t('replay_unit_count');
 
-      const artistBgStyle = `background: linear-gradient(135deg, rgba(50,100,255,0.1), rgba(255,255,255,0.03));`;
-
-      let topArtistsSubHtml = '';
+      let artistRestHtml = '';
       if (stats.topArtists.length > 1) {
-        topArtistsSubHtml = `<div style="margin-top:auto; padding-top:10px; border-top:1px solid rgba(255,255,255,0.1); font-size:12px; font-weight:600; color:rgba(255,255,255,0.9);">`;
-        if (stats.topArtists[1]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:4px; align-items:center;"><span style="opacity:0.9;">#2 ${escapeHtml(stats.topArtists[1].name)}</span><span style="opacity:0.7;">${Number(stats.topArtists[1].count) || 0}回</span></div>`;
-        if (stats.topArtists[2]) topArtistsSubHtml += `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="opacity:0.9;">#3 ${escapeHtml(stats.topArtists[2].name)}</span><span style="opacity:0.7;">${Number(stats.topArtists[2].count) || 0}回</span></div>`;
-        topArtistsSubHtml += `</div>`;
+        const rows = stats.topArtists.slice(1, 3).map((artist, idx) => `
+                <div class="bento-artist-row">
+                  <span class="name">#${idx + 2} ${escapeHtml(artist.name)}</span>
+                  <span class="count">${Number(artist.count) || 0}${unitCount}</span>
+                </div>`).join('');
+        artistRestHtml = `<div class="bento-artist-rest">${rows}</div>`;
       }
 
       let html = `
         <div class="bento-grid">
-          
-          <div class="bento-item hero-stat-time">
-            <div class="bento-label">${t('replay_playTime')}</div>
-            <div class="bento-value-huge">${stats.totalTime}</div>
-            <div class="bento-sub">${stats.totalPlays} ${t('replay_plays')}</div>
-          </div>
 
-          <div class="bento-item hero-song" style="background-image: url('${heroImage}');">
-            <div class="bento-overlay">
-              <div class="bento-label">${t('replay_topSong')}</div>
-              <div class="bento-song-title">${escapeHtml(stats.mostPlayedSong?.title)}</div>
-              <div class="bento-song-artist">${escapeHtml(stats.mostPlayedSong?.artist)}</div>
-              <div class="bento-badge">${Number(stats.mostPlayedSong?.count) || 0} ${t('replay_plays')}</div>
+          <div class="bento-col bento-col-side">
+            <div class="bento-item hero-stat-time">
+              <div class="bento-label">${t('replay_playTime')}</div>
+              <div class="bento-value-huge bento-value-time">${escapeHtml(stats.totalTime)}</div>
+              <div class="bento-sub">${stats.totalPlays} ${t('replay_plays')}</div>
+            </div>
+
+            <div class="bento-item hero-lyrics">
+              <div class="bento-label">${t('replay_lyrics_heard')}</div>
+              <div class="bento-value-huge">${escapeHtml(stats.totalLyrics)}<span class="bento-unit">${t('replay_unit_lines')}</span></div>
+            </div>
+
+            <div class="bento-item hero-artist">
+              <div class="bento-label">${t('replay_topArtist')}</div>
+              <div class="bento-artist-name">${escapeHtml(stats.mostPlayedArtist?.name || '')}</div>
+              <div class="bento-tag">${t('replay_share')} ${escapeHtml(stats.topArtistShare)}</div>
+              ${artistRestHtml}
             </div>
           </div>
 
-          <div class="bento-item hero-vibe">
-            <div class="bento-label">${t('replay_vibe')}</div>
-            <div class="bento-vibe-text" style="font-size:24px; font-weight:900; margin-top:10px; line-height:1.2; word-break:break-all;">${escapeHtml(stats.vibeLabel)}</div>
-          </div>
-
-          <div class="bento-item hero-lyrics">
-            <div class="bento-label">${t('replay_lyrics_heard')}</div>
-            <div class="bento-value-huge" style="font-size: 42px;">${stats.totalLyrics}</div>
-            <div class="bento-sub">行</div>
-          </div>
-
-          <div class="bento-item hero-artist" style="${artistBgStyle} position:relative; overflow:hidden;">
-            <div style="position:relative; z-index:2; height:100%; display:flex; flex-direction:column; color:#fff; padding-bottom:5px;">
-              <div class="bento-label" style="color:rgba(255,255,255,0.7);">${t('replay_topArtist')}</div>
-              
-              <div class="bento-artist-name" style="font-size:28px; font-weight:900; margin: 5px 0 10px 0; color:#fff; line-height:1.1; flex-shrink: 0; min-height: 30px;">
-                ${escapeHtml(stats.mostPlayedArtist?.name || 'N/A')}
+          <div class="bento-col bento-col-song">
+            <div class="bento-item hero-song">
+              <div class="hero-song-art" style="background-image: url('${heroImage}');"></div>
+              <div class="hero-song-body">
+                <div class="bento-label">${t('replay_topSong')}</div>
+                <div class="bento-song-title">${escapeHtml(stats.mostPlayedSong?.title)}</div>
+                <div class="bento-song-artist">${escapeHtml(stats.mostPlayedSong?.artist)}</div>
+                <div class="bento-tag">${Number(stats.mostPlayedSong?.count) || 0} ${t('replay_plays')}</div>
               </div>
-              
-              <div class="bento-badge" style="font-size:11px; padding:4px 10px; margin-bottom:10px; align-self:flex-start; background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.1);">
-                総再生の ${stats.topArtistShare}
-              </div>
-
-              ${topArtistsSubHtml}
             </div>
           </div>
 
-          <div class="bento-item ranking-list-container">
-            <div class="bento-label">${t('replay_ranking')}</div>
-            <div class="replay-list">`;
+          <div class="bento-col bento-col-rank">
+            <div class="bento-item ranking-list-container">
+              <div class="bento-label">${t('replay_ranking')}</div>
+              <div class="replay-list">`;
 
       stats.topSongs.forEach((song, idx) => {
         const timeStr = this.formatDuration(song.totalDuration);
         html += `
-          <div class="replay-item">
-            <div class="replay-rank">${idx + 1}</div>
-            <div class="replay-img">${song.src ? `<img src="${escapeHtml(song.src)}" crossorigin="anonymous">` : ''}</div>
-            <div class="replay-info">
-              <div class="replay-title">${escapeHtml(song.title)}</div>
-              <div class="replay-artist">${escapeHtml(song.artist)}</div>
-            </div>
-            <div class="replay-count">
-              <div class="replay-count-val">${Number(song.count) || 0}${config.uiLang === 'ja' ? '回' : ''}</div>
-              <div class="replay-time-val">${timeStr}</div>
-            </div>
-          </div>`;
+                <div class="replay-item">
+                  <div class="replay-rank">${idx + 1}</div>
+                  <div class="replay-img">${song.src ? `<img src="${escapeHtml(song.src)}" crossorigin="anonymous" loading="lazy" alt="">` : ''}</div>
+                  <div class="replay-info">
+                    <div class="replay-title">${escapeHtml(song.title)}</div>
+                    <div class="replay-artist">${escapeHtml(song.artist)}</div>
+                  </div>
+                  <div class="replay-count">
+                    <div class="replay-count-val">${Number(song.count) || 0}${unitCount}</div>
+                    <div class="replay-time-val">${timeStr}</div>
+                  </div>
+                </div>`;
       });
-      html += `</div></div></div>`;
+
+      html += `</div></div></div></div>`;
       container.innerHTML = html;
+    },
+
+    // フッターは中身が変わらないので、パネル 1 つにつき 1 回だけ組む。
+    // 以前は renderUI のたびに innerHTML を入れ直して onclick を付け直して
+    // いた。再生中は 5 秒ごとに走るので、押そうとしたボタンがその瞬間に
+    // 作り替わることがあった。
+    _ensureFooter: function () {
+      if (!ui.replayPanel) return;
+      if (ui.replayPanel.querySelector('.replay-footer-area')) return;
+
+      const footerArea = createEl('div', 'replay-footer-area', 'replay-footer-area');
+      footerArea.innerHTML = `
+        <button id="replay-import-btn" class="replay-footer-btn">Restore</button>
+        <button id="replay-export-btn" class="replay-footer-btn">Backup</button>
+        <button id="replay-cloudsync-btn" class="replay-footer-btn">Cloud</button>
+        <button id="replay-reset-action" class="replay-footer-btn">${t('settings_reset')}</button>
+      `;
+      ui.replayPanel.appendChild(footerArea);
+
+      footerArea.querySelector('#replay-import-btn').onclick = () => this.importHistory();
+      footerArea.querySelector('#replay-export-btn').onclick = () => this.exportHistory();
+      footerArea.querySelector('#replay-cloudsync-btn').onclick = () => {
+        CloudSync.init();
+        if (CloudSync.openPanel) CloudSync.openPanel();
+      };
+      footerArea.querySelector('#replay-reset-action').onclick = async () => {
+        if (confirm(t('replay_reset_confirm'))) {
+          await storage.remove(this.HISTORY_KEY);
+          this.renderUI();
+        }
+      };
     },
 
     init: function () {

@@ -909,6 +909,46 @@
     queue: getQueue,
   };
 
+  // ── Daily Replay 向け: アーティスト表記の問い合わせ ──────────
+  // YTM は同じアーティストに複数の表記を持っている。公式音源は "aimyon"、
+  // MV は「あいみょん」のように、曲ごとに別の名前が付く。再生履歴の側
+  // だけでは同じ人だと判定しようがないので、YTM 自身に聞く。
+  //
+  // InnerTube を叩くのはこの module の責務なので、口だけここに出す
+  // (ページ設定の読み取りと認証の扱いを他所へ写したくない)。
+  // 「アーティスト」に絞った検索の先頭 1 件だけを返す。
+  const ARTIST_SEARCH_PARAMS = 'EgWKAQIgAWoKEAkQBRAKEAMQBA%3D%3D';
+
+  globalThis.YTMArtistLookup = {
+    byName: async (name) => {
+      const query = String(name || '').trim();
+      if (!query) return null;
+
+      const res = await post('search', CLIENT_WEB, { query, params: ARTIST_SEARCH_PARAMS });
+
+      let found = null;
+      const walk = (node) => {
+        if (found || !node || typeof node !== 'object') return;
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        const r = node.musicResponsiveListItemRenderer;
+        if (r) {
+          const title = (r?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [])
+            .map(x => x.text).join('').trim();
+          if (title) {
+            found = {
+              name: title,
+              browseId: r?.navigationEndpoint?.browseEndpoint?.browseId || null,
+            };
+          }
+          return;
+        }
+        for (const v of Object.values(node)) walk(v);
+      };
+      walk(res?.contents);
+      return found;
+    },
+  };
+
   // ページを開いた直後、URL には既に videoId が入っている。
   // lyrics-ui が DOM の初期化とメタデータ確定を待ってから要求してくるより先に
   // 取得を始めておけば、要求された時点では手元にあり待ち時間がゼロになる。

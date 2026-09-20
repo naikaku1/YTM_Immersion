@@ -271,6 +271,10 @@ body.ytm-custom-layout ytmusic-nav-bar {
   padding-right: 10px;
 
   transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 0, 0, 1), background 0.3s;
+  /* 引っ込むまでの猶予。出す側は下で 0s に上書きするので、
+     「出るのは即座、消えるのは一拍置いて」になる。
+     カーソルがわずかに外れただけで消えると、検索欄まで辿り着けない。 */
+  transition-delay: 0.5s;
   transform: translateY(-20px);
 }
 
@@ -283,9 +287,17 @@ body.ytm-custom-layout ytmusic-nav-bar.moviemode .center-content.ytmusic-nav-bar
   width: min(var(--ytmusic-content-width), 1000px);
 }
 
-body.ytm-custom-layout ytmusic-nav-bar:hover {
+/* 出す条件。以前は :hover だけだったので、検索欄に文字を打っている
+   最中でもカーソルが外れた瞬間に引っ込んでいた。
+   実機の DOM で確認したとおり、検索が開くと ytmusic-search-box に
+   opened、文字が入ると has-query が付く。それも出したままの条件にする。 */
+body.ytm-custom-layout ytmusic-nav-bar:hover,
+body.ytm-custom-layout ytmusic-nav-bar:focus-within,
+body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[opened]),
+body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[has-query]) {
   opacity: 1 !important;
   transform: translateY(0);
+  transition-delay: 0s;
 }
 
 
@@ -296,10 +308,15 @@ body.ytm-custom-layout ytmusic-nav-bar ytmusic-search-box {
 body.ytm-custom-layout ytmusic-nav-bar .right-content {
   opacity: 0;
   transition: opacity 0.3s;
+  transition-delay: 0.5s;
 }
 
-body.ytm-custom-layout ytmusic-nav-bar:hover .right-content {
+body.ytm-custom-layout ytmusic-nav-bar:hover .right-content,
+body.ytm-custom-layout ytmusic-nav-bar:focus-within .right-content,
+body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[opened]) .right-content,
+body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[has-query]) .right-content {
   opacity: 1;
+  transition-delay: 0s;
 }
 
 

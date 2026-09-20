@@ -74,6 +74,14 @@ function createBackgroundHarness({ api = {} } = {}) {
 
   const context = {
     API: { ...defaultApi, ...api },
+    // extra-providers.js。既定は「有効だが誰も持っていない」。
+    Extra: {
+      EXTRA_PROVIDERS_ENABLED: true,
+      fetchFromAmll: async () => null,
+      fetchFromNetease: async () => null,
+      fetchFromKugou: async () => null,
+      fetchFromLiriqo: async () => null,
+    },
     CloudSync: {
       CLOUD_STORAGE_KEY: 'test-cloud-state',
       DEFAULT_CLOUD_STATE: {},

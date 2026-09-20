@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTM-Immersion",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",
@@ -18,6 +18,18 @@
     "https://api-free.deepl.com/*",
     "https://api.deepl.com/*"
   ],
+  "optional_host_permissions": [
+    "https://music.163.com/*",
+    "https://raw.githubusercontent.com/*",
+    "https://cdn.jsdelivr.net/*",
+    "https://krcs.kugou.com/*",
+    "https://lyrics.kugou.com/*",
+    "https://api.liriqo-alfarrizi.workers.dev/*"
+  ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "src/js/background.js",
     "type": "module"

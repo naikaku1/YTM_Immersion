@@ -73,11 +73,32 @@ test('SimpMusic は LRCHub を待つゲートより前に始まる', () => {
   assert.ok(simpAt < gateAt, 'ゲートの後ろで起動している(1.5秒ぶん遅れる)')
 })
 
-test('LyricsPlus は据え置き(ゲートの後ろのまま)', () => {
-  // 3ミラーとも歌詞を返さない(502 / 429 / 402)。毎曲叩く価値が無い
-  const plusAt = indexOfAll(bgSource, 'const lyricsPlusRawTask =')
+test('単語同期の取得元はゲートの後ろのまま(据え置き)', () => {
+  // LyricsPlus は3ミラーとも歌詞を返さない(502 / 429 / 402)。
+  // AMLL / NetEase / KuGou もよそのサーバー。毎曲叩く価値が無い。
+  //
+  // 4つは startRichProviders にまとめてあり、定義はゲートより前にあるが、
+  // 起きるのは呼ばれた時だけ。見るべきは「どこで呼んでいるか」。
   const gateAt = indexOfAll(bgSource, 'const earlyPrimary = await Promise.race([')
-  assert.ok(plusAt > gateAt, 'LyricsPlus まで毎曲叩く形になっている')
+  const callSites = [...bgSource.matchAll(/startRichProviders\(\)/g)].map(m => m.index)
+  assert.ok(callSites.length > 0, 'startRichProviders を誰も呼んでいない')
+  callSites.forEach(at => {
+    assert.ok(at > gateAt, 'ゲートより前に起こしている(毎曲叩く形になっている)')
+  })
+  // 定義がそのまま走り出していないこと(即時実行にすると据え置きが崩れる)
+  assert.doesNotMatch(bgSource, /const startRichProviders = \(\) => \{[\s\S]*?\}\(\)/)
+})
+
+test('単語同期優先の回だけ、LRCHub が速くても取得元を起こす', () => {
+  // ふだんは LRCHub が 1.5 秒以内に答えたらそこで打ち切る。
+  // 「単語同期 優先」は行同期で確定させたくないので、その回だけ続ける。
+  const block = bgSource.slice(
+    indexOfAll(bgSource, 'if (earlyPrimary && earlyPrimary !== earlyMarker) {'),
+    indexOfAll(bgSource, 'if (earlyPrimary === earlyMarker) {'),
+  )
+  assert.match(block, /preferWordSync && deliveredHubQuality < 4/,
+    '行同期止まりかどうかを見ずに起こしている')
+  assert.match(block, /startRichProviders\(\)\.selections/)
 })
 
 test('LRCHub が遅い回の先出しは、文字同期の SimpMusic を優先する', () => {

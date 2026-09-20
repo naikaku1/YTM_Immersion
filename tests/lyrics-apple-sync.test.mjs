@@ -779,10 +779,23 @@ test('選べるのは2つだけで、どちらも他所へ落ちられる', () =
     '2つ以外の値を返している(落ちない排他モードが復活していないか)')
 })
 
-test('設定画面に並ぶ取得元は2つ', () => {
+test('設定画面に並ぶ取得元は3つ', () => {
   const group = sourceBetween(lyricsUiSource, 'id="lyric-source-group"', '</div>')
   const pills = group.match(/data-value="[^"]+"/g) || []
-  assert.deepEqual(pills, ['data-value="ytm"', 'data-value="lrchub"'])
+  assert.deepEqual(pills, [
+    'data-value="ytm"',
+    'data-value="lrchub"',
+    // 上2つが「どこに先に聞くか」なのに対し、これだけ軸が違う。
+    // どのサーバーでもいいので単語同期を持っている方を採る。
+    'data-value="wordsync"',
+  ])
+})
+
+test('並んでいる取得元は3つとも保存できる', () => {
+  const normalize = sourceBetween(lyricsUiSource, 'const normalizeSourceMode =', '\n);')
+  for (const mode of ['ytm', 'lrchub', 'wordsync']) {
+    assert.match(normalize, new RegExp(`'${mode}'`), `${mode} が正規化で落ちる`)
+  }
 })
 
 test('撤去した「新ソースのみ」の名残が残っていない', () => {
@@ -812,6 +825,14 @@ function createBackgroundHarness({ api = {} } = {}) {
 
   vm.runInNewContext(backgroundSource, {
     API: { ...defaultApi, ...api },
+    // extra-providers.js。既定は「有効だが誰も持っていない」。
+    Extra: {
+      EXTRA_PROVIDERS_ENABLED: true,
+      fetchFromAmll: async () => null,
+      fetchFromNetease: async () => null,
+      fetchFromKugou: async () => null,
+      fetchFromLiriqo: async () => null,
+    },
     CloudSync: { CLOUD_STORAGE_KEY: 'k', DEFAULT_CLOUD_STATE: {} },
     chrome: {
       runtime: { lastError: null, onInstalled: { addListener() {} }, onMessage: { addListener(l) { messageListeners.push(l) } } },

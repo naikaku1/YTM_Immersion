@@ -92,6 +92,11 @@ const parseBaseLRC = (lrc) => {
 const LYRIC_CREDIT_LABELS = [
   '制作人', '製作人', '制作', '製作', '出品', '监制', '監製',
   '作詞', '作词', '作曲', '编曲', '編曲', '词曲', '詞曲',
+  // 1文字のラベル。KuGou のデータは「词：〜」「曲：〜」で来るので、
+  // 「作词」だけを持っていても当たらない(包含判定は逆向きには効かない)。
+  '词', '詞', '曲', '编', '編',
+  // 歌い手・収録元のクレジット。実データで「原唱：〜」が来ていた。
+  '原唱', '翻唱', '演唱', '主唱', '歌手', '专辑', '專輯',
   '混音', '録音', '录音', '母带', '母帶', '和声', '和聲',
   'produced by', 'producer', 'lyrics', 'lyricist', 'lyric',
   'music', 'composer', 'composed by', 'arranged by', 'arranger',
@@ -865,7 +870,10 @@ const DEFAULT_BG_BRIGHTNESS = 0.65;
 const normalizeSourceMode = (value) => (
   (value === 'ytm' || value === 'ytm_only') ? 'ytm'
     : (value === 'lrchub') ? 'lrchub'
-      : 'ytm'
+      // どのサーバーでもいいから単語同期を持っている方を採る。
+      // 上の2つが「どこに先に聞くか」なのに対し、これだけ軸が違う。
+      : (value === 'wordsync') ? 'wordsync'
+        : 'ytm'
 );
 
 // Apple Music 風の同期表示は body のクラスで切り替える。
@@ -2264,12 +2272,17 @@ const selectLyricsPayload = (payload) => {
 async function applyLateLyricsUpgrade(payload) {
   // 'ytm' も受ける。YouTube Music 側は時刻なしの歌詞を先に返しておいて、
   // 裏で同期版を探し当てたらここで差し替えにくる。
-  // 差し替えてよいのはこの4つ。LrcLib は入れない。行同期止まりなので、
-  // 暫定表示を格上げする側ではなく常に格下げされる側だから。
+  // 差し替えてよいのは単語同期を返せる取得元だけ。LrcLib は入れない。
+  // 行同期止まりなので、暫定表示を格上げする側ではなく常に格下げされる側だから。
   // (配列をここに直書きしているのは、この関数がテストで単体切り出しされ、
   //  外側の定数が存在しない文脈で実行されるため)
   const lateSource = payload && payload.lyricsSource;
-  const upgradableSources = ['lrchub', 'ytm', 'simpmusic', 'lyricsplus'];
+  const upgradableSources = [
+    'lrchub', 'ytm', 'simpmusic', 'lyricsplus',
+    // extra-providers.js の4つ。ここに足し忘れると、background が
+    // 単語同期を届けても UI 側が黙って捨てる。
+    'amll', 'netease', 'kugou', 'liriqo',
+  ];
   if (!payload || !upgradableSources.includes(lateSource) || !payload.success) return;
   if (!currentKey || payload.track_key !== currentKey) return;
   if (!activeLyricsRequestId || payload.request_id !== activeLyricsRequestId) return;
@@ -4494,7 +4507,18 @@ async function applyLyricsText(rawLyrics) {
   try {
     if (Array.isArray(dynamicLines) && dynamicLines.length) {
       dynamicLinesRaw = dynamicLines;
-      dynamicLines = fillDynamicLineEnds(normalizeDynamicLinesToCharLevel(deepCopyDynamicLines(dynamicLines)));
+      // 行の終わりを埋めるのは「語を字に割る前」。
+      //
+      // 割る側は、行の最後の語の終端が分からないと「次の行が始まるまで」で
+      // 引き延ばす。あとから埋めても手遅れで、間奏に入る行では最後の語が
+      // 数秒かけて塗られていた(実測: KuGou の英語曲で最大 9.1 秒、
+      // 14 行が1秒超)。割る前に埋めておけば、その終端が使われる。
+      //
+      // 割ったあとにもう一度呼ぶのは、語がひとつしか無くて前半で
+      // 埋められなかった行を拾うため。既に終わりを持つ行には触らない。
+      dynamicLines = fillDynamicLineEnds(
+        normalizeDynamicLinesToCharLevel(fillDynamicLineEnds(deepCopyDynamicLines(dynamicLines))),
+      );
     } else {
       dynamicLinesRaw = dynamicLines;
     }
@@ -5825,6 +5849,14 @@ function renderSettingsPanel() {
                 <div class="ytm-lang-group" id="lyric-source-group">
                   <button class="ytm-lang-pill" data-value="ytm">${t('settings_source_ytm')}</button>
                   <button class="ytm-lang-pill" data-value="lrchub">${t('settings_source_lrchub')}</button>
+                  <button class="ytm-lang-pill" data-value="wordsync">${t('settings_source_wordsync')}</button>
+                </div>
+              </div>
+              <div class="setting-row stacked">
+                <span class="setting-name">${t('settings_extra_providers')}</span>
+                <span class="setting-desc">${t('settings_extra_providers_desc')}</span>
+                <div class="ytm-lang-group">
+                  <button class="ytm-lang-pill" id="extra-providers-btn">${t('settings_extra_providers_open')}</button>
                 </div>
               </div>
             </div>
@@ -6011,6 +6043,19 @@ function renderSettingsPanel() {
     closeBtn.onclick = (ev) => {
       ev.stopPropagation();
       ui.settings.classList.remove('active');
+    };
+  }
+
+  // 追加の歌詞サーバーの許可ページを開く。
+  //
+  // 通信先は optional_host_permissions なので、許可は
+  // chrome.permissions.request() で取る。あれはユーザー操作を起点に、
+  // かつ拡張のページからしか呼べない。ここは YouTube Music に差し込んだ
+  // content script なので呼べず、background に開いてもらう。
+  const extraProvidersBtn = document.getElementById('extra-providers-btn');
+  if (extraProvidersBtn) {
+    extraProvidersBtn.onclick = () => {
+      safeRuntimeSendMessage({ type: 'OPEN_EXTRA_PROVIDERS_SETUP' });
     };
   }
 

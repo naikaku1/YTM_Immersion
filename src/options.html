@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8">
+  <title>YTM-Immersion</title>
+  <style>
+    /* 拡張機能のページなので、YouTube Music 側の style.css は効かない。
+       設定パネルと同じ見え方に寄せつつ、ここだけで完結させる。 */
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f6f7;
+      --card: #ffffff;
+      --fg: #1a1a1c;
+      --muted: #6b6b73;
+      --line: rgba(0, 0, 0, 0.1);
+      --accent: #ff0033;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #131315;
+        --card: #1d1d20;
+        --fg: #f2f2f4;
+        --muted: #9a9aa2;
+        --line: rgba(255, 255, 255, 0.12);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 40px 16px 64px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+        "Noto Sans JP", "Yu Gothic UI", Roboto, sans-serif;
+      line-height: 1.7;
+    }
+
+    main {
+      max-width: 680px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 0 0 6px;
+      letter-spacing: 0.01em;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 28px;
+    }
+
+    .providers {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 12px;
+    }
+
+    .provider {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 18px;
+    }
+
+    .provider-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .provider-head input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      flex: none;
+      cursor: pointer;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 1px 8px;
+      margin-left: auto;
+      flex: none;
+    }
+
+    .desc {
+      margin: 8px 0 0 30px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .hosts {
+      margin: 6px 0 0 30px;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      opacity: 0.75;
+      word-break: break-all;
+    }
+
+    .note {
+      margin: 28px 0 0;
+      padding: 16px 18px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .note strong {
+      color: var(--fg);
+      font-weight: 600;
+    }
+
+    #status {
+      min-height: 20px;
+      margin: 18px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1 id="title">追加の歌詞サーバー</h1>
+    <p class="lead" id="lead"></p>
+
+    <ul class="providers" id="providers"></ul>
+
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <div class="note">
+      <p id="note-privacy" style="margin:0"></p>
+    </div>
+  </main>
+
+  <!-- 通信先の定義を extra-providers.js から読むのでモジュールで読み込む -->
+  <script type="module" src="js/options.js"></script>
+</body>
+
+</html>

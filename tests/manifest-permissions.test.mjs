@@ -31,10 +31,24 @@ test('平文 HTTP とローカルの待ち受けは残っていない', () => {
   assert.ok(!manifest.host_permissions.some(p => /localhost|127\.0\.0\.1/.test(p)))
 })
 
+// 必須と任意の両方。任意(optional_host_permissions)は、更新のたびに
+// 「権限が増えたので無効化しました」を出さないために使っている。
+// 宣言の仕方が違うだけで、叩くなら宣言が要る点は同じ。
+const declaredHosts = [
+  ...manifest.host_permissions,
+  ...(manifest.optional_host_permissions || []),
+]
+
 test('使っていないホストを並べていない', () => {
-  manifest.host_permissions.forEach(p => {
+  declaredHosts.forEach(p => {
     const host = new URL(p.replace('/*', '/')).hostname
     assert.ok(sourceText.includes(host), `コードが使っていないホスト: ${host}`)
+  })
+})
+
+test('任意の権限も平文 HTTP を混ぜない', () => {
+  (manifest.optional_host_permissions || []).forEach(p => {
+    assert.ok(p.startsWith('https://'), `平文 HTTP が残っている: ${p}`)
   })
 })
 
@@ -45,7 +59,7 @@ test('コードが叩くホストは権限に入っている', () => {
       // 遷移先・表示用のリンクで、fetch はしない
       .filter(h => !['discord.gg', 'github.com', 'i.ytimg.com', 'youtu.be', 'www.youtube.com'].includes(h)),
   )
-  const allowed = manifest.host_permissions.map(p => new URL(p.replace('/*', '/')).hostname)
+  const allowed = declaredHosts.map(p => new URL(p.replace('/*', '/')).hostname)
   hosts.forEach(h => {
     assert.ok(allowed.includes(h), `権限に無いホストを叩いている: ${h}`)
   })

@@ -1,5 +1,6 @@
 import * as CloudSync from './module/bg-cloud-sync.js';
 import * as API from './module/api.js';
+import * as Extra from './module/extra-providers.js';
 
 // ── デバッグログ ────────────────────────────────────────────
 // Service Worker には localStorage が無いので chrome.storage を見る。
@@ -87,6 +88,10 @@ const PROVIDER_CANDIDATE_LABELS = {
   lrclib: 'LrcLib',
   simpmusic: 'SimpMusic',
   lyricsplus: 'LyricsPlus',
+  amll: 'AMLL DB',
+  netease: 'NetEase',
+  kugou: 'KuGou',
+  liriqo: 'LiriQo',
 };
 
 // 取得元1つぶんを候補メニューの1項目に均す。
@@ -155,6 +160,25 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         sendResponse({ ok: false, error: String(e) });
       }
     })();
+    return true;
+  }
+
+  // 追加の歌詞サーバーの許可ページを開く。
+  //
+  // 通信先が optional_host_permissions なので、許可は
+  // chrome.permissions.request() で取る。あれはユーザー操作を起点に、
+  // かつ拡張のページからしか呼べない。設定 UI は content script として
+  // YouTube Music のページに差し込んでいるので、そこからは呼べない。
+  // ページ側の「追加の歌詞サーバー」からこれを投げてもらう。
+  if (req.type === 'OPEN_EXTRA_PROVIDERS_SETUP') {
+    try {
+      chrome.runtime.openOptionsPage(() => {
+        if (chrome.runtime.lastError) sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        else sendResponse({ ok: true });
+      });
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e) });
+    }
     return true;
   }
 
@@ -275,6 +299,11 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     const resolvedVideoId = video_id || API.extractVideoIdFromUrl(youtube_url) || '';
     const hasTranslateRequest = Array.isArray(translate_to) ? translate_to.length > 0 : !!translate_to;
     const lrchubLyricsMethod = hasTranslateRequest ? 'GET' : 'POST';
+    // 「単語同期 優先」。'ytm' / 'lrchub' が「どこに先に聞くか」なのに対し、
+    // これだけは「どのサーバーでもいいから単語同期を持っている方を採る」。
+    // 出した歌詞を後から単語同期で差し替えることまで含む(翻訳や解説が
+    // 乗っていた歌詞から入れ替わることがある、と設定画面に明記してある)。
+    const preferWordSync = lyric_source_mode === 'wordsync';
 
     YTMLog.log('[BG] GET_LYRICS', { track, artist, lyric_source_mode });
 
@@ -458,9 +487,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         const providerId = hubResult.providerId || 'lrchub';
         // LRCHub の歌詞には翻訳・解説・候補が同じタイムラインで乗っている。
         // 外部プロバイダーが単語同期という一点だけで上書きすると、
-        // 表示済みの翻訳ごと消えてしまうので差し替えない。
+        // 表示済みの翻訳ごと消えてしまうので、ふだんは差し替えない。
         // (逆向き、LRCHub が外部を上書きするのは品質が上がるので許す)
-        if (providerId !== 'lrchub' && deliveredProviderId === 'lrchub') return false;
+        //
+        // 「単語同期 優先」を選んだ回だけはこれを解く。翻訳より単語同期を
+        // 採るという意思表示なので、行同期止まりの LRCHub は譲る。
+        // 単語同期を持ってこない相手には、この回でも譲らない。
+        if (providerId !== 'lrchub' && deliveredProviderId === 'lrchub') {
+          const bringsWordSync = preferWordSync && hasCharacterSyncedLines(hubResult.res?.dynamicLines);
+          if (!bringsWordSync) return false;
+        }
         const quality = getHubLyricsQuality(hubResult.res);
         if (quality <= deliveredHubQuality) return false;
         deliveredHubQuality = quality;
@@ -568,6 +604,63 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         ? API.withTimeout(simpMusicRawTask, 6000, 'simpmusic').catch(() => null)
         : null;
 
+      // ── 単語同期を返せる取得元 ────────────────────────────
+      //   LyricsPlus : Apple Music などを束ねたサーバー(無料枠)
+      //   AMLL       : GitHub の静的ファイル。落ちない・速い・質が最上
+      //   NetEase    : yrc(単語)があれば単語、無ければ行同期
+      //   KuGou      : krc(単語)。中国系カタログと日本語曲に強い
+      // 後ろ3つは「曲名で検索して1件選ぶ」経路なので、extra-providers 側で
+      // 曲名・アーティスト・長さに点数を付けて確からしいものだけ返している。
+      //
+      // 起こすのを遅らせているのは、LRCHub が答えられる大半の曲で
+      // よそのサーバーを無駄に叩かないため。ふだんは下のフォールバック段で
+      // 初めて起こす。ただし「単語同期 優先」の時だけは、LRCHub が速かった
+      // 回でも起こす(行同期で確定させず、単語同期が届いたら差し替えるため)。
+      const extraArgs = { track, artist, album, durationSec: duration_sec, video_id: resolvedVideoId };
+      const extraTask = (fn, label, providerId) => (
+        (Extra.EXTRA_PROVIDERS_ENABLED && typeof fn === 'function')
+          ? makeRawHubTask(label, fn(extraArgs), label, providerId)
+          : null
+      );
+      const withLimit = (task, ms, label) => (
+        task ? API.withTimeout(task, ms, label).catch(() => null) : null
+      );
+
+      let richProviders = null;
+      const startRichProviders = () => {
+        if (richProviders) return richProviders;
+        const raw = [
+          (typeof API.fetchFromLyricsPlus === 'function')
+            ? makeRawHubTask(
+              'LyricsPlus',
+              API.fetchFromLyricsPlus({ track, artist, album, duration: duration_sec }),
+              'LyricsPlus',
+              'lyricsplus',
+            )
+            : null,
+          extraTask(Extra.fetchFromAmll, 'AMLL', 'amll'),
+          extraTask(Extra.fetchFromNetease, 'NetEase', 'netease'),
+          extraTask(Extra.fetchFromKugou, 'KuGou', 'kugou'),
+        ];
+        const limits = [8000, 6000, 7000, 7000];
+        const labels = ['lyricsplus', 'amll', 'netease', 'kugou'];
+        richProviders = {
+          raw,
+          selections: raw.map((task, i) => withLimit(task, limits[i], labels[i])),
+        };
+        return richProviders;
+      };
+
+      // LiriQo だけは別扱い。1曲あたり 500KB 前後・応答も数秒かかるので、
+      // ここまでで単語同期が1つも手に入らなかった回にだけ起こす。
+      let liriqoStarted = null;
+      const startLiriqo = () => {
+        if (!liriqoStarted && Extra.EXTRA_PROVIDERS_ENABLED && typeof Extra.fetchFromLiriqo === 'function') {
+          liriqoStarted = makeRawHubTask('LiriQo', Extra.fetchFromLiriqo(extraArgs), 'LiriQo', 'liriqo');
+        }
+        return liriqoStarted;
+      };
+
       const earlyMarker = {};
       const earlyPrimary = await Promise.race([
         primarySelectionTask,
@@ -584,6 +677,19 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             'LRCHub search'
           );
           await API.withTimeout(earlySearchTask, 5000, 'lrchub search upgrade').catch(() => null);
+        }
+        // 「単語同期 優先」で、出したものが行同期止まりならここで諦めない。
+        // ふだんはこの回で打ち切っている(LRCHub が速く答えた曲で、よその
+        // サーバーを叩く理由が無いため)が、この設定の時だけは単語同期を
+        // 探しにいく。届いたぶんは pushHubUpgrade が差し替える。
+        if (preferWordSync && deliveredHubQuality < 4) {
+          await Promise.allSettled([
+            ...startRichProviders().selections,
+            simpMusicSelectionTask,
+          ].filter(Boolean));
+          // それでも単語同期が1つも無ければ、重い LiriQo まで手を伸ばす。
+          // fetch 自体には期限が無いので、待ちには必ず上限を付ける。
+          if (deliveredHubQuality < 4) await withLimit(startLiriqo(), 15000, 'liriqo');
         }
         return;
       }
@@ -662,29 +768,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       ]);
       // ── 追加プロバイダー ──────────────────────────────────
       // LRCHub がここまでで歌詞を返せなかった曲だけが対象。
-      // どちらも単語(音節)同期を返せるので LrcLib より前に置くが、
-      // 勝ち抜けは早い者勝ちなので実際には3つの競走になる。
-      // 立ち上げをここまで遅らせているのは、LRCHub が答えられる大半の曲で
-      // 無料の共用サーバーを無駄に叩かないため。
-      const lyricsPlusRawTask = (typeof API.fetchFromLyricsPlus === 'function')
-        ? makeRawHubTask(
-          'LyricsPlus',
-          API.fetchFromLyricsPlus({ track, artist, album, duration: duration_sec }),
-          'LyricsPlus',
-          'lyricsplus',
-        )
-        : null;
-      const lyricsPlusSelectionTask = lyricsPlusRawTask
-        ? API.withTimeout(lyricsPlusRawTask, 8000, 'lyricsplus').catch(() => null)
-        : null;
+      // (「単語同期 優先」の回は、上の早出しのところで既に起きている)
+      const { raw: richRawTasks, selections: richSelectionTasks } = startRichProviders();
 
-      // フォールバック段の中では、単語同期を返せる2つを LrcLib より優先したい。
+      // フォールバック段の中では、単語同期を返せる取得元を LrcLib より優先したい。
       // ただ firstValidResult は純粋な早い者勝ちなので、ほぼ同時に返ると
       // 行同期止まりの LrcLib が勝ってしまう。LrcLib が先着した時だけ、
       // 短い猶予を置いて2つを待つ(LRCHub 対 LrcLib と同じ考え方)。
       const richFallbackTask = firstValidResult([
         simpMusicSelectionTask,
-        lyricsPlusSelectionTask,
+        ...richSelectionTasks,
       ]);
       const fallbackSelectionTask = (async () => {
         const first = await firstValidResult([richFallbackTask, lrcLibTask]);
@@ -755,11 +848,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         }
         pushBestResolvedHubUpgrade();
 
+        // 出せたのが行同期止まりなら、重い LiriQo を起こす価値がある。
+        // 表示は済んでいるので、届いたら pushHubUpgrade が差し替える。
+        if (!hasCharacterSyncedLines(winner.res?.dynamicLines)) startLiriqo();
+
         const lateHub = await rawHubTask;
         if (lateHub) {
           YTMLog.log(`[BG] Upgrading ${winner.source} lyrics to ${lateHub.source}`);
           await pushHubUpgrade(lateHub);
         }
+        if (liriqoStarted) await liriqoStarted;
         return;
       }
 
@@ -773,7 +871,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const lateHub = await firstValidResult([
         rawHubTask,
         simpMusicRawTask,
-        lyricsPlusRawTask,
+        ...richRawTasks,
+        // 1件も見つからなかった回は、重さを気にする理由がもう無い。
+        // それでも待ちは切る(fetch は放っておくと戻ってこない)。
+        withLimit(startLiriqo(), 15000, 'liriqo'),
       ]);
       if (lateHub) {
         await pushHubUpgrade(lateHub);
@@ -865,6 +966,32 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         8000,
         'lrclib alternate'
       ), 'LrcLib');
+
+      // 追加プロバイダー。ここはユーザーが明示的に「別の歌詞を探す」を
+      // 押した場面なので、重い LiriQo も含めて全部聞きにいく。
+      if (Extra.EXTRA_PROVIDERS_ENABLED) {
+        const alternateArgs = {
+          track,
+          artist,
+          album,
+          durationSec: duration_sec,
+          video_id: alternateVideoId,
+        };
+        const extras = [
+          ['amll', Extra.fetchFromAmll, 'AMLL', 8000],
+          ['netease', Extra.fetchFromNetease, 'NetEase', 8000],
+          ['kugou', Extra.fetchFromKugou, 'KuGou', 8000],
+          ['liriqo', Extra.fetchFromLiriqo, 'LiriQo', 15000],
+        ];
+        for (const [providerId, fn, label, timeout] of extras) {
+          if (typeof fn !== 'function') continue;
+          collect(providerId, () => API.withTimeout(
+            fn(alternateArgs),
+            timeout,
+            `${providerId} alternate`
+          ), label);
+        }
+      }
 
       const candidates = (await Promise.all(tasks)).filter(Boolean);
       YTMLog.log('[BG] FIND_ALTERNATE_LYRICS ->', candidates.map(c => c.lyricsSource));

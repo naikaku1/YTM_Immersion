@@ -114,3 +114,55 @@ test('キャッシュ済みの終わり時刻を残さない', () => {
   fillDynamicLineEnds([l, line([20000])])
   assert.equal(l.__ytmEndSec, undefined)
 })
+
+// ── 補完の順番 ──────────────────────────────────────────────
+//
+// 語のまとまり(「なら」のような複数文字)を字に割る側は、行の最後の語の
+// 終端が分からないと「次の行が始まるまで」で引き延ばす。だから終わりの
+// 補完は割る前に済ませないと手遅れになる。
+//
+// 以前は割ったあとに補完していたため、間奏に入る行で最後の語が数秒かけて
+// 塗られていた(実測: KuGou の英語曲で最大 9.1 秒、14 行が1秒超)。
+
+const bothSource = source.slice(
+  source.indexOf('function normalizeDynamicLinesToCharLevel(dynLines) {'),
+  source.indexOf('async function applyLyricsText'),
+)
+const bothSandbox = { console }
+vm.createContext(bothSandbox)
+vm.runInContext(
+  `${bothSource}\nglobalThis._n = normalizeDynamicLinesToCharLevel; globalThis._f2 = fillDynamicLineEnds`,
+  bothSandbox,
+)
+const normalize = bothSandbox._n
+const fill2 = bothSandbox._f2
+
+// 語のまとまりを持つ行。次の行は 10 秒先(間奏)。
+const chunkLines = () => ([
+  { startTimeMs: 0, text: 'ああいいうう', chars: [{ t: 0, c: 'ああ' }, { t: 300, c: 'いい' }, { t: 600, c: 'うう' }] },
+  { startTimeMs: 10000, text: 'ええ', chars: [{ t: 10000, c: 'ええ' }] },
+])
+
+test('割る前に補完すれば、最後の語が次の行まで伸びない', () => {
+  const after = fill2(normalize(fill2(chunkLines())))
+  const last = after[0].chars[after[0].chars.length - 1].t
+  assert.ok(last < 2000, `最後の字が ${last}ms まで押し出されている`)
+})
+
+test('割ったあとだけの補完では間に合わない(退行の検出用)', () => {
+  const after = fill2(normalize(chunkLines()))
+  const last = after[0].chars[after[0].chars.length - 1].t
+  assert.ok(last > 2000, 'この順でも短く収まるなら、上のテストが無意味になっている')
+})
+
+test('呼び出し側が割る前に補完している', () => {
+  const call = source.slice(
+    source.indexOf('dynamicLines = fillDynamicLineEnds('),
+    source.indexOf('} else {', source.indexOf('dynamicLines = fillDynamicLineEnds(')),
+  )
+  assert.match(
+    call.replace(/\s+/g, ' '),
+    /normalizeDynamicLinesToCharLevel\( ?fillDynamicLineEnds\(/,
+    '割る前の補完が外れている',
+  )
+})

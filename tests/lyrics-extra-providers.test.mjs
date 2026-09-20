@@ -119,7 +119,7 @@ const backgroundSource = fs.readFileSync(
   'utf8',
 ).replace(/^import .*?;\r?$/gm, '')
 
-function createBackgroundHarness({ api = {} } = {}) {
+function createBackgroundHarness({ api = {}, extra = {} } = {}) {
   const messageListeners = []
   const responses = []
   const sentMessages = []
@@ -155,8 +155,20 @@ function createBackgroundHarness({ api = {} } = {}) {
     getLrchubRecordId: API.getLrchubRecordId,
   }
 
+  // extra-providers.js(NetEase / AMLL / KuGou / LiriQo)。
+  // 既定は「有効だが誰も歌詞を持っていない」。無効にして潰すと、
+  // 配線が外れても既存のテストが素通りしてしまう。
+  const defaultExtra = {
+    EXTRA_PROVIDERS_ENABLED: true,
+    fetchFromAmll: async () => null,
+    fetchFromNetease: async () => null,
+    fetchFromKugou: async () => null,
+    fetchFromLiriqo: async () => null,
+  }
+
   vm.runInNewContext(backgroundSource, {
     API: { ...defaultApi, ...api },
+    Extra: { ...defaultExtra, ...extra },
     CloudSync: { CLOUD_STORAGE_KEY: 'test-cloud-state', DEFAULT_CLOUD_STATE: {} },
     chrome,
     console: { debug() {}, error() {}, log() {}, warn() {} },
@@ -524,4 +536,108 @@ test('LRCHub が「持っていない」と即答した回は、先出しせず�
   await settle()
 
   assert.equal(harness.responses[0].lyricsSource, 'simpmusic')
+})
+
+// ── 単語同期 優先 ────────────────────────────────────────────
+//
+// 'ytm' / 'lrchub' が「どこに先に聞くか」なのに対し、これだけ軸が違う。
+// どのサーバーでもいいから単語同期を持っている方を採る。表示済みの
+// LRCHub の歌詞を後から置き換えることまで含む(翻訳が消えるのは承知のうえ)。
+
+const wordSyncPayload = { ...requestPayload, lyric_source_mode: 'wordsync' }
+
+const wordSyncResult = (label) => ({
+  lyrics: `[00:01.00] ${label} line`,
+  dynamicLines: [{ startTimeMs: 1000, text: `${label} line`, chars: [{ t: 1000, c: 'a' }, { t: 1200, c: 'b' }] }],
+})
+
+test('単語同期 優先: LRCHub の行同期を、あとから来た単語同期が置き換える', async () => {
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] hub line' }) },
+    extra: { fetchFromKugou: async () => wordSyncResult('kugou') },
+  })
+
+  harness.dispatch(wordSyncPayload)
+  await settle()
+
+  // 最初に出るのは速かった LRCHub。白紙で待たせない
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  const replaced = harness.lyricsUpdates.at(-1)
+  assert.ok(replaced, '単語同期が届いても差し替えていない')
+  assert.equal(replaced.message.payload.lyricsSource, 'kugou')
+  assert.equal(replaced.message.payload.lyrics, '[00:01.00] kugou line')
+})
+
+test('単語同期 優先でも、行同期しか持ってこない相手には譲らない', async () => {
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] hub line' }) },
+    // 単語の時刻を持たない = 譲る理由が無い
+    extra: { fetchFromKugou: async () => ({ lyrics: '[00:01.00] kugou line' }) },
+  })
+
+  harness.dispatch(wordSyncPayload)
+  await settle()
+
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  assert.equal(
+    harness.lyricsUpdates.filter(u => u.message.payload.lyricsSource === 'kugou').length,
+    0,
+    '行同期止まりの相手に LRCHub を明け渡している',
+  )
+})
+
+test('ふだんの設定では、LRCHub が速い回によそのサーバーを叩かない', async () => {
+  const called = []
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] hub line' }) },
+    extra: {
+      fetchFromAmll: async () => { called.push('amll'); return null },
+      fetchFromNetease: async () => { called.push('netease'); return null },
+      fetchFromKugou: async () => { called.push('kugou'); return null },
+      fetchFromLiriqo: async () => { called.push('liriqo'); return null },
+    },
+  })
+
+  harness.dispatch(requestPayload)      // lyric_source_mode: 'standard'
+  await settle()
+
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  assert.deepEqual(called, [], `毎曲よそを叩いている: ${called.join(', ')}`)
+})
+
+test('単語同期 優先なら、LRCHub が速くても単語同期を探しにいく', async () => {
+  const called = []
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] hub line' }) },
+    extra: {
+      fetchFromAmll: async () => { called.push('amll'); return null },
+      fetchFromNetease: async () => { called.push('netease'); return null },
+      fetchFromKugou: async () => { called.push('kugou'); return null },
+      // 3つとも空振りした時だけ、重い LiriQo まで手を伸ばす
+      fetchFromLiriqo: async () => { called.push('liriqo'); return null },
+    },
+  })
+
+  harness.dispatch(wordSyncPayload)
+  await settle()
+
+  assert.deepEqual(called.slice().sort(), ['amll', 'kugou', 'liriqo', 'netease'])
+})
+
+test('単語同期 優先でも、LRCHub が単語同期を持っていたらよそを叩かない', async () => {
+  const called = []
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => wordSyncResult('hub') },
+    extra: {
+      fetchFromAmll: async () => { called.push('amll'); return null },
+      fetchFromKugou: async () => { called.push('kugou'); return null },
+      fetchFromLiriqo: async () => { called.push('liriqo'); return null },
+    },
+  })
+
+  harness.dispatch(wordSyncPayload)
+  await settle()
+
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  assert.deepEqual(called, [], `もう単語同期があるのに叩いている: ${called.join(', ')}`)
 })

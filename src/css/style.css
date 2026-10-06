@@ -2224,7 +2224,7 @@ body.ytm-custom-layout ytmusic-player-bar.moviemode {
   overflow: visible !important;
 }
 
-body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
+body.ytm-custom-layout :is(ytmusic-player-bar, ytmusic-miniplayer).inactive.moviemode {
   opacity: 0 !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -2881,7 +2881,7 @@ body.ytm-custom-layout .middle-controls {
 }
 
 /* 繝帙ヰ繝ｼ縺励◆縺ｨ縺阪�譎る俣陦ｨ遉ｺ */
-body.ytm-custom-layout #hover-time-info-new {
+body.ytm-custom-layout #hover-time-info-new, body.ytm-custom-layout .ytMusicMiniPlayerHoverTimeInfo {
   font-family: Roboto, Noto Naskh Arabic UI, Arial, sans-serif !important;
   font-size: var(--ytmusic-caption-1-font-size) !important;
   line-height: var(--ytmusic-title-line-height) !important;
@@ -2897,7 +2897,9 @@ body.ytm-custom-layout #hover-time-info-new {
   border-radius: 10px !important;
   z-index: 10000 !important;
 }
-
+body.ytm-custom-layout .ytMusicMiniPlayerHoverTimeInfo {
+  transform: translate3d(-50%, -200%, 0) !important;
+}
 /* 繝励Ξ繧､繝､繝ｼ繝舌�蜀��譖ｲ諠��ｱ縺ｯ菴ｿ繧上↑縺� */
 body.ytm-custom-layout .content-info-wrapper .style-scope {
   display: none !important;
@@ -3131,14 +3133,26 @@ body:not(.ytm-custom-layout) .ytMusicMiniPlayerHoverTimeInfo {
   z-index: 10000 !important;
 }
 body:not(.ytm-custom-layout) .ytMusicMiniPlayerHoverTimeInfo {
-  transform: translate3d(-50%, -140%, 0) !important;
+  transform: translate3d(-50%, -190%, 0) !important;
 }
+
+/* ホーム画面でのバーの有無に関わらずホーム画面の高さを100dvhにする */
+ytmusic-app-layout>#content {
+  height: 100dvh !important;
+}
+
 /* 繝槭Ν繝√�繝ｼ繧ｸ繝｡繝九Η繝ｼ */
 ytmusic-multi-page-menu-renderer {
   border-radius: 20px !important;
   background: rgba(30, 30, 30, 0.95) !important;
   /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
+}
+
+#sub-text.yt-notification-action-renderer,
+#text.yt-notification-action-renderer,
+ytmusic-notification-text-renderer #toast.ytmusic-notification-text-renderer {
+  color: #fff !important;
 }
 
 /* 谺｡縺ｫ蜀咲函縺ｪ縺ｩ縺ｮ繝医�繧ｹ繝� */

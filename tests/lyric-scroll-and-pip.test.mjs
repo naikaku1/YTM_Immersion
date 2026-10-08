@@ -134,7 +134,7 @@ test('the PIP controls keep their own rules (not swallowed by a broken block)', 
 })
 
 test('PIP rows are measured in their own window after being copied', () => {
-  assert.match(lyricsUiSource, /PipManager\.pipLyricsContainer\.querySelectorAll\('\.lyric-line\.ytm-word-sync'\)/)
+  assert.match(lyricsUiSource, /PipManager\.pipLyricsContainer\.querySelectorAll\('\.lyric-line\.ytm-word-sync, \.lyric-bg\.ytm-bg-sync'\)/)
   assert.match(lyricsUiSource, /if \(!row\._ytmWordSpans && !row\._ytmRehydrated\) rehydrateLyricWordRow\(row\)/)
 })
 

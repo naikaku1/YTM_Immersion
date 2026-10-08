@@ -3776,6 +3776,8 @@ const lyricUnitSegmenter = (() => {
 
 // 語区切りが使えない環境用の保険。全角は1字ずつに切る。
 const CJK_GLYPH_RE = /[⺀-〾ぁ-㏿㐀-䶿一-鿿豈-﫿＀-ﾟ￠-￦가-힯]/;
+// ハングル(音節と字母)。韓国語は空白で語を分けるので、空白を書式として捨てない。
+const HANGUL_GLYPH_RE = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]/;
 // 拗音・促音・長音・濁点や閉じ括弧は、単独では1拍にならない。
 // 前の字にぶら下げて「ちゃ」「きゅう」を一息で扱う。
 // 英語の句読点(, . ; : …)も前の語に付ける。語ごとに inline-block なので、
@@ -3839,6 +3841,9 @@ const buildLyricWordUnits = (chars, lineEndSec) => {
   //
   // 前後がどちらも CJK の空白は、語の区切りではなく書式。語を切らせない。
   // 英語のように本当に空白で語が分かれる言語は対象外(下の判定で外れる)。
+  // 韓国語も空白で語を分ける(分かち書き)。ハングルに挟まれた空白まで
+  // 書式とみなすと「울 것 같을 때」が「울것같을때」に詰まる(実機: OMG)。
+  // 書式とみなすのは日本語・中国語の字(ハングル以外)に挟まれた時だけ。
   const isFormattingSpace = new Array(flat.length).fill(false);
   {
     let spaces = 0;
@@ -3848,7 +3853,8 @@ const buildLyricWordUnits = (chars, lineEndSec) => {
       spaces += 1;
       const prev = flat[i - 1];
       const next = flat[i + 1];
-      if (prev && next && CJK_GLYPH_RE.test(prev.c) && CJK_GLYPH_RE.test(next.c)) {
+      if (prev && next && CJK_GLYPH_RE.test(prev.c) && CJK_GLYPH_RE.test(next.c)
+        && !HANGUL_GLYPH_RE.test(prev.c) && !HANGUL_GLYPH_RE.test(next.c)) {
         isFormattingSpace[i] = true;
         betweenCjk += 1;
       }
@@ -4310,6 +4316,21 @@ const syncLyricWordMotion = (row, t, rate) => {
   const local = (t - row._motionOrigin) * 1000;
   const now = performance.now();
 
+  // 最初の語より前は止めたまま待たせる。負の時刻に合わせて play() すると、
+  // ブラウザは 0 に巻き戻して始めてしまい、塗りがその差だけ早く走る。
+  // 行が最初の語より前に光るのは、先に歌われるハモリがある時
+  // (実機: OMG はハモリが 1.6 秒先に始まり、本編がそのぶん先に塗られた)。
+  if (local < 0) {
+    for (const animation of motions) {
+      try {
+        if (animation.playState !== 'paused') animation.pause();
+        animation.currentTime = local;
+      } catch (e) { /* 破棄済み */ }
+    }
+    row._motionSyncedAt = undefined;   // 0 を過ぎたら合わせ直して走らせる
+    return;
+  }
+
   // 合わせ直しの要否は、アニメーション側の currentTime ではなく
   // 自前の記録で判断する。語ごとに長さが違うので、終わったものは
   // それぞれ別の時刻で止まってしまい、比較の相手にならない。
@@ -4365,7 +4386,10 @@ const writeLyricVar = (el, key, cacheKey, value, step) => {
 // 消える。data 属性に書いておいた時刻から組み直す。
 const rehydrateLyricWordRow = (row) => {
   row._ytmRehydrated = true;
-  const spans = Array.from(row.querySelectorAll('.lyric-word'));
+  // 行の語は本編(.lyric-main)の中だけ。ハモリ(.lyric-bg)は自分で 1 本の行になる。
+  const spans = Array.from(row.querySelectorAll(
+    row.classList?.contains('lyric-bg') ? '.lyric-word' : '.lyric-main .lyric-word',
+  ));
   if (!spans.length) return null;
 
   for (const span of spans) {
@@ -4419,6 +4443,88 @@ const paintLyricWordRow = (row, t, rate = 1) => {
   }
 };
 
+// 文字同期(Apple Music 風)の語の span を target に並べる。
+// 本編(.lyric-main)とハモリ(.lyric-bg)で同じ組み方をする。
+const appendLyricWordSpans = (target, chars, lineEndSec) => {
+  const wordSpans = [];
+  const units = buildLyricWordUnits(chars, lineEndSec);
+  for (const group of groupLyricUnitsIntoPhrases(units)) {
+    // まとまりの頭と末尾の空白は包まずに外へ出す。inline-block の端の空白は
+    // 潰れて幅が 0 になり、語と語の間が詰まって見える(実機: 韓国語の行が
+    // 「멀리든언제든지달려와」、英語のハモリが「me,"Who」になっていた)。
+    // 外に置けば、そこで折り返せる空白として残る。
+    let from = 0;
+    let to = group.length;
+    while (from < to && group[from].type === 'space') from += 1;
+    while (to > from && group[to - 1].type === 'space') to -= 1;
+    const lead = group.slice(0, from).map(unit => unit.text).join('');
+    const tail = group.slice(to).map(unit => unit.text).join('');
+    const phrase = group.slice(from, to);
+    if (lead) target.appendChild(document.createTextNode(lead));
+    if (!phrase.length) {
+      if (tail) target.appendChild(document.createTextNode(tail));
+      continue;
+    }
+    // まとまりごとに inline-block で包む。折り返せるのはこの外側だけ。
+    const phraseSpan = createEl('span', '', 'lyric-phrase lyric-phrase-sync');
+    for (const unit of phrase) {
+      if (unit.type === 'space') {
+        phraseSpan.appendChild(document.createTextNode(unit.text));
+        continue;
+      }
+      if (!unit.text) continue;
+      const wordSpan = createEl('span', '', 'lyric-word');
+      wordSpan.textContent = unit.text;
+      wordSpan._times = unit.times;
+      wordSpan._offsets = unit.offsets;
+      wordSpan._start = unit.start;
+      wordSpan._end = unit.end;
+      wordSpan._emp = false;
+      // PIP は innerHTML で複製するので JS のプロパティが消える。
+      // 向こうで組み直せるように、時刻は属性にも書いておく。
+      wordSpan.dataset.wt = unit.times
+        .map(t => (t === null ? '' : t.toFixed(3))).join(',');
+      if (Number.isFinite(unit.end)) wordSpan.dataset.we = unit.end.toFixed(3);
+      phraseSpan.appendChild(wordSpan);
+      wordSpans.push(wordSpan);
+    }
+    if (phraseSpan.childNodes.length) target.appendChild(phraseSpan);
+    if (tail) target.appendChild(document.createTextNode(tail));
+  }
+  return wordSpans;
+};
+
+// ── ハモリ(バックボーカル)の行 ─────────────────────────────
+// 取得元が印を付けたハモリ(api.js の makeBackgroundVocal)を、本編の下に
+// 小さく薄い字で出す。文字同期なら本編と同じ塗りを、ハモリ自身の時刻で
+// 走らせる(.lyric-bg を 1 本の「行」として扱い、--sweep を自分で持つ)。
+// 文字同期でない表示では、字だけを出して行と一緒に点ける。
+// 本編の外(.lyric-main の後ろ)に置くので、歌詞カードや Discord に渡す
+// 本編の文字には混ざらない。
+const buildLyricBackgroundRow = (bg, useWordSync) => {
+  if (!bg || !Array.isArray(bg.chars) || !bg.chars.length) return null;
+  const el = createEl('span', '', 'lyric-bg');
+  if (useWordSync) {
+    const endSec = getDynamicLineEndSec(bg);
+    const spans = appendLyricWordSpans(el, bg.chars, typeof endSec === 'number' ? endSec : null);
+    if (spans.length) {
+      el._ytmWordSpans = spans;
+      el.classList.add('ytm-bg-sync');
+      return el;
+    }
+    el.textContent = '';
+  }
+  el.textContent = String(bg.text || bg.chars.map(ch => ch.c).join(''));
+  return el;
+};
+
+// 行の中のハモリの塗り場所(PIP の複製は JS のプロパティを持たないのでクラスで拾う)
+const lyricBackgroundHost = (row) => {
+  if (row._ytmBgHost !== undefined) return row._ytmBgHost;
+  row._ytmBgHost = row.querySelector('.lyric-bg.ytm-bg-sync') || null;
+  return row._ytmBgHost;
+};
+
 // 計測は offsetLeft などを読むので、その場でレイアウトを1回確定させる。
 // 行が主役になった瞬間にやると、ちょうど自動スクロールが走り出す所と
 // 重なって一瞬つっかえる。描画が済んだ直後に、少しずつ先に済ませておく。
@@ -4447,7 +4553,7 @@ const prefetchLyricLineSweeps = (rows) => {
 const invalidateLyricLineSweeps = () => {
   for (const container of [ui.lyrics, PipManager.pipLyricsContainer]) {
     if (!container) continue;
-    container.querySelectorAll('.lyric-line.ytm-word-sync')
+    container.querySelectorAll('.lyric-line.ytm-word-sync, .lyric-bg.ytm-bg-sync')
       .forEach(row => { row._sweepReady = false; });
   }
 };
@@ -8398,13 +8504,27 @@ function renderLyrics(data) {
       }
     }
 
+    // 本編の最後の語の塗りに使う終わり(ハモリの終わりではない)
+    let mainEndSec = null;
     if (line && typeof line === 'object' && dyn) {
       const dynStartSec = getDynamicLineStartSec(dyn);
       const dynEndSec = getDynamicLineEndSec(dyn);
+      mainEndSec = typeof dynEndSec === 'number' ? dynEndSec : null;
       line._dynamicRenderStartSec = typeof dynStartSec === 'number' ? dynStartSec : (
         typeof line.time === 'number' ? line.time : null
       );
-      line._dynamicRenderEndSec = typeof dynEndSec === 'number' ? dynEndSec : null;
+      line._dynamicRenderEndSec = mainEndSec;
+      // ハモリが本編より先に始まる・後まで続く時は、その間も行を点けておく
+      if (dyn.bg && Array.isArray(dyn.bg.chars) && dyn.bg.chars.length) {
+        const bgStartSec = getDynamicLineStartSec(dyn.bg);
+        const bgEndSec = getDynamicLineEndSec(dyn.bg);
+        if (typeof bgStartSec === 'number' && typeof line._dynamicRenderStartSec === 'number') {
+          line._dynamicRenderStartSec = Math.min(line._dynamicRenderStartSec, bgStartSec);
+        }
+        if (typeof bgEndSec === 'number' && typeof line._dynamicRenderEndSec === 'number') {
+          line._dynamicRenderEndSec = Math.max(line._dynamicRenderEndSec, bgEndSec);
+        }
+      }
 
       if (typeof line._dynamicRenderStartSec === 'number') {
         row.dataset.dynamicStartTime = String(line._dynamicRenderStartSec);
@@ -8417,41 +8537,12 @@ function renderLyrics(data) {
       }
     }
 
-    const lineEndSec = (typeof line?._dynamicRenderEndSec === 'number')
-      ? line._dynamicRenderEndSec
-      : null;
+    const lineEndSec = mainEndSec;
 
     if (dyn && Array.isArray(dyn.chars) && dyn.chars.length && useWordSync) {
       // Apple Music 風: 語ごとに span を立てる。語の中の字形はブラウザに
       // そのまま組ませるので、字の間に隙間が出ない。
-      const wordSpans = [];
-      const units = buildLyricWordUnits(dyn.chars, lineEndSec);
-      for (const phrase of groupLyricUnitsIntoPhrases(units)) {
-        // まとまりごとに inline-block で包む。折り返せるのはこの外側だけ。
-        const phraseSpan = createEl('span', '', 'lyric-phrase lyric-phrase-sync');
-        for (const unit of phrase) {
-          if (unit.type === 'space') {
-            phraseSpan.appendChild(document.createTextNode(unit.text));
-            continue;
-          }
-          if (!unit.text) continue;
-          const wordSpan = createEl('span', '', 'lyric-word');
-          wordSpan.textContent = unit.text;
-          wordSpan._times = unit.times;
-          wordSpan._offsets = unit.offsets;
-          wordSpan._start = unit.start;
-          wordSpan._end = unit.end;
-          wordSpan._emp = false;
-          // PIP は innerHTML で複製するので JS のプロパティが消える。
-          // 向こうで組み直せるように、時刻は属性にも書いておく。
-          wordSpan.dataset.wt = unit.times
-            .map(t => (t === null ? '' : t.toFixed(3))).join(',');
-          if (Number.isFinite(unit.end)) wordSpan.dataset.we = unit.end.toFixed(3);
-          phraseSpan.appendChild(wordSpan);
-          wordSpans.push(wordSpan);
-        }
-        if (phraseSpan.childNodes.length) mainSpan.appendChild(phraseSpan);
-      }
+      const wordSpans = appendLyricWordSpans(mainSpan, dyn.chars, lineEndSec);
       if (wordSpans.length) {
         row._ytmWordSpans = wordSpans;
         row.classList.add('ytm-word-sync');
@@ -8490,6 +8581,13 @@ function renderLyrics(data) {
     }
     row.appendChild(mainSpan);
 
+    const bgEl = dyn ? buildLyricBackgroundRow(dyn.bg, useWordSync) : null;
+    if (bgEl) {
+      row.appendChild(bgEl);
+      row.classList.add('has-bg-vocal');
+      row._ytmBgHost = bgEl._ytmWordSpans ? bgEl : null;
+    }
+
     if (line && line.translation) {
       // 翻訳文はそのまま innerHTML に入れない。"<" を含むと以降が消える。
       const subSpan = createEl('span', '', 'lyric-translation');
@@ -8517,7 +8615,7 @@ function renderLyrics(data) {
 
   ui.lyrics.appendChild(fragment);
   if (useWordSync) {
-    prefetchLyricLineSweeps(Array.from(ui.lyrics.querySelectorAll('.lyric-line.ytm-word-sync')));
+    prefetchLyricLineSweeps(Array.from(ui.lyrics.querySelectorAll('.lyric-line.ytm-word-sync, .lyric-bg.ytm-bg-sync')));
   }
 
   if (PipManager.pipWindow && PipManager.pipLyricsContainer) {
@@ -8525,7 +8623,7 @@ function renderLyrics(data) {
     if (useWordSync) {
       // PIP は幅が違うので語の横位置も違う。向こうの文書で測り直す。
       prefetchLyricLineSweeps(
-        Array.from(PipManager.pipLyricsContainer.querySelectorAll('.lyric-line.ytm-word-sync')),
+        Array.from(PipManager.pipLyricsContainer.querySelectorAll('.lyric-line.ytm-word-sync, .lyric-bg.ytm-bg-sync')),
       );
     }
     if (PipManager.pipWindow.document) {
@@ -8884,6 +8982,22 @@ const readLyricAnchorTopLines = (container) => {
   } catch (e) { /* 読めなければ中央に置く */ }
   container._ytmAnchorLines = value;
   return value;
+};
+
+// 止める位置を決める時の行の高さ。ハモリ(.lyric-bg)のぶんは数えない。
+// ハモリは光った行で下に開くので、開いた高さまで含めて真ん中に置くと、
+// その行だけ本編が上にずれて止まる(他の行と止まる位置が揃わない)。
+// 開く途中でも、いま開いているぶんを引けば本編だけの高さになる。
+const lyricRowAnchorHeight = (row, rowRect) => {
+  const height = rowRect.height;
+  if (!row.classList?.contains('has-bg-vocal')) return height;
+  const bg = row.querySelector('.lyric-bg');
+  if (!bg) return height;
+  let margin = 0;
+  try {
+    margin = parseFloat(row.ownerDocument.defaultView.getComputedStyle(bg).marginTop) || 0;
+  } catch (e) { /* 読めなければ余白は 0 とみなす */ }
+  return Math.max(0, height - bg.getBoundingClientRect().height - margin);
 };
 
 // 器の上端から、その行の上端までの距離
@@ -9278,6 +9392,8 @@ function paintActiveLyricRow(r, t) {
     : r.classList.contains('ytm-word-sync');
   if (isWordSync) {
     paintLyricWordRow(r, t, _playbackRateForMotion);
+    const bgHost = lyricBackgroundHost(r);
+    if (bgHost) paintLyricWordRow(bgHost, t, _playbackRateForMotion);
     return true;
   }
 
@@ -9526,7 +9642,7 @@ function updateLyricHighlight(currentTime) {
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
             const targetScroll = container.scrollTop + rRect.top - lyricRowScrollOffset(r) - containerRect.top
-              - lyricAnchorOffset(container, rRect.height);
+              - lyricAnchorOffset(container, lyricRowAnchorHeight(r, rRect));
 
             isProgrammaticScrolling = true;
             clearTimeout(programmaticScrollTimeout);
@@ -9549,7 +9665,7 @@ function updateLyricHighlight(currentTime) {
 
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - lyricRowScrollOffset(r) - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
+            const targetScroll = container.scrollTop + rRect.top - lyricRowScrollOffset(r) - containerRect.top - (container.clientHeight * 0.35) + (lyricRowAnchorHeight(r, rRect) / 2);
 
             container._isProgrammaticScrolling = true;
             requestLyricScroll(container, targetScroll, scrollBehavior === 'auto', idx);
@@ -9566,6 +9682,8 @@ function updateLyricHighlight(currentTime) {
 
         if (r.classList.contains('ytm-word-sync')) {
           resetLyricWordRow(r);
+          const bgHost = lyricBackgroundHost(r);
+          if (bgHost) resetLyricWordRow(bgHost);
         } else {
           let charSpans = r._ytmCharSpans;
           if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));

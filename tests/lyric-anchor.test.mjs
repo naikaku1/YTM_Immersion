@@ -96,7 +96,8 @@ test('画面の形が変わったら読み直す', () => {
 })
 
 test('止める位置はスクロールの計算に使われている', () => {
-  assert.match(uiSource, /- lyricAnchorOffset\(container, rRect\.height\);/)
+  // 行の高さはハモリ(開いた .lyric-bg)を除いて測る
+  assert.match(uiSource, /- lyricAnchorOffset\(container, lyricRowAnchorHeight\(r, rRect\)\);/)
   // 中央固定の計算が残っていないこと
   assert.ok(
     !/- \(container\.clientHeight \/ 2\) \+ \(rRect\.height \/ 2\)/.test(uiSource),

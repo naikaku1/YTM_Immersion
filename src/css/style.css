@@ -1982,6 +1982,50 @@ body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-completed {
   font-weight: 600;
 }
 
+/* ハモリ(バックボーカル)。本編の下に小さく薄く出す(lyrics-ui.js の
+   buildLyricBackgroundRow)。印の付いた歌詞(Apple Music 由来)だけに出る。
+   文字同期では本編と同じ塗りを、ハモリ自身の --sweep で走らせる。
+   語の作り(.lyric-word)は本編と同じなので、塗りの指定もそのまま効く。
+
+   Apple Music と同じく、ふだんは畳んでおき、その行が光った時に下へ
+   開いて割り込ませる。止める位置はハモリを除いた高さで決めている
+   (lyricRowAnchorHeight)ので、開いても本編の位置は他の行と揃う。
+   畳む時は overflow で切るが、開いた後に語の膨らみや光が切れないよう
+   overflow-clip-margin で少し外まで描かせる(畳んでいる間は透明)。 */
+.lyric-bg {
+  display: block;
+  font-size: 0.6em;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 0;
+  max-height: 0;
+  opacity: 0;
+  overflow: clip;
+  overflow-clip-margin: 0.6em;
+  transform: translateY(-0.35em);
+  transition:
+    max-height 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    margin-top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.35s ease;
+}
+
+.lyric-line.active .lyric-bg {
+  margin-top: 0.2em;
+  max-height: 6em;
+  opacity: 0.72;
+  transform: none;
+}
+
+.lyric-line.sub-vocal .lyric-bg {
+  text-align: right;
+}
+
+body.ytm-custom-layout.ytm-apple-sync .lyric-line .lyric-bg.ytm-bg-sync {
+  --sweep: 0;
+  --feather: 8;
+}
+
 /* 繧ｿ繧､繝�繧ｹ繧ｿ繝ｳ繝玲怏繧頑凾縺ｮ鄙ｻ險ｳ繧｢繝九Γ */
 body.ytm-custom-layout.ytm-has-timestamp .lyric-line .lyric-translation {
   opacity: 0;

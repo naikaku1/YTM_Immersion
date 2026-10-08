@@ -30,7 +30,9 @@
 // ============================================================
 
 import {
+  attachBackgroundVocal,
   buildLrcFromDynamic,
+  makeBackgroundVocal,
   normalizeArtist,
   normalizeTrackTitle,
 } from './api.js';
@@ -549,6 +551,12 @@ const AMLL_BASES = [
 // .lys(Lyricify Syllable): [行属性]語(開始ms,長さms) 語(開始ms,長さms)
 // 語間の空白は (0,0) で来る。時刻ゼロの語として積むと行頭へ飛ぶので、
 // 直前の語の末尾にくっつける。
+//
+// 行属性は 0〜8。6・7・8 がハモリ(背景の声)で、本編の行のすぐ後ろに
+// 別の行として来る(実物: Espresso の「[6]Yes(55655,333)」)。普通の行として
+// 並べると、本編と同じ大きさの 1 行が割り込む。直前の本編の行に bg として付ける。
+const LYS_BACKGROUND_PROPS = new Set([6, 7, 8]);
+
 export const parseLys = (text) => {
   const out = [];
   for (const raw of String(text || '').split(/\r?\n/)) {
@@ -556,6 +564,7 @@ export const parseLys = (text) => {
     if (!line) continue;
     const head = line.match(/^\[(\d+)\]/);
     if (!head) continue;
+    const isBackground = LYS_BACKGROUND_PROPS.has(Number(head[1]));
     const rest = line.slice(head[0].length);
     const chars = [];
     // lys はタグが語の「後ろ」に付く。yrc / krc と違って前を切り出す。
@@ -579,6 +588,10 @@ export const parseLys = (text) => {
       if (Number.isFinite(start) && Number.isFinite(dur)) endTimeMs = start + dur;
     }
     if (!chars.length) continue;
+    if (isBackground && out.length) {
+      attachBackgroundVocal(out[out.length - 1], makeBackgroundVocal(chars, endTimeMs));
+      continue;
+    }
     out.push({
       startTimeMs: chars[0].t,
       endTimeMs,
@@ -620,8 +633,69 @@ const decodeXmlEntities = (value) => String(value ?? '')
   // &amp; は最後。先に戻すと "&amp;lt;" が "<" まで解けてしまう。
   .replace(/&amp;/g, '&');
 
+// <span> の語を拾う。入れ子の親(中に <span> を持つもの)は飛ばす。
+const readTtmlSpans = (inner) => {
+  const chars = [];
+  let lastSpanEnd = null;
+  const spanRe = /<span\b([^>]*)>([\s\S]*?)<\/span>/g;
+  let sm;
+  let prevEnd = 0;
+  while ((sm = spanRe.exec(inner))) {
+    // 語と語の間の空白は span の外に置かれる(英語の TTML)。拾わないと
+    // 「Alpha beta」が「Alphabeta」になるので、直前の語の後ろに付ける。
+    const gap = inner.slice(prevEnd, sm.index);
+    prevEnd = sm.index + sm[0].length;
+    if (/\s/.test(gap.replace(/<[^>]*>/g, '')) && chars.length && !/\s$/.test(chars[chars.length - 1].c)) {
+      chars[chars.length - 1].c += ' ';
+    }
+    const spanAttrs = sm[1] || '';
+    const body = sm[2];
+    if (/<span\b/.test(body)) continue;      // 入れ子の親は飛ばす
+    const t = parseTtmlTime((spanAttrs.match(/\bbegin="([^"]*)"/) || [])[1]);
+    const before = chars.length;
+    pushChar(chars, t, decodeXmlEntities(body));
+    // 行の終わりは最後の語の終わりから採る。<p> 側の end は
+    // 余韻まで含んでいることがあり、そのぶん最後の語が長く塗られる。
+    if (chars.length > before) {
+      const spanEnd = parseTtmlTime((spanAttrs.match(/\bend="([^"]*)"/) || [])[1]);
+      if (spanEnd !== null) lastSpanEnd = spanEnd;
+    }
+  }
+  return { chars, lastSpanEnd };
+};
+
+// ハモリ(ttm:role="x-bg")の <span> を、対応する </span> まで切り出す。
+// 中に語の <span> が入れ子になっているので、正規表現の最短一致では
+// 最初の語の </span> で切れてしまい、2 語目以降が本編に混ざっていた。
+const splitTtmlBackground = (inner) => {
+  const blocks = [];
+  let main = '';
+  let pos = 0;
+  const openRe = /<span\b[^>]*ttm:role="x-bg"[^>]*>/g;
+  let om;
+  while ((om = openRe.exec(inner))) {
+    if (om.index < pos) continue;
+    main += inner.slice(pos, om.index);
+    const tagRe = /<span\b[^>]*>|<\/span>/g;
+    tagRe.lastIndex = om.index + om[0].length;
+    let depth = 1;
+    let tm;
+    let end = inner.length;
+    while ((tm = tagRe.exec(inner))) {
+      depth += tm[0].startsWith('</') ? -1 : 1;
+      if (depth === 0) { end = tm.index + tm[0].length; break; }
+    }
+    blocks.push(inner.slice(om.index + om[0].length, end));
+    pos = end;
+    openRe.lastIndex = end;
+  }
+  main += inner.slice(pos);
+  return { main, blocks };
+};
+
 // Service Worker には DOMParser が無い。TTML の <p>/<span> は入れ子が浅く
 // 構造も決まっているので、正規表現で拾う。
+// ハモリ(x-bg)は本編と重なる別タイムライン。本編には混ぜず、行の bg にする。
 export const parseTtml = (text) => {
   const out = [];
   const src = String(text || '');
@@ -629,28 +703,24 @@ export const parseTtml = (text) => {
   let pm;
   while ((pm = pRe.exec(src))) {
     const attrs = pm[1] || '';
-    const inner = pm[2] || '';
     const lineStart = parseTtmlTime((attrs.match(/\bbegin="([^"]*)"/) || [])[1]);
     const lineEnd = parseTtmlTime((attrs.match(/\bend="([^"]*)"/) || [])[1]);
-    const chars = [];
-    let lastSpanEnd = null;
-    const spanRe = /<span\b([^>]*)>([\s\S]*?)<\/span>/g;
-    let sm;
-    while ((sm = spanRe.exec(inner))) {
-      const spanAttrs = sm[1] || '';
-      // ハモリ(x-bg)は本編と重なる別タイムライン。混ぜると行が二重になる。
-      if (/ttm:role="x-bg"/.test(spanAttrs)) continue;
-      const body = sm[2];
-      if (/<span\b/.test(body)) continue;      // 入れ子の親は飛ばす
-      const t = parseTtmlTime((spanAttrs.match(/\bbegin="([^"]*)"/) || [])[1]);
-      const before = chars.length;
-      pushChar(chars, t, decodeXmlEntities(body));
-      // 行の終わりは最後の語の終わりから採る。<p> 側の end は
-      // 余韻まで含んでいることがあり、そのぶん最後の語が長く塗られる。
-      if (chars.length > before) {
-        const spanEnd = parseTtmlTime((spanAttrs.match(/\bend="([^"]*)"/) || [])[1]);
-        if (spanEnd !== null) lastSpanEnd = spanEnd;
-      }
+    const { main: inner, blocks } = splitTtmlBackground(pm[2] || '');
+    const { chars, lastSpanEnd } = readTtmlSpans(inner);
+    const bgParts = blocks.map(readTtmlSpans);
+    const bg = makeBackgroundVocal(
+      bgParts.flatMap(part => part.chars).sort((a, b) => a.t - b.t),
+      Math.max(...bgParts.map(part => part.lastSpanEnd ?? 0)) || undefined,
+    );
+    if (!chars.length && bg) {
+      // ハモリだけの行は、そのまま本編として出す(下に付ける本編が無い)
+      out.push({
+        startTimeMs: bg.startTimeMs,
+        endTimeMs: bg.endTimeMs,
+        text: bg.text,
+        chars: bg.chars,
+      });
+      continue;
     }
     if (!chars.length) {
       const plain = decodeXmlEntities(inner.replace(/<[^>]*>/g, '')).trim();
@@ -663,12 +733,13 @@ export const parseTtml = (text) => {
       });
       continue;
     }
-    out.push({
+    const line = {
       startTimeMs: lineStart === null ? chars[0].t : lineStart,
       endTimeMs: lastSpanEnd ?? lineEnd ?? undefined,
-      text: chars.map(ch => ch.c).join(''),
+      text: chars.map(ch => ch.c).join('').trim(),
       chars,
-    });
+    };
+    out.push(attachBackgroundVocal(line, bg));
   }
   return out;
 };
@@ -1069,15 +1140,32 @@ const buaaaRows = (json) => {
 // (本編と重なる別タイムラインなので、混ぜると語の時刻が行き来する)。
 // 行の本文も語から組み直す。印の付いたハモリは row.text にだけ残っていることがある。
 // なお 2026-09 時点の実物はハモリにも印を付けず、本編の語として並べてくる。
+//
+// その代わり、元の TTML(json.ttml)が一緒に付いてくることがあり、そちらには
+// ハモリの印(x-bg)が残っている(実物: アイドルの「（信じてる）」)。印がある時は
+// TTML から組む。印が無い時は今までどおり JSON から組む(振る舞いを変えない)。
 export const convertBuaaaResponse = (json, want) => {
+  const ttml = typeof json?.ttml === 'string' ? json.ttml : '';
+  if (ttml.includes('ttm:role="x-bg"')) {
+    const fromTtml = buildResult(parseTtml(ttml), want);
+    if (fromTtml) return fromTtml;
+  }
   const rows = buaaaRows(json);
   if (!rows.length) return null;
   const lines = [];
   for (const row of rows) {
     const chars = [];
+    const bgChars = [];
+    let bgEnd = null;
     let lastWordEnd = null;
     for (const syllable of (Array.isArray(row?.syllabus) ? row.syllabus : [])) {
-      if (syllable?.isBackground) continue;
+      if (syllable?.isBackground) {
+        const bt = toFiniteMs(syllable?.time);
+        pushChar(bgChars, bt, syllable?.text);
+        const dur = toFiniteMs(syllable?.duration);
+        if (bt !== null && dur !== null && dur > 0) bgEnd = Math.max(bgEnd ?? 0, bt + dur);
+        continue;
+      }
       const t = toFiniteMs(syllable?.time);
       const before = chars.length;
       pushChar(chars, t, syllable?.text);
@@ -1092,12 +1180,12 @@ export const convertBuaaaResponse = (json, want) => {
     if (startTimeMs === null) continue;
     const text = chars.length ? chars.map(ch => ch.c).join('') : String(row?.text ?? '');
     const rowDuration = toFiniteMs(row?.duration);
-    lines.push({
+    lines.push(attachBackgroundVocal({
       startTimeMs,
       endTimeMs: lastWordEnd ?? ((rowDuration !== null && rowDuration > 0) ? startTimeMs + rowDuration : undefined),
       text,
       chars: chars.length ? chars : (text ? [{ t: startTimeMs, c: text }] : []),
-    });
+    }, chars.length ? makeBackgroundVocal(bgChars, bgEnd) : null));
   }
   return buildResult(lines, want);
 };

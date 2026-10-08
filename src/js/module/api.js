@@ -1453,6 +1453,61 @@ export const LYRICSPLUS_MIRRORS = [
 const LYRICSPLUS_COOLDOWN_MS = 5 * 60 * 1000;
 const lyricsPlusSkipUntil = new Map();
 
+// ── ハモリ(バックボーカル) ──────────────────────────────
+// Apple Music 由来の歌詞は、本編と重なって歌われるハモリに印を付けてくる
+// (LyricsPlus の isBackground、TTML の ttm:role="x-bg"、.lys の [6]〜[8])。
+// 本編に混ぜると「(Yes)I know I Mountain Dew…」のように 1 行に並び、
+// 語の時刻も行き来する。本編の行に bg として別に持たせ、画面では行の下に
+// 小さく出す(lyrics-ui.js)。
+//   bg = { startTimeMs, endTimeMs, text, chars: [{ t, c }] }
+// 印が付いている時点でハモリなので、表記の括弧 "(Yes)" は外す
+// (Apple Music の表示も括弧を付けない。小さく薄い字で区別が付く)。
+export const makeBackgroundVocal = (chars, endTimeMs) => {
+  const kept = (Array.isArray(chars) ? chars : [])
+    .filter(ch => ch && Number.isFinite(ch.t) && String(ch.c ?? '').length)
+    .map(ch => ({ t: ch.t, c: String(ch.c) }));
+  if (!kept.length) return null;
+  const first = kept[0];
+  const last = kept[kept.length - 1];
+  if (/^\s*[(（]/.test(first.c) && /[)）]\s*$/.test(last.c)) {
+    first.c = first.c.replace(/^\s*[(（]/, '');
+    last.c = last.c.replace(/[)）]\s*$/, '');
+  }
+  const cleaned = kept.filter(ch => ch.c.length);
+  const text = cleaned.map(ch => ch.c).join('').trim();
+  if (!text) return null;
+  const startTimeMs = Math.min(...cleaned.map(ch => ch.t));
+  const end = Number(endTimeMs);
+  return {
+    startTimeMs,
+    endTimeMs: Number.isFinite(end) && end > startTimeMs ? end : undefined,
+    text,
+    chars: cleaned,
+  };
+};
+
+// 行にハモリを足す。行の始まりはハモリの方が早ければそちらに合わせる
+// (行が光り始めるのが遅れ、先に歌われたハモリを塗りそびれる)。
+// 行の終わり(endTimeMs)は本編のものを残す。本編の最後の語の塗りに使うため。
+// 行が光っている区間はハモリの終わりまで伸ばす(lyrics-ui.js が bg を見る)。
+export const attachBackgroundVocal = (line, bg) => {
+  if (!line || !bg) return line;
+  if (line.bg) {
+    // 1 行に複数のハモリ(本編の前後など)は時刻順に 1 本へつなぐ
+    const merged = makeBackgroundVocal(
+      [...line.bg.chars, ...bg.chars].sort((a, b) => a.t - b.t),
+      Math.max(Number(line.bg.endTimeMs) || 0, Number(bg.endTimeMs) || 0) || undefined,
+    );
+    line.bg = merged || line.bg;
+  } else {
+    line.bg = bg;
+  }
+  if (typeof line.startTimeMs === 'number' && line.bg.startTimeMs < line.startTimeMs) {
+    line.startTimeMs = line.bg.startTimeMs;
+  }
+  return line;
+};
+
 export const convertLyricsPlusResponse = (json) => {
   const rows = Array.isArray(json?.lyrics) ? json.lyrics : [];
   if (!rows.length) return null;
@@ -1462,20 +1517,33 @@ export const convertLyricsPlusResponse = (json) => {
 
   for (const row of rows) {
     const chars = [];
+    const bgChars = [];
+    let bgEnd = null;
     const syllabus = Array.isArray(row?.syllabus) ? row.syllabus : [];
     for (const syllable of syllabus) {
       const t = toFiniteMs(syllable?.time);
       const c = String(syllable?.text ?? '');
       if (t === null || !c) continue;
+      if (syllable?.isBackground) {
+        bgChars.push({ t, c });
+        const dur = toFiniteMs(syllable?.duration);
+        if (dur !== null && dur > 0) bgEnd = Math.max(bgEnd ?? 0, t + dur);
+        continue;
+      }
       chars.push({ t, c });
     }
+    // ハモリだけの行は、そのまま本編として出す(下に付ける本編が無い)
+    if (!chars.length && bgChars.length) chars.push(...bgChars.splice(0));
     if (chars.length) hasSyllables = true;
 
     const startTimeMs = toFiniteMs(row?.time) ?? (chars.length ? chars[0].t : null);
     if (startTimeMs === null) continue;
 
-    const text = String(row?.text ?? '') || chars.map(ch => ch.c).join('');
-    dynamicLines.push({ startTimeMs, text, chars });
+    // row.text はハモリまで含んだ文字列なので、ハモリがある時は本編の語から組む
+    const text = (bgChars.length ? '' : String(row?.text ?? '')) || chars.map(ch => ch.c).join('');
+    const line = { startTimeMs, text, chars };
+    attachBackgroundVocal(line, makeBackgroundVocal(bgChars, bgEnd));
+    dynamicLines.push(line);
   }
 
   if (!dynamicLines.length) return null;
@@ -1510,13 +1578,96 @@ const fetchLyricsPlusFromMirror = async (base, query) => {
     }
     const json = await res.json();
     if (json?.error) return null;
-    return convertLyricsPlusResponse(json);
+    const converted = convertLyricsPlusResponse(json);
+    if (converted) {
+      // どこの歌詞か(聞き直すかどうかの判断に使う。返す前に外す)
+      converted._lyricsPlusMeta = {
+        source: String(json?.metadata?.source || ''),
+        type: String(json?.type || ''),
+        endMs: lyricsPlusEndMs(json),
+      };
+    }
+    return converted;
   } catch (e) {
     lyricsPlusSkipUntil.set(base, Date.now() + LYRICSPLUS_COOLDOWN_MS);
     return null;
   }
 };
 
+// 歌詞がどこで終わるか(ミリ秒)。行の「開始+長さ」のいちばん遅いもの。
+const lyricsPlusEndMs = (json) => {
+  let end = null;
+  for (const row of (Array.isArray(json?.lyrics) ? json.lyrics : [])) {
+    const t = toFiniteMs(row?.time);
+    if (t === null) continue;
+    const d = toFiniteMs(row?.duration);
+    const e = t + (d !== null && d > 0 ? d : 0);
+    if (end === null || e > end) end = e;
+  }
+  return end;
+};
+
+// Apple Music の単語同期か。ハモリの印(isBackground)が付いてくるのはこれだけ。
+const isAppleSyllableLyrics = (result) => {
+  const meta = result?._lyricsPlusMeta;
+  return !!meta && meta.source.toLowerCase() === 'apple' && meta.type.toLowerCase() !== 'line'
+    && hasDynamicChars(result.dynamicLines);
+};
+const hasDynamicChars = (lines) => Array.isArray(lines) && lines.some(line => Array.isArray(line?.chars) && line.chars.length > 1);
+
+// 長さ無しで聞き直した歌詞を、いま流れている曲に使ってよいか。
+// 長さを外すと別バージョン(MV・ライブ・リミックス)を掴む余地があるので、
+// 歌詞の終わりが曲の終わりのすぐ手前(後奏 20 秒以内)にあることを求める
+// (BuaaaBot の曲名検索と同じ考え方。あちらは 15 秒)。
+// 実測: Espresso の MV(201 秒)に音源の歌詞(終わり 約 170 秒)は通らない。
+const LYRICSPLUS_RETRY_OUTRO_SEC = 20;
+export const lyricsPlusFitsTrack = (endMs, durationSec) => {
+  const end = Number(endMs) / 1000;
+  const duration = Number(durationSec);
+  if (!Number.isFinite(end) || !Number.isFinite(duration) || duration <= 0) return false;
+  return end <= duration + 1 && duration - end <= LYRICSPLUS_RETRY_OUTRO_SEC;
+};
+
+// 全ミラーを同時に投げ、最初に歌詞を返したものを採用する。
+const fetchLyricsPlusFromMirrors = (query) => new Promise(resolve => {
+  let pending = LYRICSPLUS_MIRRORS.length;
+  let settled = false;
+  if (!pending) { resolve(null); return; }
+  for (const base of LYRICSPLUS_MIRRORS) {
+    fetchLyricsPlusFromMirror(base, query)
+      .then(value => {
+        pending -= 1;
+        if (value && !settled) {
+          settled = true;
+          YTMLog.log('[BG] LyricsPlus hit:', base);
+          resolve(value);
+        } else if (pending === 0 && !settled) {
+          settled = true;
+          resolve(null);
+        }
+      })
+      .catch(() => {
+        pending -= 1;
+        if (pending === 0 && !settled) {
+          settled = true;
+          resolve(null);
+        }
+      });
+  }
+});
+
+const stripLyricsPlusMeta = (result) => {
+  if (result) delete result._lyricsPlusMeta;
+  return result;
+};
+
+// LyricsPlus のサーバーは「曲名・歌手・長さ」の組ごとに、最初に取れた結果を
+// 覚えて返し続ける。その組で Apple Music の取得がたまたま遅れて QQ Music や
+// Musixmatch が覚えられると、その長さで聞く限りずっとそちらが返る。
+// 実測(2026-10-08, OMG / NewJeans): 長さ 206・207・209・213〜216 は Apple、
+// 205・208・210〜212 は QQ Music(何度聞いても同じ)。長さ無しは Apple。
+// Apple の単語同期でなければ、長さ無しでも聞き直し、曲に合えばそちらを採る。
+// Apple の歌詞は語の時刻が細かく、ハモリの印も付いている。
 export const fetchFromLyricsPlus = async (params = {}) => {
   const title = String(params.track || '').trim();
   const artist = String(params.artist || '').trim();
@@ -1526,38 +1677,17 @@ export const fetchFromLyricsPlus = async (params = {}) => {
   const album = String(params.album || '').trim();
   if (album) search.set('album', album);
   const duration = Number(params.duration);
-  if (Number.isFinite(duration) && duration > 0) {
-    search.set('duration', String(Math.round(duration)));
+  const hasDuration = Number.isFinite(duration) && duration > 0;
+  if (hasDuration) search.set('duration', String(Math.round(duration)));
+
+  const first = await fetchLyricsPlusFromMirrors(search.toString());
+  if (!hasDuration || isAppleSyllableLyrics(first)) return stripLyricsPlusMeta(first);
+
+  search.delete('duration');
+  const retry = await fetchLyricsPlusFromMirrors(search.toString());
+  if (isAppleSyllableLyrics(retry) && lyricsPlusFitsTrack(retry._lyricsPlusMeta.endMs, duration)) {
+    YTMLog.log('[BG] LyricsPlus: 長さ無しで Apple の歌詞を採る');
+    return stripLyricsPlusMeta(retry);
   }
-  const query = search.toString();
-
-  // 全ミラーを同時に投げ、最初に歌詞を返したものを採用する。
-  const result = await new Promise(resolve => {
-    let pending = LYRICSPLUS_MIRRORS.length;
-    let settled = false;
-    if (!pending) { resolve(null); return; }
-    for (const base of LYRICSPLUS_MIRRORS) {
-      fetchLyricsPlusFromMirror(base, query)
-        .then(value => {
-          pending -= 1;
-          if (value && !settled) {
-            settled = true;
-            YTMLog.log('[BG] LyricsPlus hit:', base);
-            resolve(value);
-          } else if (pending === 0 && !settled) {
-            settled = true;
-            resolve(null);
-          }
-        })
-        .catch(() => {
-          pending -= 1;
-          if (pending === 0 && !settled) {
-            settled = true;
-            resolve(null);
-          }
-        });
-    }
-  });
-
-  return result;
+  return stripLyricsPlusMeta(first);
 };

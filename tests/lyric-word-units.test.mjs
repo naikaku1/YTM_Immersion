@@ -162,3 +162,14 @@ test('行頭の書式空白で語が壊れない', () => {
   const total = units.reduce((sum, u) => sum + glyphCount(u), 0)
   assert.equal(total, 3)
 })
+
+test('韓国語の語と語の間の空白は残す(分かち書き)', () => {
+  // 「울 것 같을 때」が「울것같을때」に詰まっていた(実機: OMG / NewJeans)
+  const chars = [
+    { c: '울 ', t: 0 }, { c: '것 ', t: 260 }, { c: '같을 ', t: 520 }, { c: '때', t: 930 },
+  ]
+  const units = buildLyricWordUnits(chars, 1.5)
+  const text = units.map(u => u.text).join('')
+  assert.equal(text.trim(), '울 것 같을 때')
+  assert.equal(words(units).length, 4)
+})

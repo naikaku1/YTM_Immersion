@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTM-Immersion",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",
@@ -63,6 +63,7 @@
         "src/js/module/pip-manager.js",
         "src/js/module/ytm-lyrics.js",
         "src/js/module/budoux-ja.js",
+        "src/js/module/korean-ruby.js",
         "src/js/module/lyrics-ui.js",
         "src/js/content.js"
       ],

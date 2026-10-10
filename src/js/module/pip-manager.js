@@ -230,7 +230,9 @@ const forceStyle = pipDoc.createElement('style');
         @property --sweep { syntax: '<number>'; inherits: true; initial-value: 0; }
         .lyric-line.ytm-word-sync { --feather: 10; --ytm-rest-alpha: 0.26; }
         .lyric-line.ytm-word-sync.active { --ytm-rest-alpha: 0.4; }
-        .lyric-phrase.lyric-phrase-sync { margin: 0; }
+        /* 下の .lyric-phrase(margin: 0 1px !important)に負けないよう !important。
+           負けると引用符などの独立したまとまりの前後に隙間が出る(本体は 0) */
+        .lyric-phrase.lyric-phrase-sync { margin: 0 !important; }
         .lyric-line.ytm-word-sync .lyric-word {
           --wx: 0; --feather: 10; --wg: 0; --wglowa: 0; --wglowr: 0;
           display: inline-block;
@@ -259,6 +261,51 @@ const forceStyle = pipDoc.createElement('style');
           background-image: none;
           -webkit-text-fill-color: currentColor;
           text-shadow: none !important;
+        }
+
+        /* ハモリ(バックボーカル)。本体の style.css の .lyric-bg と同じ。
+           PIP は本体の CSS を読まないので、ここに無いと本編と同じ大きさで
+           本編の直後に並んでしまう(v2.4.0 の不具合)。ふだんは畳み、行が
+           光ったら開く。塗りはハモリ自身の --sweep で走らせる。 */
+        .lyric-bg {
+          display: block;
+          font-size: 0.6em;
+          font-weight: 600;
+          line-height: 1.35;
+          margin-top: 0;
+          max-height: 0;
+          opacity: 0;
+          overflow: clip;
+          overflow-clip-margin: 0.6em;
+          transform: translateY(-0.35em);
+          transition:
+            max-height 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+            margin-top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+            transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 0.35s ease;
+        }
+        .lyric-line.active .lyric-bg {
+          margin-top: 0.2em;
+          max-height: 6em;
+          opacity: 0.72;
+          transform: none;
+        }
+        .lyric-line.sub-vocal .lyric-bg { text-align: right; }
+        .lyric-bg.ytm-bg-sync { --sweep: 0; --feather: 8; }
+
+        /* 試作: 韓国語の読み(korean-ruby.js)。本体の style.css と同じ。
+           data-ruby は読みを出す設定の時にしか付かないので、入り切りは見ない。 */
+        .lyric-main .lyric-ko { display: inline-block; }
+        .lyric-main [data-ruby] { text-align: center; }
+        .lyric-main [data-ruby]::before {
+          content: attr(data-ruby);
+          display: block;
+          font-size: 0.42em;
+          font-weight: 600;
+          line-height: 1.3;
+          letter-spacing: 0;
+          text-align: center;
+          white-space: nowrap;
         }
 
         /* 完了行の表示設定と手動スクロール中の再表示を通常画面と揃える。 */

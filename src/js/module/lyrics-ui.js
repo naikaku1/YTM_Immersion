@@ -6587,6 +6587,16 @@ function renderSettingsPanel() {
             </div>
 
             <div class="settings-group-card">
+              <label class="setting-row toggle-label">
+                <span>
+                  <span class="setting-name">${t('settings_korean_ruby')}</span>
+                  <span class="setting-desc" id="korean-ruby-desc">${t('settings_korean_ruby_desc')}</span>
+                </span>
+                <input type="checkbox" id="korean-ruby-toggle" aria-describedby="korean-ruby-desc">
+              </label>
+            </div>
+
+            <div class="settings-group-card">
                <div class="setting-row stacked">
                   <span class="setting-name">${t('settings_main_lang')}</span>
                   <div class="ytm-lang-group" id="main-lang-group">
@@ -6694,6 +6704,8 @@ function renderSettingsPanel() {
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('apple-sync-toggle').checked = !!config.appleSyncStyle;
+  const koreanRubyToggle = document.getElementById('korean-ruby-toggle');
+  if (koreanRubyToggle) koreanRubyToggle.checked = typeof KoreanRuby !== 'undefined' && KoreanRuby.isEnabled();
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
   document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
@@ -6843,6 +6855,10 @@ function renderSettingsPanel() {
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.appleSyncStyle = document.getElementById('apple-sync-toggle').checked;
+    // 試作: 韓国語の読み(korean-ruby.js)。切り替えたら下で描き直す
+    const prevKoreanRuby = typeof KoreanRuby !== 'undefined' && KoreanRuby.isEnabled();
+    const nextKoreanRuby = !!document.getElementById('korean-ruby-toggle')?.checked;
+    if (typeof KoreanRuby !== 'undefined' && prevKoreanRuby !== nextKoreanRuby) KoreanRuby.setEnabled(nextKoreanRuby);
     config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
     config.useSingerColors = document.getElementById('singer-colors-toggle').checked;
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
@@ -6920,6 +6936,8 @@ function renderSettingsPanel() {
     );
     const uiLanguageChanged = prevUiLang !== config.uiLang;
     const meaningAlwaysChanged = prevAlwaysShowMeaning !== config.alwaysShowMeaning;
+    // 読みは表示言語でカナとローマ字が変わるので、言語を変えた時も描き直す
+    const koreanRubyChanged = prevKoreanRuby !== nextKoreanRuby || (nextKoreanRuby && uiLanguageChanged);
 
     closeSettings({ saved: true });
 
@@ -6937,6 +6955,8 @@ function renderSettingsPanel() {
         const metaNow = getMetadata();
         if (metaNow?.title && metaNow?.artist) await loadLyrics(metaNow);
       }
+    } else if (koreanRubyChanged && Array.isArray(lyricsData) && lyricsData.length) {
+      renderLyrics(lyricsData);
     }
 
     if (meaningAlwaysChanged) {
@@ -8579,6 +8599,7 @@ function renderLyrics(data) {
       const rawText = line ? line.text : '';
       mainSpan.innerHTML = optimizeLineBreaks(rawText);
     }
+    if (typeof KoreanRuby !== 'undefined') KoreanRuby.decorate(mainSpan);
     row.appendChild(mainSpan);
 
     const bgEl = dyn ? buildLyricBackgroundRow(dyn.bg, useWordSync) : null;
@@ -10797,6 +10818,8 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   config.disabledLyricSources = normalizeDisabledLyricSources(await storage.get(DISABLED_LYRIC_SOURCES_KEY));
   if (savedAnimatedCaptions !== null) config.useAnimatedCaptions = !!savedAnimatedCaptions;
   if (savedAppleSync !== null) config.appleSyncStyle = !!savedAppleSync;
+  // 試作: 韓国語の読み(korean-ruby.js)。歌詞を描く前に入り切りを読んでおく
+  if (typeof KoreanRuby !== 'undefined') await KoreanRuby.load();
   if (savedSingerColors !== null) config.useSingerColors = !!savedSingerColors;
   document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
   applyAppleSyncClass();

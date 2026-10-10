@@ -189,3 +189,10 @@ test('行が最初の語より先に光っても(先に歌われるハモリ)、
   assert.equal(animation.playState, 'running')
   assert.ok(Math.abs(animation.currentTime - 155) < 1e-6)
 })
+
+test('PIP にもハモリのスタイルがある(本体の CSS を読まない別の文書)', () => {
+  const pip = fs.readFileSync(new URL('../src/js/module/pip-manager.js', import.meta.url), 'utf8')
+  assert.match(pip, /\.lyric-bg \{[^}]*font-size: 0\.6em;[^}]*max-height: 0;[^}]*opacity: 0;/)
+  assert.match(pip, /\.lyric-line\.active \.lyric-bg \{[^}]*max-height: 6em;/)
+  assert.match(pip, /\.lyric-bg\.ytm-bg-sync \{ --sweep: 0;/)
+})

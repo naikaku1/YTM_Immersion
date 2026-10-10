@@ -5943,3 +5943,26 @@ body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line
     display: none;
   }
 }
+
+/* 試作: 韓国語の読み(korean-ruby.js)。語の上に小さく振る。
+   文字同期の語(.lyric-word)は inline-block なので ::before を上に積むだけで済む。
+   語の塗りは background-clip: text で子孫の字にも掛かるので、ルビも一緒に塗られる。 */
+body.ytm-korean-ruby .lyric-main .lyric-ko {
+  display: inline-block;
+}
+
+body.ytm-korean-ruby .lyric-main [data-ruby]::before {
+  content: attr(data-ruby);
+  display: block;
+  font-size: 0.42em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: nowrap;
+}
+
+body.ytm-korean-ruby .lyric-main [data-ruby] {
+  text-align: center;
+}
+

@@ -52,3 +52,13 @@ test('音の大きさはページ側の小さな橋渡しが置く。新しい�
   const bridge = read('src/js/page/loudness-bridge.js')
   assert.doesNotMatch(bridge, /fetch\(|XMLHttpRequest|postMessage/)
 })
+
+// 曲が変わった時、getPlayerResponse() が新しい曲になるのが loadeddata・playing より
+// 後のことがある。その 2 つだけで読んでいたので、小さい曲が上がらないまま流れ、
+// 次に一時停止→再生した時(playing)に急に大きくなっていた。
+test('音の大きさは再生中も読み直す(一時停止→再生で急に大きくならない)', () => {
+  const bridge = read('src/js/page/loudness-bridge.js')
+  assert.match(bridge, /\['loadeddata', 'playing', 'timeupdate'\]\) document\.addEventListener\(type, publish, true\)/)
+  // 同じ値なら属性を書かない(書くたびに拡張側の見張りが起きる)
+  assert.match(bridge, /getAttribute\('data-ytmi-loudness'\) !== value/)
+})

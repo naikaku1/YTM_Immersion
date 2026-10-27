@@ -18,7 +18,11 @@
       document.documentElement.setAttribute('data-ytmi-loudness', value);
     }
   };
-  // メディアのイベントは泡立たないが、捕獲なら document で受けられる
-  for (const type of ['loadeddata', 'playing']) document.addEventListener(type, publish, true);
+  // メディアのイベントは泡立たないが、捕獲なら document で受けられる。
+  // 曲が変わった時、getPlayerResponse() が新しい曲になるのは loadeddata・playing
+  // より後のことがある。その 2 つだけで読んでいたので前の曲の値のまま残り、
+  // 小さい曲が上がらないまま流れ、次に一時停止→再生した時に急に大きくなっていた。
+  // timeupdate(再生中 1 秒 4 回ほど)でも読み直す。値が同じなら何も書かない。
+  for (const type of ['loadeddata', 'playing', 'timeupdate']) document.addEventListener(type, publish, true);
   publish();
 })();

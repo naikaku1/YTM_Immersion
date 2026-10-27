@@ -8224,6 +8224,11 @@ function initLayout() {
   ui.summaryBtn.setAttribute('aria-label', '曲の要約を表示');
   ui.summaryBtn.onclick = () => showMeaningSummaryPopup();
   ui.artwork.appendChild(ui.summaryBtn);
+  // ジャケットを押すと再生/一時停止(中の要約ボタンは除く)
+  ui.artwork.addEventListener('click', (ev) => {
+    if (ev.target.closest('#ytm-meaning-summary-btn')) return;
+    PlayerBar.controls.togglePlay();
+  });
   ui.meaningPanel = createEl('aside', 'ytm-meaning-panel', 'ytm-meaning-panel');
   ui.lyricsStage.append(ui.lyrics, ui.meaningPanel);
   ui.wrapper.append(leftCol, ui.lyricsStage);
@@ -10348,6 +10353,18 @@ let _playbackRateForMotion = 1;
 // body のクラスを毎フレーム書き直さないための控え。
 // null は「まだ一度も書いていない」= 次は必ず書く。
 let _lastPlayingStateForBodyClass = null;
+
+// 一時停止中のループは 250ms おきにしか回らないので、再生/一時停止の
+// 瞬間はイベントで書く(ジャケットの縮み・戻りが遅れて始まらないように)
+const syncPausedClassFromEvent = (e) => {
+  const v = e.target;
+  if (v !== document.querySelector('video')) return;
+  const isPlaying = v.readyState > 0 && !v.paused && !v.ended;
+  if (isPlaying === _lastPlayingStateForBodyClass) return;
+  _lastPlayingStateForBodyClass = isPlaying;
+  document.body.classList.toggle('ytm-music-paused', !isPlaying);
+};
+['play', 'pause', 'ended'].forEach((type) => document.addEventListener(type, syncPausedClassFromEvent, true));
 
 // アクティブ行の塗り(文字・語の進み)を1行ぶん更新する。
 // 毎フレーム必要なのはここだけなので、行の状態が変わっていないフレームは

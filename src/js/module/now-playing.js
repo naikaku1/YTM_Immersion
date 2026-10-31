@@ -23,6 +23,8 @@
   let pending = null;
   let suspended = false;
   let sendEpoch = 0;
+  let lyricRefresh = null;
+  let stage = 'disabled';
   const mediaEvents = ['play', 'playing', 'pause', 'ended', 'seeking', 'seeked',
     'timeupdate', 'durationchange', 'loadedmetadata', 'emptied', 'ratechange'];
 
@@ -33,6 +35,7 @@
     inFlightAction = action;
     const epoch = sendEpoch;
     lastAttemptAt = Date.now();
+    stage = 'publishing';
     const message = action.payload
       ? { type: 'NOW_PLAYING_UPDATE', payload: { ...action.payload, session_id: sessionId, sequence: ++sequence } }
       : { type: 'NOW_PLAYING_CLEAR' };
@@ -41,6 +44,7 @@
       if (epoch !== sendEpoch) return;
       inFlight = false;
       inFlightAction = null;
+      if (stage === 'publishing') stage = failed ? 'relay_error' : 'received';
       if (failed) {
         lastSignature = '';
         retryAt = Date.now() + (response?.error === 'NO_TOKEN' ? HEARTBEAT_MS : RETRY_MS);
@@ -75,7 +79,7 @@
     return `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
   };
 
-  const sync = (event) => {
+  const syncPlayback = (event) => {
     // An unloading/throttled renderer may lose a message callback. A worker
     // poll can recover without waiting for a timer in that renderer to run.
     if (inFlight && Date.now() - lastAttemptAt >= RESPONSE_TIMEOUT_MS) {
@@ -89,6 +93,7 @@
     }
     if (!enabled || suspended) {
       if (!enabled && !suspended && published && Date.now() >= retryAt) clear();
+      stage = !enabled ? 'disabled' : 'suspended';
       return;
     }
     const media = document.querySelector('video.video-stream') || document.querySelector('video');
@@ -101,12 +106,14 @@
       !!document.querySelector('.ad-interrupting, .ad-showing');
     if (!media || media.ended || media.readyState === 0 || isAd) {
       if (Date.now() >= retryAt) clear();
+      stage = isAd ? 'advertisement' : 'media_unavailable';
       return;
     }
     const metadata = typeof getMetadata === 'function' ? getMetadata() : null;
     const id = typeof getCurrentVideoId === 'function' ? getCurrentVideoId() : null;
     if (!id || !metadata?.title?.trim()) {
       if (Date.now() >= retryAt) clear();
+      stage = !metadata?.title?.trim() ? 'metadata_unavailable' : 'track_id_unavailable';
       return;
     }
     const trackKey = [id, metadata.title, metadata.artist].join('\u0000');
@@ -114,7 +121,10 @@
       lastTrack = trackKey;
       if (typeof requestImmersionTick === 'function') requestImmersionTick();
     }
-    if (typeof shouldWaitForSettledMetadata === 'function' && shouldWaitForSettledMetadata(metadata, id)) return;
+    if (typeof shouldWaitForSettledMetadata === 'function' && shouldWaitForSettledMetadata(metadata, id)) {
+      stage = 'metadata_settling';
+      return;
+    }
 
     const rawPosition = typeof getCurrentPlaybackSeconds === 'function'
       ? getCurrentPlaybackSeconds() : media.currentTime;
@@ -144,17 +154,44 @@
     observed = { track: trackKey, playing: payload.is_playing, position, at: now };
     const seeked = event?.type === 'seeking' || event?.type === 'seeked' || drift > 1500;
     const heartbeat = payload.is_playing && now - lastAttemptAt >= HEARTBEAT_MS;
-    if (now < retryAt || (signature === lastSignature && !seeked && !heartbeat)) return;
+    if (now < retryAt) { stage = 'waiting_retry'; return; }
+    if (signature === lastSignature && !seeked && !heartbeat) return;
     lastSignature = signature;
     published = true;
     send({ payload });
+  };
+
+  const sync = (event) => {
+    try { syncPlayback(event); }
+    catch (_) {
+      // Metadata/UI helpers may not be ready yet. Keep the collector installed
+      // and let the next media event or worker poll retry the same snapshot.
+      lastSignature = '';
+      observed = null;
+      stage = 'collector_error';
+    }
+  };
+
+  const refreshLyrics = () => {
+    if (!enabled || suspended || lyricRefresh) return;
+    const refresh = globalThis.YTMImmersionDiscordLyrics?.refreshPlayback;
+    if (typeof refresh !== 'function') return;
+    const finished = () => {
+      lyricRefresh = null;
+      // Read the current track again; a completed lookup may belong to a song
+      // that changed or was stopped while its lyrics were being fetched.
+      if (enabled && !suspended) sync({ type: 'lyrics-refreshed' });
+    };
+    try {
+      lyricRefresh = Promise.resolve(refresh()).then(finished, finished);
+    } catch (_) { /* Optional lyrics must not block the media snapshot. */ }
   };
 
   const setEnabled = (value) => {
     const changed = enabled !== (value === true);
     enabled = value === true;
     if (typeof config !== 'undefined') config.discordEnabled = enabled;
-    if (!enabled) { pending = null; clear(); return; }
+    if (!enabled) { pending = null; clear(); stage = 'disabled'; return; }
     if (changed) {
       lastSignature = '';
       retryAt = 0;
@@ -165,6 +202,7 @@
 
   const suspend = () => {
     suspended = true;
+    stage = 'suspended';
     pending = null;
     // A navigation can destroy this document before an outstanding callback
     // runs. Deliver DELETE to the worker now, which orders it after that POST.
@@ -180,20 +218,23 @@
     } catch (_) { /* Tab removal or the server's expiry also clears activity. */ }
   };
 
+  // Read-only diagnostics contain no playback metadata, credentials or IDs.
+  globalThis.YTMImmersionNowPlaying = Object.freeze({
+    getDiagnostics: () => ({
+      stage,
+      last_attempt_at: Number.isFinite(lastAttemptAt) && lastAttemptAt > 0 ? lastAttemptAt : null,
+    }),
+  });
+
   api.storage.local.get(ENABLED_KEY, items => setEnabled(items?.[ENABLED_KEY]));
   api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || sender.id !== api.runtime.id) return;
     if (msg.type === 'NOW_PLAYING_POLL') {
-      void (async () => {
-        if (enabled && !suspended) {
-          // Both the track observer and its lyric-load debounce normally use
-          // page timers. Flush them directly in this extension message event.
-          const refresh = globalThis.YTMImmersionDiscordLyrics?.refreshPlayback;
-          if (typeof refresh === 'function') await refresh();
-        }
-        sync({ type: 'worker-poll' });
-        sendResponse({ ok: enabled && !suspended });
-      })().catch(() => sendResponse({ ok: false }));
+      // Refresh lyric state without waiting for its network requests. Music
+      // metadata and the media clock are sufficient to publish immediately.
+      refreshLyrics();
+      sync({ type: 'worker-poll' });
+      sendResponse({ ok: enabled && !suspended });
       return true;
     }
     if (msg.type !== 'NOW_PLAYING_REFRESH') return;

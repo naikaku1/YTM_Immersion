@@ -2,6 +2,7 @@
 // Ask for fresh media-clock snapshots from the extension worker instead. The
 // alarm restores this small active-playback loop after a worker restart.
 export const NOW_PLAYING_WATCHDOG_ALARM = 'ytm-now-playing-watchdog';
+const MAX_DISCOVERY_TABS = 32;
 
 const normalizeOwner = value => value && Number.isInteger(value.tabId) ? {
   tabId: value.tabId,
@@ -29,6 +30,7 @@ export function createNowPlayingPoller({
   let stateEpoch = 0;
   let ownerRevision = 0;
   let discoveryEpoch = 0;
+  let discoveryRequest = null;
   let failures = 0;
 
   const readLastError = () => api.runtime?.lastError;
@@ -41,6 +43,10 @@ export function createNowPlayingPoller({
     if (request) clearTimeoutImpl(request.timeout);
     request = null;
   };
+  const cancelDiscovery = () => {
+    if (discoveryRequest) clearTimeoutImpl(discoveryRequest.timeout);
+    discoveryRequest = null;
+  };
   const arm = () => {
     if (!canPoll() || timer !== null || request) return;
     timer = setTimeoutImpl(() => {
@@ -49,6 +55,7 @@ export function createNowPlayingPoller({
     }, intervalMs);
   };
   const reconcileLoop = () => {
+    if (disposed || !enabled) cancelDiscovery();
     if (!canPoll()) { cancelTimer(); cancelRequest(); return; }
     arm();
   };
@@ -67,6 +74,9 @@ export function createNowPlayingPoller({
       request = null;
       failures = failed ? failures + 1 : 0;
       arm();
+      // A persisted document can disappear while the worker is asleep. Keep
+      // its server presence untouched, but let a live page report fresh data.
+      if (failed && failures >= 3) discover();
     };
     current.timeout = setTimeoutImpl(() => finish(true), responseTimeoutMs);
     const options = target.documentId
@@ -107,20 +117,36 @@ export function createNowPlayingPoller({
   });
 
   const discover = () => {
-    if (disposed || !enabled || owner) return;
+    if (disposed || !enabled || (owner && failures < 3) || discoveryRequest) return;
     const epoch = ++discoveryEpoch;
+    const revision = ownerRevision;
+    const current = { timeout: null };
+    discoveryRequest = current;
+    const valid = () => discoveryRequest === current && !disposed && enabled &&
+      epoch === discoveryEpoch && revision === ownerRevision && (!owner || failures >= 3);
+    const finish = () => {
+      if (discoveryRequest === current) cancelDiscovery();
+    };
+    current.timeout = setTimeoutImpl(finish, responseTimeoutMs);
     try {
       api.tabs.query({ url: 'https://music.youtube.com/*' }, tabs => {
         const error = readLastError();
-        if (error || disposed || !enabled || owner || epoch !== discoveryEpoch) return;
-        for (const tab of tabs || []) {
-          if (!Number.isInteger(tab.id)) continue;
-          try {
-            api.tabs.sendMessage(tab.id, { type: 'NOW_PLAYING_POLL' }, { frameId: 0 }, () => { readLastError(); });
-          } catch (_) { /* A closing tab will not provide a fresh observation. */ }
+        try {
+          if (error || !valid()) return;
+          for (const tab of (tabs || []).slice(0, MAX_DISCOVERY_TABS)) {
+            // A fresh observation from an earlier notification wins even if
+            // this query's remaining callbacks arrive later.
+            if (!valid()) break;
+            if (!Number.isInteger(tab.id)) continue;
+            try {
+              api.tabs.sendMessage(tab.id, { type: 'NOW_PLAYING_POLL' }, { frameId: 0 }, () => { readLastError(); });
+            } catch (_) { /* A closing tab will not provide a fresh observation. */ }
+          }
+        } finally {
+          finish();
         }
       });
-    } catch (_) { /* No page exists yet. The next alarm may discover one. */ }
+    } catch (_) { finish(); /* The next alarm can retry a failed discovery. */ }
   };
 
   const restore = async () => {
@@ -158,6 +184,7 @@ export function createNowPlayingPoller({
       const next = normalizeOwner(value);
       ownerRevision += 1;
       discoveryEpoch += 1;
+      cancelDiscovery();
       const changedTarget = !sameTarget(owner, next);
       const changedPlayback = owner?.isPlaying !== next?.isPlaying;
       owner = next;
@@ -170,10 +197,12 @@ export function createNowPlayingPoller({
     removeTab(tabId) {
       if (owner?.tabId !== tabId) return;
       ownerRevision += 1;
+      discoveryEpoch += 1;
       owner = null;
       failures = 0;
       cancelTimer();
       cancelRequest();
+      cancelDiscovery();
     },
     async stop() {
       disposed = true;
@@ -182,6 +211,7 @@ export function createNowPlayingPoller({
       discoveryEpoch += 1;
       cancelTimer();
       cancelRequest();
+      cancelDiscovery();
       api.alarms?.onAlarm?.removeListener?.(alarmListener);
       await ensureAlarm();
     },

@@ -7143,7 +7143,17 @@ function buildDiscordConnectionReport(result, local = {}) {
   } else if (!active && playback === 'ad') {
     use('ad', 'settings_discord_test_ad', 'settings_discord_test_ad_help', 'play');
   } else if (!active && playback === 'playing') {
-    use('not_received', 'settings_discord_test_not_received', 'settings_discord_test_stale_help');
+    const captureHelp = {
+      metadata_unavailable: 'settings_discord_test_metadata_help',
+      track_id_unavailable: 'settings_discord_test_track_id_help',
+      metadata_settling: 'settings_discord_test_settling_help',
+      collector_error: 'settings_discord_test_collector_help',
+      waiting_retry: 'settings_discord_test_retrying_help',
+      relay_error: 'settings_discord_test_retrying_help',
+      publishing: 'settings_discord_test_publishing_help',
+    };
+    use('not_received', 'settings_discord_test_not_received',
+      Object.hasOwn(captureHelp, local.collector?.stage) ? captureHelp[local.collector.stage] : 'settings_discord_test_stale_help');
   } else if (!active && playback !== 'paused') {
     use('no_playback', 'settings_discord_status_waiting', 'settings_discord_test_play_help', 'play');
   } else if (playback === 'paused') {
@@ -7180,6 +7190,15 @@ function readDiscordTestPlayback() {
     if (!media || media.ended || media.readyState === 0) return 'none';
     return media.paused ? 'paused' : 'playing';
   } catch (_) { return 'none'; }
+}
+
+function readDiscordCollectorDiagnostics() {
+  try {
+    const read = globalThis.YTMImmersionNowPlaying?.getDiagnostics;
+    if (typeof read !== 'function') return {};
+    const value = read();
+    return typeof value?.stage === 'string' ? { stage: value.stage } : {};
+  } catch (_) { return {}; }
 }
 
 function showDiscordConnectionTestPopup() {
@@ -7255,7 +7274,9 @@ async function checkDiscordConnection(button, statusEl) {
   finally { clearTimeout(timer); }
   if (run !== discordTestRun) return;
   const enabled = document.getElementById('discord-enabled-toggle')?.checked === true;
-  const report = buildDiscordConnectionReport(result, { enabled, playback: readDiscordTestPlayback() });
+  const report = buildDiscordConnectionReport(result, {
+    enabled, playback: readDiscordTestPlayback(), collector: readDiscordCollectorDiagnostics(),
+  });
   if (statusEl) statusEl.textContent = t(report.titleKey);
   if (dialog.isConnected) renderDiscordConnectionReport(dialog, report, () => { void checkDiscordConnection(button, statusEl); });
   button.disabled = false;

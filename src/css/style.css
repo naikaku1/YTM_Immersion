@@ -5073,6 +5073,47 @@ a.settings-link-btn svg {
   display: block;
 }
 
+.ytm-discord-auth-dialog {
+  box-sizing: border-box;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 20px;
+  background: #181921;
+  color: #f5f5ff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  font: 14px/1.7 system-ui, sans-serif;
+}
+
+.ytm-discord-auth-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.ytm-discord-auth-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 19px;
+}
+
+.ytm-discord-auth-dialog a {
+  color: #aab2ff;
+  text-underline-offset: 3px;
+}
+
+.ytm-discord-auth-dialog .ytm-discord-auth-note {
+  color: #bfc0d0;
+  font-size: 12px;
+}
+
+.ytm-discord-auth-dialog button {
+  margin-top: 8px;
+}
+
+#panel-integrations a.settings-action-btn {
+  text-decoration: none;
+  text-align: center;
+}
+
 /* videoId からもサムネイルを引けなかった行だけの保険 */
 .queue-img-fallback {
   display: flex;

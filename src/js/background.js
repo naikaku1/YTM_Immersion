@@ -4,6 +4,77 @@ import * as Extra from './module/extra-providers.js';
 import * as Sources from './module/lyric-sources.js';
 import * as Agreement from './module/lyrics-agreement.js';
 import * as LocalLyrics from './module/local-lyrics.js';
+import { createNowPlayingRelay } from './module/bg-now-playing.js';
+import { createNowPlayingPoller } from './module/bg-now-playing-poll.js';
+
+// A service worker may restart between heartbeats. Keep only the owning tab in
+// session storage, so another paused tab cannot erase that tab's activity.
+const NOW_PLAYING_OWNER_KEY = 'ytmDiscordNowPlayingOwner';
+let nowPlayingPoller = null;
+const nowPlayingRelay = createNowPlayingRelay({
+  loadSettings: () => new Promise(resolve => {
+    chrome.storage.local.get(['ytm_discord_enabled', CloudSync.CLOUD_STORAGE_KEY], items => {
+      resolve({
+        enabled: items?.ytm_discord_enabled === true,
+        recoveryToken: items?.[CloudSync.CLOUD_STORAGE_KEY]?.recoveryToken,
+      });
+    });
+  }),
+  loadOwner: () => new Promise(resolve => {
+    if (!chrome.storage.session) { resolve(null); return; }
+    chrome.storage.session.get(NOW_PLAYING_OWNER_KEY, items => resolve(items?.[NOW_PLAYING_OWNER_KEY] || null));
+  }),
+  saveOwner: owner => new Promise(resolve => {
+    const finish = () => {
+      nowPlayingPoller?.ownerChanged(owner);
+      resolve();
+    };
+    if (!chrome.storage.session) { finish(); return; }
+    chrome.storage.session.set({ [NOW_PLAYING_OWNER_KEY]: owner }, finish);
+  }),
+});
+
+nowPlayingPoller = createNowPlayingPoller({
+  api: chrome,
+  loadState: async () => {
+    const [enabled, owner] = await Promise.all([
+      new Promise(resolve => chrome.storage.local.get('ytm_discord_enabled', items => resolve(items?.ytm_discord_enabled === true))),
+      new Promise(resolve => {
+        if (!chrome.storage.session) { resolve(null); return; }
+        chrome.storage.session.get(NOW_PLAYING_OWNER_KEY, items => resolve(items?.[NOW_PLAYING_OWNER_KEY] || null));
+      }),
+    ]);
+    return { enabled, owner };
+  },
+});
+void nowPlayingPoller.restore();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.ytm_discord_enabled) void nowPlayingPoller.refreshSettings();
+  const credential = changes[CloudSync.CLOUD_STORAGE_KEY];
+  const oldToken = credential?.oldValue?.recoveryToken;
+  const newToken = credential?.newValue?.recoveryToken;
+  if (credential && oldToken !== newToken && oldToken) {
+    void nowPlayingRelay.credentialsChanged(oldToken).then(() => {
+      if (!newToken) return;
+      // A rotated token can identify the same account. Refresh after its old
+      // DELETE, even if a paused tab already posted with the replacement token.
+      chrome.tabs.query({ url: 'https://music.youtube.com/*' }, tabs => {
+        if (chrome.runtime.lastError) return;
+        (tabs || []).forEach(tab => {
+          chrome.tabs.sendMessage(tab.id, { type: 'NOW_PLAYING_REFRESH' }, () => { void chrome.runtime.lastError; });
+        });
+      });
+    });
+  } else if (changes.ytm_discord_enabled && changes.ytm_discord_enabled.newValue !== true) {
+    void nowPlayingRelay.disable();
+  }
+});
+chrome.tabs.onRemoved.addListener(tabId => {
+  nowPlayingPoller.removeTab(tabId);
+  void nowPlayingRelay.removeTab(tabId);
+});
 
 // ── デバッグログ ────────────────────────────────────────────
 // Service Worker には localStorage が無いので chrome.storage を見る。
@@ -191,6 +262,21 @@ chrome.commands?.onCommand.addListener((command, tab) => {
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (!req || typeof req !== 'object' || !req.type) {
     return;
+  }
+
+  if (req.type === 'NOW_PLAYING_UPDATE' || req.type === 'NOW_PLAYING_CLEAR' || req.type === 'NOW_PLAYING_STATUS') {
+    // Only our isolated script in the top-level music player may publish data.
+    let trusted = false;
+    try {
+      trusted = sender.id === chrome.runtime.id && sender.frameId === 0 &&
+        new URL(sender.url || sender.tab?.url).origin === 'https://music.youtube.com';
+    } catch (_) { /* Invalid or missing sender. */ }
+    if (!trusted) { sendResponse({ ok: false, error: 'INVALID_SENDER' }); return; }
+    const operation = req.type === 'NOW_PLAYING_UPDATE'
+      ? nowPlayingRelay.update(req.payload, sender)
+      : req.type === 'NOW_PLAYING_CLEAR' ? nowPlayingRelay.clear(sender) : nowPlayingRelay.status();
+    operation.then(sendResponse).catch(() => sendResponse({ ok: false, error: 'RELAY_ERROR' }));
+    return true;
   }
 
   if (req.type === 'GET_CLOUD_STATE') {

@@ -5073,10 +5073,12 @@ a.settings-link-btn svg {
   display: block;
 }
 
-.ytm-discord-auth-dialog {
+.ytm-discord-auth-dialog,
+.ytm-discord-test-dialog {
   box-sizing: border-box;
   width: min(440px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
+  overflow-y: auto;
   padding: 26px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 20px;
@@ -5086,16 +5088,19 @@ a.settings-link-btn svg {
   font: 14px/1.7 system-ui, sans-serif;
 }
 
-.ytm-discord-auth-dialog::backdrop {
+.ytm-discord-auth-dialog::backdrop,
+.ytm-discord-test-dialog::backdrop {
   background: rgba(0, 0, 0, 0.65);
 }
 
-.ytm-discord-auth-dialog h3 {
+.ytm-discord-auth-dialog h3,
+.ytm-discord-test-dialog h3 {
   margin: 0 0 12px;
   font-size: 19px;
 }
 
-.ytm-discord-auth-dialog a {
+.ytm-discord-auth-dialog a,
+.ytm-discord-test-dialog a {
   color: #aab2ff;
   text-underline-offset: 3px;
 }
@@ -5112,6 +5117,230 @@ a.settings-link-btn svg {
 #panel-integrations a.settings-action-btn {
   text-decoration: none;
   text-align: center;
+}
+
+.ytm-discord-test-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.ytm-discord-test-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.ytm-discord-test-dialog > h3,
+.ytm-discord-test-dialog > .ytm-discord-test-footer {
+  flex-shrink: 0;
+}
+
+.ytm-discord-test-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ytm-discord-test-summary {
+  margin: 0 0 18px;
+  padding: 15px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ytm-discord-test-summary[data-level="success"] {
+  border-color: rgba(105, 215, 160, 0.3);
+  background: rgba(105, 215, 160, 0.07);
+}
+
+.ytm-discord-test-summary[data-level="warning"] {
+  border-color: rgba(237, 194, 111, 0.3);
+  background: rgba(237, 194, 111, 0.07);
+}
+
+.ytm-discord-test-summary[data-level="error"] {
+  border-color: rgba(255, 131, 145, 0.3);
+  background: rgba(255, 131, 145, 0.07);
+}
+
+.ytm-discord-test-summary h4 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.ytm-discord-test-summary p {
+  margin: 7px 0 0;
+  color: #c7c8d5;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.ytm-discord-test-checks {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.ytm-discord-test-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ytm-discord-test-check:last-child {
+  border-bottom: 0;
+}
+
+.ytm-discord-test-badge {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #babccc;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.ytm-discord-test-check[data-state="pass"] .ytm-discord-test-badge {
+  color: #8ce0b4;
+  background: rgba(105, 215, 160, 0.13);
+}
+
+.ytm-discord-test-check[data-state="fail"] .ytm-discord-test-badge {
+  color: #ff9aa5;
+  background: rgba(255, 131, 145, 0.13);
+}
+
+.ytm-discord-test-check[data-state="wait"] .ytm-discord-test-badge {
+  color: #efd095;
+  background: rgba(237, 194, 111, 0.13);
+}
+
+.ytm-discord-test-label {
+  display: block;
+  color: #efeff7;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ytm-discord-test-detail {
+  display: block;
+  margin-top: 3px;
+  color: #b4b6c7;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.ytm-discord-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.ytm-discord-test-actions .settings-action-btn {
+  max-width: 100%;
+  text-decoration: none;
+  white-space: normal;
+}
+
+.ytm-discord-test-note {
+  display: block;
+  color: #b4b6c7;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.ytm-discord-test-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+@media (max-width: 480px) {
+  .ytm-discord-test-dialog {
+    padding: 20px;
+  }
+}
+
+.ytm-discord-setup-card .ytm-discord-setup-intro {
+  margin: 0;
+  padding: 16px 18px 12px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ytm-discord-setup-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: discord-setup;
+}
+
+.ytm-discord-setup-steps li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  counter-increment: discord-setup;
+}
+
+.ytm-discord-setup-steps li::before {
+  content: counter(discord-setup);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ytm-discord-setup-step-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ytm-discord-setup-steps .settings-action-btn {
+  align-self: center;
+  max-width: 100%;
+}
+
+.ytm-discord-setup-note {
+  margin: 0;
+  padding: 0 18px 16px 52px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .ytm-discord-setup-steps li {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .ytm-discord-setup-steps .settings-action-btn {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+  }
 }
 
 /* videoId からもサムネイルを引けなかった行だけの保険 */

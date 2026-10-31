@@ -5,6 +5,12 @@ export const NOW_PLAYING_URL = 'https://lrchub.coreone.work/api/now-playing';
 const MAX_LYRICS_BYTES = 128 * 1024;
 const encoder = new TextEncoder();
 const byteLength = value => encoder.encode(value).byteLength;
+// These are the public machine states emitted by LRCHub's Social runtime.
+// Never forward arbitrary server messages or a credential-looking identifier.
+const SOCIAL_WORKER_STATES = new Set([
+  'idle', 'ready', 'updated', 'error', 'disconnected', 'token_expired',
+  'authorization_required', 'authorization_error', 'queued',
+]);
 
 const isPublicArtworkUrl = value => {
   if (typeof value !== 'string' || byteLength(value) > 300) return false;
@@ -122,11 +128,28 @@ export function createNowPlayingRelay({
       };
       if (typeof data?.active === 'boolean') result.active = data.active;
       else if (response.ok && method === 'DELETE') result.active = false;
-      const state = data?.social?.worker?.state;
-      // The API's state is a small machine identifier, never a server message.
-      if (typeof state === 'string' && /^[a-z_-]{1,64}$/.test(state)) {
-        result.social = { worker: { state } };
+      if (typeof data?.stale === 'boolean') result.stale = data.stale;
+      if (data?.playback === null) {
+        result.playback = { has_track: false, is_playing: false };
+      } else if (typeof data?.playback?.is_playing === 'boolean') {
+        const track = data.playback.track;
+        result.playback = {
+          has_track: !!track && typeof track === 'object' && !Array.isArray(track),
+          is_playing: data.playback.is_playing,
+        };
       }
+      const social = {};
+      for (const key of ['available', 'connected']) {
+        if (typeof data?.social?.[key] === 'boolean') social[key] = data.social[key];
+      }
+      const worker = {};
+      for (const key of ['configured', 'running']) {
+        if (typeof data?.social?.worker?.[key] === 'boolean') worker[key] = data.social.worker[key];
+      }
+      const state = data?.social?.worker?.state;
+      if (SOCIAL_WORKER_STATES.has(state)) worker.state = state;
+      if (Object.keys(worker).length) social.worker = worker;
+      if (Object.keys(social).length) result.social = social;
       return result;
     } catch {
       return { ok: false, error: controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_ERROR' };
@@ -163,9 +186,19 @@ export function createNowPlayingRelay({
       if (result.ok) await setOwner(null);
       return result;
     }
+    if (job.action === 'status') {
+      const diagnostics = {
+        enabled: settings?.enabled === true,
+        has_token: !!token,
+        // This is the last local observation, not proof of server receipt.
+        local_playback: !owner ? 'none' : (owner.isPlaying === true ? 'playing' : 'paused'),
+      };
+      if (!diagnostics.enabled) return { ok: false, error: 'DISABLED', active: false, diagnostics };
+      if (!token) return { ok: false, error: 'NO_TOKEN', diagnostics };
+      return { ...await request('GET', token), diagnostics };
+    }
     if (settings?.enabled !== true) return { ok: false, error: 'DISABLED', active: false };
     if (!token) return { ok: false, error: 'NO_TOKEN' };
-    if (job.action === 'status') return request('GET', token);
 
     const payload = job.payload;
     if (!payload.is_playing && owner && !sameDocument(owner, job.sender)) {

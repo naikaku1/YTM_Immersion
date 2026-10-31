@@ -6702,6 +6702,8 @@ function isInsideSettingsUi(target) {
   if (ui.settings.contains(target)) return true;
   const discordDialog = document.getElementById('ytm-discord-auth-dialog');
   if (discordDialog && discordDialog.contains(target)) return true;
+  const discordTestDialog = document.getElementById('ytm-discord-test-dialog');
+  if (discordTestDialog && discordTestDialog.contains(target)) return true;
   const etcMenu = document.getElementById('ui-lang-etc-menu');
   return !!(etcMenu && etcMenu.contains(target));
 }
@@ -7089,35 +7091,173 @@ function updateLyricMotionSettingsState() {
   if (staggerToggle) staggerToggle.disabled = !!lowCpuToggle?.checked;
 }
 
-function getDiscordConnectionStatusKey(result) {
-  const code = result && result.error;
-  if (code === 'NO_TOKEN') return 'settings_discord_status_token';
-  if (code === 'DISABLED' || code === 'NO_ENABLE') return 'settings_discord_status_off';
-  if (code === 'HTTP_401' || code === 'HTTP_403' || result?.status === 401 || result?.status === 403) {
-    return 'settings_discord_status_auth';
+// Diagnose only facts supplied by the authenticated API or the current player.
+// A missing token alone cannot tell us whether an LRCHub account exists.
+function buildDiscordConnectionReport(result, local = {}) {
+  const diagnostics = result?.diagnostics || {};
+  const code = result?.error;
+  const enabled = (typeof local.enabled === 'boolean' ? local.enabled : true) &&
+    diagnostics.enabled !== false && code !== 'DISABLED' && code !== 'NO_ENABLE';
+  const hasToken = typeof diagnostics.has_token === 'boolean' ? diagnostics.has_token
+    : code === 'NO_TOKEN' ? false : result?.ok ? true : null;
+  const invalidToken = code === 'HTTP_401' || result?.status === 401;
+  const forbidden = code === 'HTTP_403' || result?.status === 403;
+  const online = result?.ok === true;
+  const social = result?.social || {};
+  const worker = social.worker || {};
+  const authorizationProblem = social.available !== false && (
+    social.connected === false || (social.connected !== true && worker.state === 'authorization_required')
+  );
+  const serverProblem = social.available === false || worker.configured === false || worker.running === false ||
+    (Number(result?.status) >= 500);
+  const playback = local.playback || (result?.playback?.has_track
+    ? result.playback.is_playing ? 'playing' : 'paused' : diagnostics.local_playback || 'none');
+  const active = result?.active === true && result?.stale !== true;
+  const reflected = online && active && !serverProblem && !authorizationProblem && worker.state === 'updated';
+  let state = 'received';
+  let level = 'warning';
+  let titleKey = 'settings_discord_status_received';
+  let descriptionKey = 'settings_discord_test_received_help';
+  let action = 'retry';
+  const use = (nextState, title, description, nextAction = 'retry', nextLevel = 'warning') => {
+    state = nextState; titleKey = title; descriptionKey = description; action = nextAction; level = nextLevel;
+  };
+  if (!enabled || code === 'DISABLED' || code === 'NO_ENABLE') {
+    use('off', 'settings_discord_status_off', 'settings_discord_test_off_help', 'enable');
+  } else if (hasToken === false || code === 'NO_TOKEN') {
+    use('token', 'settings_discord_status_token', 'settings_discord_test_token_help', 'token');
+  } else if (invalidToken) {
+    use('token_invalid', 'settings_discord_test_invalid_token', 'settings_discord_test_invalid_help', 'token', 'error');
+  } else if (forbidden) {
+    use('access_denied', 'settings_discord_test_access_denied', 'settings_discord_test_access_help', 'mypage', 'error');
+  } else if (serverProblem) {
+    use('server', 'settings_discord_test_server', 'settings_discord_test_server_help', 'retry', 'error');
+  } else if (!online) {
+    use('network', 'settings_discord_status_failed', 'settings_discord_test_network_help', 'retry', 'error');
+  } else if (authorizationProblem) {
+    use('authorization', 'settings_discord_auth_title', 'settings_discord_test_auth_help', 'mypage');
+  } else if (['error', 'authorization_error', 'token_expired'].includes(worker.state)) {
+    use('reflection_error', 'settings_discord_status_reflection_error', 'settings_discord_test_reflection_help', 'mypage', 'error');
+  } else if (result.stale === true) {
+    use('stale', 'settings_discord_test_stale', 'settings_discord_test_stale_help');
+  } else if (!active && playback === 'ad') {
+    use('ad', 'settings_discord_test_ad', 'settings_discord_test_ad_help', 'play');
+  } else if (!active && playback === 'playing') {
+    use('not_received', 'settings_discord_test_not_received', 'settings_discord_test_stale_help');
+  } else if (!active && playback !== 'paused') {
+    use('no_playback', 'settings_discord_status_waiting', 'settings_discord_test_play_help', 'play');
+  } else if (playback === 'paused') {
+    use('paused', 'settings_discord_test_paused', 'settings_discord_test_paused_help', 'play');
+  } else if (reflected) {
+    use('updated', 'settings_discord_status_updated', 'settings_discord_test_updated_help', 'retry', 'success');
   }
-  if (!result || !result.ok) return 'settings_discord_status_failed';
-  const workerState = result.social?.worker?.state;
-  if (workerState === 'error') return 'settings_discord_status_reflection_error';
-  if (!result.active) return 'settings_discord_status_waiting';
-  return workerState === 'updated' ? 'settings_discord_status_updated' : 'settings_discord_status_received';
+  const check = (labelKey, checkState, detailKey) => ({ labelKey, state: checkState, detailKey });
+  const notChecked = 'settings_discord_test_unknown';
+  const ok = 'settings_discord_test_ok';
+  const checks = [
+    check('settings_discord_test_feature', enabled ? 'pass' : 'fail', enabled ? ok : 'settings_discord_status_off'),
+    check('settings_discord_test_token', hasToken === false || invalidToken ? 'fail' : online ? 'pass' : 'unknown',
+      hasToken === false ? 'settings_discord_status_token' : invalidToken ? 'settings_discord_test_invalid_token'
+        : online ? ok : hasToken ? 'settings_discord_test_token_stored' : notChecked),
+    check('settings_discord_test_server_label', online && social.available !== false ? 'pass' : !enabled || hasToken === false ? 'unknown' : 'fail',
+      online && social.available !== false ? ok : !enabled || hasToken === false ? notChecked
+        : serverProblem ? 'settings_discord_test_server' : 'settings_discord_status_failed'),
+    check('settings_discord_test_authorization', authorizationProblem ? 'fail' : social.available !== false && social.connected === true ? 'pass' : 'unknown',
+      authorizationProblem ? 'settings_discord_test_auth_help' : social.available !== false && social.connected === true ? ok : notChecked),
+    check('settings_discord_test_playback', active ? 'pass' : online ? 'wait' : 'unknown',
+      active ? ok : online ? playback === 'paused' ? 'settings_discord_test_paused' : 'settings_discord_status_waiting' : notChecked),
+    check('settings_discord_test_reflection', reflected ? 'pass' : authorizationProblem || ['error', 'authorization_error', 'token_expired'].includes(worker.state) || serverProblem ? 'fail' : online ? 'wait' : 'unknown',
+      reflected ? ok : serverProblem ? 'settings_discord_test_server' : authorizationProblem ? 'settings_discord_auth_title'
+        : ['error', 'authorization_error', 'token_expired'].includes(worker.state) ? 'settings_discord_status_reflection_error' : online ? 'settings_discord_test_pending' : notChecked),
+  ];
+  return { state, level, titleKey, descriptionKey, action, checks };
 }
 
+function readDiscordTestPlayback() {
+  try {
+    if ((typeof isAdPlayingNow === 'function' && isAdPlayingNow()) || document.querySelector('.ad-interrupting, .ad-showing')) return 'ad';
+    const media = document.querySelector('video.video-stream') || document.querySelector('video');
+    if (!media || media.ended || media.readyState === 0) return 'none';
+    return media.paused ? 'paused' : 'playing';
+  } catch (_) { return 'none'; }
+}
+
+function showDiscordConnectionTestPopup() {
+  document.getElementById('ytm-discord-test-dialog')?.remove();
+  const dialog = createEl('dialog', 'ytm-discord-test-dialog', 'ytm-discord-test-dialog', `
+    <h3 id="ytm-discord-test-title">${escapeHtml(t('settings_discord_test_title'))}</h3>
+    <div class="ytm-discord-test-content" role="status" aria-live="polite"><p>${escapeHtml(t('settings_discord_status_checking'))}</p></div>
+    <div class="ytm-discord-test-footer"><button type="button" class="settings-action-btn btn-neutral" data-discord-test-close>${escapeHtml(t('settings_close'))}</button></div>
+  `);
+  dialog.setAttribute('aria-labelledby', 'ytm-discord-test-title');
+  dialog.addEventListener('keydown', (event) => { if (event.key === 'Escape') event.stopPropagation(); });
+  dialog.addEventListener('click', (event) => event.stopPropagation());
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.querySelector('[data-discord-test-close]').addEventListener('click', () => dialog.close());
+  document.body.appendChild(dialog);
+  dialog.showModal();
+  return dialog;
+}
+
+function renderDiscordConnectionReport(dialog, report, onRetry) {
+  const marks = { pass: '✓', fail: '!', wait: '…', unknown: '—' };
+  const actionLabel = report.action === 'enable' ? 'settings_discord_test_enable'
+    : report.action === 'token' ? 'settings_discord_token' : report.action === 'mypage' ? 'settings_discord_mypage' : 'settings_discord_test_retry';
+  const primaryAction = report.action === 'mypage'
+    ? `<a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${escapeHtml(t(actionLabel))}</a>`
+    : `<button type="button" class="settings-action-btn btn-neutral" data-discord-test-action="${report.action}">${escapeHtml(t(actionLabel))}</button>`;
+  const accountLink = report.action === 'token'
+    ? `<a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${escapeHtml(t('settings_discord_setup_account_link'))}</a>` : '';
+  dialog.querySelector('.ytm-discord-test-content').innerHTML = `
+    <div class="ytm-discord-test-summary" data-level="${report.level}"><h4>${escapeHtml(t(report.titleKey))}</h4><p>${escapeHtml(t(report.descriptionKey))}</p></div>
+    <div class="ytm-discord-test-actions">${primaryAction}${accountLink}</div>
+    <ul class="ytm-discord-test-checks">${report.checks.map(item => `
+      <li class="ytm-discord-test-check" data-state="${item.state}"><span class="ytm-discord-test-badge" aria-hidden="true">${marks[item.state]}</span><div><strong class="ytm-discord-test-label">${escapeHtml(t(item.labelKey))}</strong><span class="ytm-discord-test-detail">${escapeHtml(t(item.detailKey))}</span></div></li>
+    `).join('')}</ul>
+    <p class="ytm-discord-test-note">${escapeHtml(t('settings_discord_test_manual_note'))}</p>
+  `;
+  const action = dialog.querySelector('[data-discord-test-action]');
+  action?.addEventListener('click', () => {
+    if (report.action === 'token') {
+      dialog.close();
+      if (typeof CloudSync !== 'undefined' && CloudSync.openPanel) CloudSync.openPanel();
+    } else if (report.action === 'enable') {
+      dialog.close();
+      const toggle = document.getElementById('discord-enabled-toggle');
+      if (toggle) { toggle.checked = true; toggle.dispatchEvent(new Event('change', { bubbles: true })); }
+    } else {
+      onRetry();
+    }
+  });
+}
+
+let discordTestRun = 0;
 async function checkDiscordConnection(button, statusEl) {
+  const run = ++discordTestRun;
+  const dialog = showDiscordConnectionTestPopup();
   button.disabled = true;
-  statusEl.textContent = t('settings_discord_status_checking');
+  if (statusEl) statusEl.textContent = t('settings_discord_status_checking');
   let result;
   let timer;
   try {
+    // Testing immediately after enabling must use the saved preference, even
+    // when the settings' 300 ms autosave debounce has not run yet.
+    if (settingsAutosaveTimer !== null) {
+      clearTimeout(settingsAutosaveTimer);
+      runSettingsAutosave();
+    }
+    while (settingsCommitInFlight) await settingsCommitInFlight;
     result = await Promise.race([
       safeRuntimeSendMessage({ type: 'NOW_PLAYING_STATUS' }),
-      new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false }), 20000); })
+      new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, error: 'TIMEOUT' }), 20000); })
     ]);
   } catch (_) { result = { ok: false }; }
   finally { clearTimeout(timer); }
-  // サーバーのエラー本文を表示せず、確認済みの状態だけを案内する。
-  const enabled = document.getElementById('discord-enabled-toggle')?.checked;
-  statusEl.textContent = t(enabled ? getDiscordConnectionStatusKey(result) : 'settings_discord_status_off');
+  if (run !== discordTestRun) return;
+  const enabled = document.getElementById('discord-enabled-toggle')?.checked === true;
+  const report = buildDiscordConnectionReport(result, { enabled, playback: readDiscordTestPlayback() });
+  if (statusEl) statusEl.textContent = t(report.titleKey);
+  if (dialog.isConnected) renderDiscordConnectionReport(dialog, report, () => { void checkDiscordConnection(button, statusEl); });
   button.disabled = false;
 }
 
@@ -7475,24 +7615,45 @@ function renderSettingsPanel() {
               <div class="setting-row action-row">
                 <div class="setting-info">
                   <span class="setting-name">${t('settings_discord_connection')}</span>
+                  <span class="setting-desc">${t('settings_discord_test_desc')}</span>
                   <span class="setting-desc" id="discord-connection-status" role="status" aria-live="polite">${t(config.discordEnabled ? 'settings_discord_status_unchecked' : 'settings_discord_status_off')}</span>
                 </div>
                 <button type="button" id="discord-status-btn" class="settings-action-btn btn-neutral">${t('settings_discord_check')}</button>
               </div>
-              <div class="setting-row action-row">
-                <div class="setting-info">
-                  <span class="setting-name">${t('settings_discord_account')}</span>
-                  <span class="setting-desc">${t('settings_discord_account_desc')}</span>
-                </div>
-                <button type="button" id="discord-token-btn" class="settings-action-btn btn-neutral">${t('settings_discord_token')}</button>
-              </div>
-              <div class="setting-row action-row">
-                <div class="setting-info">
-                  <span class="setting-name">${t('settings_discord_auth_title')}</span>
-                  <span class="setting-desc">${t('settings_discord_activity_note')}</span>
-                </div>
-                <a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${t('settings_discord_mypage')}</a>
-              </div>
+            </div>
+            <div class="settings-section-title">${t('settings_discord_setup_title')}</div>
+            <div class="settings-group-card ytm-discord-setup-card">
+              <p class="ytm-discord-setup-intro">${t('settings_discord_setup_desc')}</p>
+              <ol class="ytm-discord-setup-steps">
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_account')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_account_desc')}</span>
+                  </div>
+                  <a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${t('settings_discord_setup_account_link')}</a>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_authorize')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_authorize_desc')}</span>
+                  </div>
+                  <a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${t('settings_discord_setup_authorize_link')}</a>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_token')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_token_desc')}</span>
+                  </div>
+                  <button type="button" id="discord-token-btn" class="settings-action-btn btn-neutral">${t('settings_discord_token')}</button>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_play')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_play_desc')}</span>
+                  </div>
+                </li>
+              </ol>
+              <p class="ytm-discord-setup-note">${t('settings_discord_activity_note')}</p>
             </div>
           </div>
 

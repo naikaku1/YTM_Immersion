@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "120",
   "name": "YTM-Immersion",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",
+    "alarms",
     "unlimitedStorage"
   ],
   "host_permissions": [
@@ -71,6 +73,7 @@
         "src/js/module/video-quality.js",
         "src/js/module/video-title.js",
         "src/js/module/lyrics-ui.js",
+        "src/js/module/now-playing.js",
         "src/js/content.js"
       ],
       "css": [

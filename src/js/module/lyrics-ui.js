@@ -2904,7 +2904,7 @@ const MOVIE_SEGMENT_EDGE = 0.05;
 const MOVIE_ID_RECHECK_MS = 500;
 let _movieSegState = { at: 0, videoId: null, segments: null };
 const currentMovieSegments = () => {
-  if (typeof YTMSegmentMap === 'undefined' || moviemode !== true) return null;
+  if (typeof YTMSegmentMap === 'undefined' || !isMoviePlaybackNow()) return null;
   const now = performance.now();
   const st = _movieSegState;
   if (now - st.at >= MOVIE_ID_RECHECK_MS || (st.videoId && st.segments === undefined)) {
@@ -2938,8 +2938,13 @@ const movieToSongTime = (tv, segs) => {
 // 音源の時刻の歌詞は上の対応表で MV の時刻に直して出すので、表がある時だけ寄せる
 // (表が無いと音源の時刻のまま MV に当たってずれる)。返すのは { videoId, title, durationSec }。
 const MOVIE_SONG_WAIT_MS = 1500;
-const isMoviePlaybackNow = () => moviemode === true
-  || document.querySelector('ytmusic-av-toggle')?.getAttribute('playback-mode') === 'OMV_PREFERRED';
+function isMoviePlaybackNow() {
+  // The Immersion movie observer is intentionally absent while Discord alone follows playback.
+  const mode = document.querySelector('ytmusic-av-toggle')?.getAttribute('playback-mode');
+  if (mode === 'OMV_PREFERRED') return true;
+  if (mode === 'ATV_PREFERRED') return false;
+  return moviemode === true;
+}
 const resolveMovieLookupSong = async (videoId) => {
   if (!videoId || typeof YTMSegmentMap === 'undefined' || !YTMSegmentMap.song || !isMoviePlaybackNow()) return null;
   const song = await Promise.race([
@@ -3149,6 +3154,7 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_disabled_lyric_sources',
   'ytm_queue_pinned',
   'ytm_pip_auto_open',
+  'ytm_discord_enabled',
   'ytm_bar_autohide',
   'ytm_korean_ruby',
 ];
@@ -5617,6 +5623,77 @@ const getCurrentPlaybackSeconds = () => {
   return null;
 };
 
+// Discord follows the media clock even while background tabs stop painting rows.
+// null means timed lyrics are unavailable; an empty string is an intentional gap.
+const getCurrentPlaybackLyricText = () => {
+  const meta = getMetadata();
+  if (!meta) return null;
+  if (`${meta.title}///${meta.artist}` !== currentKey) return '';
+  if (
+    typeof currentLyricsVideoId !== 'undefined' && currentLyricsVideoId &&
+    typeof getCurrentVideoId === 'function' && getCurrentVideoId() !== currentLyricsVideoId
+  ) return '';
+
+  const time = getCurrentPlaybackTimeSec();
+  if (!Number.isFinite(time)) return null;
+  const cleanText = value => String(value || '').replace(/\s+/g, ' ').trim();
+  if (config.useAnimatedCaptions && Array.isArray(animatedCaptionData?.events)) {
+    const texts = getActiveTimedTextEvents(animatedCaptionData.events, time * 1000)
+      .map(event => cleanText(event.text))
+      .filter(Boolean);
+    return [...new Set(texts)].join(' / ');
+  }
+  if (!hasTimestamp || !Array.isArray(lyricsData) || !lyricsData.length) return null;
+
+  let primaryIndex = -1;
+  for (let i = 0; i < lyricsData.length; i++) {
+    if (!Number.isFinite(lyricsData[i]?.time)) continue;
+    if (lyricsData[i].time > time) break;
+    primaryIndex = i;
+  }
+  const active = new Set();
+  const hasRange = line => Number.isFinite(line?._dynamicRenderStartSec) &&
+    Number.isFinite(line?._dynamicRenderEndSec);
+  if (primaryIndex >= 0) {
+    const primary = lyricsData[primaryIndex];
+    if (!hasRange(primary) || isLineDynamicallyActiveAtTime(primary, time)) {
+      active.add(primaryIndex);
+      lyricsData.forEach((line, index) => {
+        if (isSameTimestamp(line?.time, primary.time) &&
+          (!hasRange(line) || isLineDynamicallyActiveAtTime(line, time))) active.add(index);
+      });
+      const previous = lyricsData[primaryIndex - 1];
+      if (active.size === 1 && previous && !hasRange(previous) &&
+        primary.time - previous.time > 0 && primary.time - previous.time <= 1 &&
+        !(primary.duetSide && previous.duetSide && primary.duetSide !== previous.duetSide)) {
+        const previousText = normalizeLyricCompareTextStrict(previous.text);
+        const primaryText = normalizeLyricCompareTextStrict(primary.text);
+        if (previousText && primaryText && scoreLyricTextMatch(previousText, primaryText) < 100) {
+          active.add(primaryIndex - 1);
+        }
+      }
+    }
+  }
+  lyricsData.forEach((line, index) => {
+    if (isLineDynamicallyActiveAtTime(line, time)) active.add(index);
+  });
+  const indices = [...active].sort((a, b) => a - b);
+  const duplicateTolerance = Array.isArray(dynamicLines) && dynamicLines.length
+    ? 5 : DUET_DUPLICATE_TOLERANCE;
+  const texts = indices.filter(index => {
+    const line = lyricsData[index];
+    if (line.duetSide !== 'right') return true;
+    const text = normalizeLyricCompareTextStrict(line.text);
+    return !indices.some(other => {
+      const left = lyricsData[other];
+      return left.duetSide === 'left' &&
+        isSameTimestamp(left.time, line.time, duplicateTolerance) && text &&
+        scoreLyricTextMatch(normalizeLyricCompareTextStrict(left.text), text) >= 100;
+    });
+  }).map(index => cleanText(lyricsData[index].text || lyricsData[index].rawLine)).filter(Boolean);
+  return [...new Set(texts)].join(' / ');
+};
+
 const getCurrentRenderedLyricText = () => {
   if (lastActiveIndex >= 0 && Array.isArray(lyricsData) && lyricsData[lastActiveIndex]) {
     const line = lyricsData[lastActiveIndex];
@@ -5629,6 +5706,11 @@ const getCurrentRenderedLyricText = () => {
   } catch (e) {
     return '';
   }
+};
+
+globalThis.YTMImmersionDiscordLyrics = {
+  getCurrentPlaybackLyricText,
+  refreshPlayback: refreshDiscordPlayback,
 };
 
 const getCurrentRenderedLyricIndex = () => {
@@ -6577,6 +6659,7 @@ async function initSettings() {
   await restoreLyricEffectsPreferences();
   applyLyricEffectsSettings();
   await restorePipPreferences();
+  config.discordEnabled = (await storage.get('ytm_discord_enabled')) === true;
 
   // ★スライダー初期値反映
   const weightStored = await storage.get('ytm_lyric_weight');
@@ -6617,6 +6700,10 @@ async function initSettings() {
 function isInsideSettingsUi(target) {
   if (!target || !ui.settings) return false;
   if (ui.settings.contains(target)) return true;
+  const discordDialog = document.getElementById('ytm-discord-auth-dialog');
+  if (discordDialog && discordDialog.contains(target)) return true;
+  const discordTestDialog = document.getElementById('ytm-discord-test-dialog');
+  if (discordTestDialog && discordTestDialog.contains(target)) return true;
   const etcMenu = document.getElementById('ui-lang-etc-menu');
   return !!(etcMenu && etcMenu.contains(target));
 }
@@ -6646,8 +6733,10 @@ const SETTINGS_AUTOSAVE_MS = 300;
 let settingsAutosaveTimer = null;
 let settingsCommitInFlight = null;
 let settingsCommitAgain = false;
+let settingsResetInProgress = false;
 function runSettingsAutosave() {
   settingsAutosaveTimer = null;
+  if (settingsResetInProgress) return;
   const commit = ui.settings && ui.settings._commitSettings;
   if (!commit || !settingsSession) return;
   if (settingsCommitInFlight) { settingsCommitAgain = true; return; }
@@ -6659,6 +6748,7 @@ function runSettingsAutosave() {
     });
 }
 function scheduleSettingsAutosave() {
+  if (settingsResetInProgress) return;
   clearTimeout(settingsAutosaveTimer);
   settingsAutosaveTimer = setTimeout(runSettingsAutosave, SETTINGS_AUTOSAVE_MS);
 }
@@ -6692,6 +6782,7 @@ async function openSettings() {
 }
 
 function closeSettings({ saved = false } = {}) {
+  if (settingsResetInProgress) return;
   if (!ui.settings || !ui.settings.classList.contains('active')) return;
   // 変えた直後(自動保存の待ち)や保存の途中に閉じられたら、捨てずに保存してから閉じる
   const commit = ui.settings._commitSettings;
@@ -6701,7 +6792,10 @@ function closeSettings({ saved = false } = {}) {
       clearTimeout(settingsAutosaveTimer);
       settingsAutosaveTimer = null;
     }
-    const finish = () => (pending ? commit({ close: true }) : closeSettings({ saved: true }));
+    const finish = () => {
+      if (settingsResetInProgress) return;
+      return pending ? commit({ close: true }) : closeSettings({ saved: true });
+    };
     if (settingsCommitInFlight) {
       settingsCommitInFlight.then(finish);
       return;
@@ -6997,6 +7091,217 @@ function updateLyricMotionSettingsState() {
   if (staggerToggle) staggerToggle.disabled = !!lowCpuToggle?.checked;
 }
 
+// Diagnose only facts supplied by the authenticated API or the current player.
+// A missing token alone cannot tell us whether an LRCHub account exists.
+function buildDiscordConnectionReport(result, local = {}) {
+  const diagnostics = result?.diagnostics || {};
+  const code = result?.error;
+  const enabled = (typeof local.enabled === 'boolean' ? local.enabled : true) &&
+    diagnostics.enabled !== false && code !== 'DISABLED' && code !== 'NO_ENABLE';
+  const hasToken = typeof diagnostics.has_token === 'boolean' ? diagnostics.has_token
+    : code === 'NO_TOKEN' ? false : result?.ok ? true : null;
+  const invalidToken = code === 'HTTP_401' || result?.status === 401;
+  const forbidden = code === 'HTTP_403' || result?.status === 403;
+  const online = result?.ok === true;
+  const social = result?.social || {};
+  const worker = social.worker || {};
+  const authorizationProblem = social.available !== false && (
+    social.connected === false || (social.connected !== true && worker.state === 'authorization_required')
+  );
+  const serverProblem = social.available === false || worker.configured === false || worker.running === false ||
+    (Number(result?.status) >= 500);
+  const playback = local.playback || (result?.playback?.has_track
+    ? result.playback.is_playing ? 'playing' : 'paused' : diagnostics.local_playback || 'none');
+  const active = result?.active === true && result?.stale !== true;
+  const reflected = online && active && !serverProblem && !authorizationProblem && worker.state === 'updated';
+  let state = 'received';
+  let level = 'warning';
+  let titleKey = 'settings_discord_status_received';
+  let descriptionKey = 'settings_discord_test_received_help';
+  let action = 'retry';
+  const use = (nextState, title, description, nextAction = 'retry', nextLevel = 'warning') => {
+    state = nextState; titleKey = title; descriptionKey = description; action = nextAction; level = nextLevel;
+  };
+  if (!enabled || code === 'DISABLED' || code === 'NO_ENABLE') {
+    use('off', 'settings_discord_status_off', 'settings_discord_test_off_help', 'enable');
+  } else if (hasToken === false || code === 'NO_TOKEN') {
+    use('token', 'settings_discord_status_token', 'settings_discord_test_token_help', 'token');
+  } else if (invalidToken) {
+    use('token_invalid', 'settings_discord_test_invalid_token', 'settings_discord_test_invalid_help', 'token', 'error');
+  } else if (forbidden) {
+    use('access_denied', 'settings_discord_test_access_denied', 'settings_discord_test_access_help', 'mypage', 'error');
+  } else if (serverProblem) {
+    use('server', 'settings_discord_test_server', 'settings_discord_test_server_help', 'retry', 'error');
+  } else if (!online) {
+    use('network', 'settings_discord_status_failed', 'settings_discord_test_network_help', 'retry', 'error');
+  } else if (authorizationProblem) {
+    use('authorization', 'settings_discord_auth_title', 'settings_discord_test_auth_help', 'mypage');
+  } else if (['error', 'authorization_error', 'token_expired'].includes(worker.state)) {
+    use('reflection_error', 'settings_discord_status_reflection_error', 'settings_discord_test_reflection_help', 'mypage', 'error');
+  } else if (result.stale === true) {
+    use('stale', 'settings_discord_test_stale', 'settings_discord_test_stale_help');
+  } else if (!active && playback === 'ad') {
+    use('ad', 'settings_discord_test_ad', 'settings_discord_test_ad_help', 'play');
+  } else if (!active && playback === 'playing') {
+    const captureHelp = {
+      metadata_unavailable: 'settings_discord_test_metadata_help',
+      track_id_unavailable: 'settings_discord_test_track_id_help',
+      metadata_settling: 'settings_discord_test_settling_help',
+      collector_error: 'settings_discord_test_collector_help',
+      waiting_retry: 'settings_discord_test_retrying_help',
+      relay_error: 'settings_discord_test_retrying_help',
+      publishing: 'settings_discord_test_publishing_help',
+    };
+    use('not_received', 'settings_discord_test_not_received',
+      Object.hasOwn(captureHelp, local.collector?.stage) ? captureHelp[local.collector.stage] : 'settings_discord_test_stale_help');
+  } else if (!active && playback !== 'paused') {
+    use('no_playback', 'settings_discord_status_waiting', 'settings_discord_test_play_help', 'play');
+  } else if (playback === 'paused') {
+    use('paused', 'settings_discord_test_paused', 'settings_discord_test_paused_help', 'play');
+  } else if (reflected) {
+    use('updated', 'settings_discord_status_updated', 'settings_discord_test_updated_help', 'retry', 'success');
+  }
+  const check = (labelKey, checkState, detailKey) => ({ labelKey, state: checkState, detailKey });
+  const notChecked = 'settings_discord_test_unknown';
+  const ok = 'settings_discord_test_ok';
+  const checks = [
+    check('settings_discord_test_feature', enabled ? 'pass' : 'fail', enabled ? ok : 'settings_discord_status_off'),
+    check('settings_discord_test_token', hasToken === false || invalidToken ? 'fail' : online ? 'pass' : 'unknown',
+      hasToken === false ? 'settings_discord_status_token' : invalidToken ? 'settings_discord_test_invalid_token'
+        : online ? ok : hasToken ? 'settings_discord_test_token_stored' : notChecked),
+    check('settings_discord_test_server_label', online && social.available !== false ? 'pass' : !enabled || hasToken === false ? 'unknown' : 'fail',
+      online && social.available !== false ? ok : !enabled || hasToken === false ? notChecked
+        : serverProblem ? 'settings_discord_test_server' : 'settings_discord_status_failed'),
+    check('settings_discord_test_authorization', authorizationProblem ? 'fail' : social.available !== false && social.connected === true ? 'pass' : 'unknown',
+      authorizationProblem ? 'settings_discord_test_auth_help' : social.available !== false && social.connected === true ? ok : notChecked),
+    check('settings_discord_test_playback', active ? 'pass' : online ? 'wait' : 'unknown',
+      active ? ok : online ? playback === 'paused' ? 'settings_discord_test_paused' : 'settings_discord_status_waiting' : notChecked),
+    check('settings_discord_test_reflection', reflected ? 'pass' : authorizationProblem || ['error', 'authorization_error', 'token_expired'].includes(worker.state) || serverProblem ? 'fail' : online ? 'wait' : 'unknown',
+      reflected ? ok : serverProblem ? 'settings_discord_test_server' : authorizationProblem ? 'settings_discord_auth_title'
+        : ['error', 'authorization_error', 'token_expired'].includes(worker.state) ? 'settings_discord_status_reflection_error' : online ? 'settings_discord_test_pending' : notChecked),
+  ];
+  return { state, level, titleKey, descriptionKey, action, checks };
+}
+
+function readDiscordTestPlayback() {
+  try {
+    if ((typeof isAdPlayingNow === 'function' && isAdPlayingNow()) || document.querySelector('.ad-interrupting, .ad-showing')) return 'ad';
+    const media = document.querySelector('video.video-stream') || document.querySelector('video');
+    if (!media || media.ended || media.readyState === 0) return 'none';
+    return media.paused ? 'paused' : 'playing';
+  } catch (_) { return 'none'; }
+}
+
+function readDiscordCollectorDiagnostics() {
+  try {
+    const read = globalThis.YTMImmersionNowPlaying?.getDiagnostics;
+    if (typeof read !== 'function') return {};
+    const value = read();
+    return typeof value?.stage === 'string' ? { stage: value.stage } : {};
+  } catch (_) { return {}; }
+}
+
+function showDiscordConnectionTestPopup() {
+  document.getElementById('ytm-discord-test-dialog')?.remove();
+  const dialog = createEl('dialog', 'ytm-discord-test-dialog', 'ytm-discord-test-dialog', `
+    <h3 id="ytm-discord-test-title">${escapeHtml(t('settings_discord_test_title'))}</h3>
+    <div class="ytm-discord-test-content" role="status" aria-live="polite"><p>${escapeHtml(t('settings_discord_status_checking'))}</p></div>
+    <div class="ytm-discord-test-footer"><button type="button" class="settings-action-btn btn-neutral" data-discord-test-close>${escapeHtml(t('settings_close'))}</button></div>
+  `);
+  dialog.setAttribute('aria-labelledby', 'ytm-discord-test-title');
+  dialog.addEventListener('keydown', (event) => { if (event.key === 'Escape') event.stopPropagation(); });
+  dialog.addEventListener('click', (event) => event.stopPropagation());
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.querySelector('[data-discord-test-close]').addEventListener('click', () => dialog.close());
+  document.body.appendChild(dialog);
+  dialog.showModal();
+  return dialog;
+}
+
+function renderDiscordConnectionReport(dialog, report, onRetry) {
+  const marks = { pass: '✓', fail: '!', wait: '…', unknown: '—' };
+  const actionLabel = report.action === 'enable' ? 'settings_discord_test_enable'
+    : report.action === 'token' ? 'settings_discord_token' : report.action === 'mypage' ? 'settings_discord_mypage' : 'settings_discord_test_retry';
+  const primaryAction = report.action === 'mypage'
+    ? `<a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${escapeHtml(t(actionLabel))}</a>`
+    : `<button type="button" class="settings-action-btn btn-neutral" data-discord-test-action="${report.action}">${escapeHtml(t(actionLabel))}</button>`;
+  const accountLink = report.action === 'token'
+    ? `<a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${escapeHtml(t('settings_discord_setup_account_link'))}</a>` : '';
+  dialog.querySelector('.ytm-discord-test-content').innerHTML = `
+    <div class="ytm-discord-test-summary" data-level="${report.level}"><h4>${escapeHtml(t(report.titleKey))}</h4><p>${escapeHtml(t(report.descriptionKey))}</p></div>
+    <div class="ytm-discord-test-actions">${primaryAction}${accountLink}</div>
+    <ul class="ytm-discord-test-checks">${report.checks.map(item => `
+      <li class="ytm-discord-test-check" data-state="${item.state}"><span class="ytm-discord-test-badge" aria-hidden="true">${marks[item.state]}</span><div><strong class="ytm-discord-test-label">${escapeHtml(t(item.labelKey))}</strong><span class="ytm-discord-test-detail">${escapeHtml(t(item.detailKey))}</span></div></li>
+    `).join('')}</ul>
+    <p class="ytm-discord-test-note">${escapeHtml(t('settings_discord_test_manual_note'))}</p>
+  `;
+  const action = dialog.querySelector('[data-discord-test-action]');
+  action?.addEventListener('click', () => {
+    if (report.action === 'token') {
+      dialog.close();
+      if (typeof CloudSync !== 'undefined' && CloudSync.openPanel) CloudSync.openPanel();
+    } else if (report.action === 'enable') {
+      dialog.close();
+      const toggle = document.getElementById('discord-enabled-toggle');
+      if (toggle) { toggle.checked = true; toggle.dispatchEvent(new Event('change', { bubbles: true })); }
+    } else {
+      onRetry();
+    }
+  });
+}
+
+let discordTestRun = 0;
+async function checkDiscordConnection(button, statusEl) {
+  const run = ++discordTestRun;
+  const dialog = showDiscordConnectionTestPopup();
+  button.disabled = true;
+  if (statusEl) statusEl.textContent = t('settings_discord_status_checking');
+  let result;
+  let timer;
+  try {
+    // Testing immediately after enabling must use the saved preference, even
+    // when the settings' 300 ms autosave debounce has not run yet.
+    if (settingsAutosaveTimer !== null) {
+      clearTimeout(settingsAutosaveTimer);
+      runSettingsAutosave();
+    }
+    while (settingsCommitInFlight) await settingsCommitInFlight;
+    result = await Promise.race([
+      safeRuntimeSendMessage({ type: 'NOW_PLAYING_STATUS' }),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, error: 'TIMEOUT' }), 20000); })
+    ]);
+  } catch (_) { result = { ok: false }; }
+  finally { clearTimeout(timer); }
+  if (run !== discordTestRun) return;
+  const enabled = document.getElementById('discord-enabled-toggle')?.checked === true;
+  const report = buildDiscordConnectionReport(result, {
+    enabled, playback: readDiscordTestPlayback(), collector: readDiscordCollectorDiagnostics(),
+  });
+  if (statusEl) statusEl.textContent = t(report.titleKey);
+  if (dialog.isConnected) renderDiscordConnectionReport(dialog, report, () => { void checkDiscordConnection(button, statusEl); });
+  button.disabled = false;
+}
+
+// 有効化した本人だけに、サーバー側で必要な追加認可を案内する。
+// マイページの URL に復活の呪文を載せない。
+function showDiscordAuthorizationPopup() {
+  const previous = document.getElementById('ytm-discord-auth-dialog');
+  if (previous) previous.remove();
+  const dialog = createEl('dialog', 'ytm-discord-auth-dialog', 'ytm-discord-auth-dialog', `
+    <h3 id="ytm-discord-auth-title">${escapeHtml(t('settings_discord_auth_title'))}</h3>
+    <p>${escapeHtml(t('settings_discord_auth_desc'))}</p>
+    <p><a href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${escapeHtml(t('settings_discord_auth_link'))}</a></p>
+    <p class="ytm-discord-auth-note">${escapeHtml(t('settings_discord_activity_note'))}</p>
+    <button type="button" class="settings-action-btn btn-neutral">${escapeHtml(t('settings_close'))}</button>
+  `);
+  dialog.setAttribute('aria-labelledby', 'ytm-discord-auth-title');
+  dialog.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') ev.stopPropagation(); });
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  dialog.querySelector('button').addEventListener('click', () => dialog.close());
+  document.body.appendChild(dialog);
+  dialog.showModal();
+}
+
 function renderSettingsPanel() {
   if (!ui.settings) return;
 
@@ -7049,6 +7354,9 @@ function renderSettingsPanel() {
         </button>
         <button class="settings-tab-btn" data-tab="translation">
           ${ICONS.trans}<span>${t('settings_tab_translation')}</span>
+        </button>
+        <button class="settings-tab-btn" data-tab="integrations">
+          ${ICONS.discord}<span>${t('settings_tab_integrations')}</span>
         </button>
         <button class="settings-tab-btn" data-tab="data">
           ${ICONS.data}<span>${escapeHtml(t('settings_tab_data'))}</span>
@@ -7315,6 +7623,61 @@ function renderSettingsPanel() {
 
           </div>
 
+          <div class="settings-panel" id="panel-integrations">
+            <div class="settings-section-title">${t('settings_sec_discord')}</div>
+            <div class="settings-group-card">
+              <label class="setting-row">
+                <span class="setting-info">
+                  <span class="setting-name">${t('settings_discord_enabled')}</span>
+                  <span class="setting-desc" id="discord-enabled-desc">${t('settings_discord_desc')}</span>
+                </span>
+                <input type="checkbox" id="discord-enabled-toggle" aria-describedby="discord-enabled-desc">
+              </label>
+              <div class="setting-row action-row">
+                <div class="setting-info">
+                  <span class="setting-name">${t('settings_discord_connection')}</span>
+                  <span class="setting-desc">${t('settings_discord_test_desc')}</span>
+                  <span class="setting-desc" id="discord-connection-status" role="status" aria-live="polite">${t(config.discordEnabled ? 'settings_discord_status_unchecked' : 'settings_discord_status_off')}</span>
+                </div>
+                <button type="button" id="discord-status-btn" class="settings-action-btn btn-neutral">${t('settings_discord_check')}</button>
+              </div>
+            </div>
+            <div class="settings-section-title">${t('settings_discord_setup_title')}</div>
+            <div class="settings-group-card ytm-discord-setup-card">
+              <p class="ytm-discord-setup-intro">${t('settings_discord_setup_desc')}</p>
+              <ol class="ytm-discord-setup-steps">
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_account')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_account_desc')}</span>
+                  </div>
+                  <a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${t('settings_discord_setup_account_link')}</a>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_authorize')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_authorize_desc')}</span>
+                  </div>
+                  <a class="settings-action-btn btn-neutral" href="https://lrchub.coreone.work/mypage" target="_blank" rel="noopener noreferrer">${t('settings_discord_setup_authorize_link')}</a>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_token')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_token_desc')}</span>
+                  </div>
+                  <button type="button" id="discord-token-btn" class="settings-action-btn btn-neutral">${t('settings_discord_token')}</button>
+                </li>
+                <li>
+                  <div class="ytm-discord-setup-step-copy">
+                    <span class="setting-name">${t('settings_discord_setup_play')}</span>
+                    <span class="setting-desc">${t('settings_discord_setup_play_desc')}</span>
+                  </div>
+                </li>
+              </ol>
+              <p class="ytm-discord-setup-note">${t('settings_discord_activity_note')}</p>
+            </div>
+          </div>
+
           <div class="settings-panel" id="panel-data">
             <div class="settings-section-title">${t('settings_sec_data')}</div>
             <div class="settings-group-card">
@@ -7426,6 +7789,19 @@ function renderSettingsPanel() {
   document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
   document.getElementById('pip-auto-open-toggle').checked = !!config.pipAutoOpen;
+  const discordToggle = document.getElementById('discord-enabled-toggle');
+  discordToggle.checked = !!config.discordEnabled;
+  discordToggle.addEventListener('change', () => {
+    if (discordToggle.checked) showDiscordAuthorizationPopup();
+    document.getElementById('discord-connection-status').textContent = t(discordToggle.checked ? 'settings_discord_status_unchecked' : 'settings_discord_status_off');
+  });
+  const discordStatusButton = document.getElementById('discord-status-btn');
+  discordStatusButton.addEventListener('click', () => {
+    void checkDiscordConnection(discordStatusButton, document.getElementById('discord-connection-status'));
+  });
+  document.getElementById('discord-token-btn').addEventListener('click', () => {
+    if (typeof CloudSync !== 'undefined' && CloudSync.openPanel) CloudSync.openPanel();
+  });
 
   document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-save-toggle').checked = config.saveSyncOffset;
@@ -7602,6 +7978,7 @@ function renderSettingsPanel() {
     config.useSingerColors = document.getElementById('singer-colors-toggle').checked;
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
     config.pipAutoOpen = document.getElementById('pip-auto-open-toggle').checked;
+    config.discordEnabled = document.getElementById('discord-enabled-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
     config.bgBrightness = document.getElementById('bright-slider').value;
     config.uiScale = normalizeUiScale(document.getElementById('ui-scale-slider')?.value);
@@ -7632,6 +8009,7 @@ function renderSettingsPanel() {
       storage.set('ytm_lrclib_fallback', config.useLrcLibFallback),
       storage.set(MEANING_ALWAYS_SHOW_KEY, config.alwaysShowMeaning),
       storage.set('ytm_pip_auto_open', config.pipAutoOpen),
+      storage.set('ytm_discord_enabled', config.discordEnabled),
       storage.set('ytm_main_lang', config.mainLang),
       storage.set('ytm_sub_lang', config.subLang),
       storage.set('ytm_ui_lang', config.uiLang),
@@ -7756,8 +8134,20 @@ function renderSettingsPanel() {
   // 巻き添えで消えていた。消すのは設定のキーだけにする。
   document.getElementById('clear-all-btn').onclick = async () => {
     if (!confirm(t('settings_reset_confirm'))) return;
-    await Promise.all(SETTINGS_STORAGE_KEYS.map(key => storage.remove(key)));
-    location.reload();
+    // 確認ダイアログ中に期限が来た自動保存や保存の続きが、削除した設定を
+    // 書き戻さないようにする。実行中の書き込みだけは完了してから削除する。
+    settingsResetInProgress = true;
+    clearTimeout(settingsAutosaveTimer);
+    settingsAutosaveTimer = null;
+    settingsCommitAgain = false;
+    try {
+      while (settingsCommitInFlight) await settingsCommitInFlight;
+      await Promise.all(SETTINGS_STORAGE_KEYS.map(key => storage.remove(key)));
+      location.reload();
+    } catch (error) {
+      settingsResetInProgress = false;
+      throw error;
+    }
   };
 
   // すべての歌詞データを削除ボタンの処理
@@ -8034,6 +8424,15 @@ function renderSwitchItems(listEl, items, clearFirst) {
   });
 }
 
+let _movieModeLayoutWrapper = null;
+const setupLayoutMovieMode = () => {
+  // A background lyric fetch must leave YouTube Music's song/video switcher in place.
+  if (!document.body.classList.contains('ytm-custom-layout') ||
+    _movieModeLayoutWrapper === ui.wrapper || !isYTMPremiumUser()) return;
+  _movieModeLayoutWrapper = ui.wrapper;
+  setupMovieMode();
+};
+
 function initLayout() {
   // 既に組んだ UI がそのまま画面に居るなら、参照を取り直す必要は無い。
   // この関数は tick から毎回呼ばれるので、下の拾い直し(getElementById を
@@ -8044,6 +8443,7 @@ function initLayout() {
     ui.lyrics && ui.lyrics.isConnected &&
     document.getElementById('ytm-custom-wrapper') === ui.wrapper
   ) {
+    setupLayoutMovieMode();
     return;
   }
 
@@ -8081,6 +8481,7 @@ function initLayout() {
     // 既存の UI を拾い直すだけのこの経路で解説パネルを作り直すと、
     // 開いている間ずっと、ホバー中もスクロール中も中身が innerHTML ごと
     // 組み直される。中身の更新は初回生成時と setLyricsMeaningData に任せる。
+    setupLayoutMovieMode();
     return;
   }
   ui.bg = createEl('div', 'ytm-custom-bg');
@@ -8238,7 +8639,7 @@ function initLayout() {
   setupMeaningPanelHoverEvents();
   setupAutoHideEvents();
   setupScrollResumeEvents();
-  if (isYTMPremiumUser()) setupMovieMode(); //moviemode setup
+  setupLayoutMovieMode();
 
   // ここまで来たのは、器を新しく組んだ時だけ(既にあるならもっと上で帰っている)。
   // 組み直した直後の器は空なので、いま出していた歌詞をそのまま出し直す。
@@ -11395,6 +11796,7 @@ const balanceWizBar = () => {
   if (useTight !== tightNow) bar.toggleAttribute('data-ytmi-bar-tight', useTight);
 };
 
+let pendingTrackLyricsLoad = null;
 const tick = async () => {
   // Update PIP window state (throttled to once per second)
   if (PipManager && PipManager.pipWindow) {
@@ -11415,21 +11817,20 @@ const tick = async () => {
   const wasShown = document.body.classList.contains('ytm-custom-layout');
   const immersionShown = shouldShowImmersion();
   if (immersionShown !== wasShown) scheduleImmersionBarCheck();
-  // PiP は Immersion の外でも見え続ける。Immersion を閉じたりプレイヤーを
-  // 畳んだりした後も、曲の切り替わりと歌詞の取得だけはここで続ける。
-  // 以前はこの先へ進まなかったので、PiP に前の曲の題名と歌詞が残り、
-  // 前の曲の歌詞を新しい曲の再生位置で光らせていた。
-  // 器(ui.*)は PiP を開いた時点で組まれている。
+  // PiP と Discord の歌詞は Immersion を閉じた後も曲の切り替わりを追う。
+  // Discord の初回取得では非表示の器だけを組み、Immersion は開かない。
   const followForPip = !immersionShown && !!(PipManager && PipManager.pipWindow) && !!ui.lyrics;
+  const followForDiscord = !immersionShown && config.discordEnabled === true;
   if (!immersionShown) {
     if (wasShown) applyImmersionShown(false);
     if (typeof LyricCard !== 'undefined') LyricCard.cancel();
-    if (!followForPip) {
+    if (!followForPip && !followForDiscord) {
       // Immersion を閉じている間は再生位置を追えていない。
       // 次に開いた時、曲の切り替わりを見ていたことにしてはいけない。
       _wasTrackingPlayback = false;
       return;
     }
+    if (followForDiscord && (!ui.lyrics || !ui.lyrics.isConnected)) initLayout();
   } else {
     if (!wasShown) applyImmersionShown(true);
     initLayout();
@@ -11588,7 +11989,11 @@ const tick = async () => {
     refreshCandidateMenu();
     refreshLockMenu();
     resetLyricScrollState(ui.lyrics);
-    setTimeout(() => {
+    let trackLyricsStarted = false;
+    const loadTrackLyrics = async () => {
+      if (trackLyricsStarted) return;
+      trackLyricsStarted = true;
+      if (pendingTrackLyricsLoad === loadTrackLyrics) pendingTrackLyricsLoad = null;
       // この間に次の曲の切り替えを済ませていたら、そちらに任せる
       if (currentKey !== key || (currentLyricsVideoId || '') !== videoId) return;
       const metaNow = getMetadata() || meta;
@@ -11604,11 +12009,15 @@ const tick = async () => {
         requestImmersionTick();
         return;
       }
-      loadLyrics(metaNow);
+      await loadLyrics(metaNow);
       startLyricRafLoop();
       // 以前は 800ms 待っていた。メタデータの食い違いは上で待つようにしたので、
       // ここは連打で途中の曲をいちいち取りに行かないための間だけでよい。
       // 先読み済みの曲でも毎回 1.5 秒ほど歌詞が空になっていた(実機)。
+    };
+    pendingTrackLyricsLoad = loadTrackLyrics;
+    setTimeout(() => {
+      void loadTrackLyrics();
     }, LYRICS_LOAD_DEBOUNCE_MS);
   } else {
     if (meta.src && meta.src !== _artworkSrcShown) {
@@ -11619,6 +12028,15 @@ const tick = async () => {
     if (_artistLinkPendingKey === currentKey && barHasArtistLinks()) updateArtistLink(meta);
   }
 };
+
+// Called by extension messages, which do not depend on hidden-page timers or
+// animation frames. The normal visible UI keeps its short track-change debounce.
+async function refreshDiscordPlayback() {
+  await tick();
+  const load = pendingTrackLyricsLoad;
+  pendingTrackLyricsLoad = null;
+  if (load) await load();
+}
 
 // 背景に使う画像の読み込み世代。
 // 曲が変わっても前の画像の読み込みは止まらない(DOM から外しても onload は

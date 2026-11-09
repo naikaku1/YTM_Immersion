@@ -349,3 +349,29 @@ test('速い歌詞でも、動く行は増え続けず、行どうしが重な�
     assert.ok(top > 0 && top + 43 < 411, `${interval}ms: 今の行が画面の外 (${top.toFixed(0)}px)`)
   }
 })
+
+// 行の間隔がばらつく曲(遅い行の直後に速い行)。行が変わった時、まだ動いていた行は
+// 待ち 0 で動き続けるのに、その上で止まり終えていた行には時間差の待ちが新しく
+// 付いていた。今の行の 2〜3 行下が止まって待つ間に、下の行が追い越して重なった(実機)。
+test('行の間隔がばらついても、下の行が上の行を追い越さない', () => {
+  const h = makeLyrics({ rowCount: 200, clientHeight: 530 })
+  h.goTo(0, true)
+  let seed = 1
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+  let line = 0
+  let next = 0
+  for (let f = 0; f < 60 * 30; f++) {
+    if (f * (1000 / 60) >= next && line < 190) { h.goTo(++line); next += 400 * (0.4 + rnd() * 1.2) }
+    for (let i = Math.max(0, line - 4); i < line + 6; i++) {
+      const a = h.rows[i].visualTop()
+      const b = h.rows[i + 1].visualTop()
+      if (Math.max(a, b) >= 530 || Math.min(a, b) + 43 <= 0) continue
+      assert.ok(b - a - 43 > 20, `行 ${i} と ${i + 1} が詰まった (今の行 ${line}, ${(b - a - 43).toFixed(1)}px)`)
+    }
+    h.clock.advance(1000 / 60)
+  }
+})
+
+test('上の行は、下の行より後に動き出さない', () => {
+  assert.match(uiSource, /moving\[i\]\.delay = Math\.min\(moving\[i\]\.delay, moving\[i \+ 1\]\.delay\);/)
+})

@@ -1650,6 +1650,31 @@ let _userPlaybackModeKey = null;
 const USER_PLAYBACK_MODE_GRACE_MS = 4000;
 let _userPlaybackModeUntil = 0;
 const playbackModeKeyTitle = (key) => String(key || '').split('///')[0].trim().toLowerCase();
+// 曲が変わった時の設定(config.trackChangePlaybackMode)の値
+const TRACK_CHANGE_MODES = ['song', 'keep', 'ytm'];
+const normalizeTrackChangeMode = (v) => (TRACK_CHANGE_MODES.includes(v) ? v : 'song');
+// 利用者が最後に自分で選んだ方('song' / 'video')。設定が「前のまま」の時、
+// 曲が変わったらこちらへ寄せる。読み込み直しても続くよう ytm_last_playback_mode に置く。
+// 拡張自身の切り替え(isTrusted が false)や、MV の無い曲で YTM が曲にした分は入らない。
+let _lastUserPlaybackMode = null;
+const rememberUserPlaybackMode = (mode) => {
+  if (mode !== 'song' && mode !== 'video') return;
+  _lastUserPlaybackMode = mode;
+  storage.set('ytm_last_playback_mode', mode);
+};
+const currentPlaybackModeChoice = () => {
+  const mode = document.querySelector('ytmusic-av-toggle')?.getAttribute('playback-mode');
+  return mode === 'OMV_PREFERRED' ? 'video' : mode === 'ATV_PREFERRED' ? 'song' : null;
+};
+// 曲が変わった時に寄せる先の playback-mode。null なら何もしない
+const wantedPlaybackModeOnTrackChange = () => {
+  const setting = normalizeTrackChangeMode(config.trackChangePlaybackMode);
+  if (setting === 'song') return 'ATV_PREFERRED';
+  if (setting !== 'keep') return null;
+  if (_lastUserPlaybackMode === 'video') return 'OMV_PREFERRED';
+  if (_lastUserPlaybackMode === 'song') return 'ATV_PREFERRED';
+  return null;
+};
 // MV の無い曲。YTM は切り替えに toggle-disabled を付け、MV がある時だけ
 // selected-item-has-video を付ける(実機、未ログインでも同じ)。Immersion では
 // 切り替えを自分の場所へ移して色も付け直しているので、押せないことが見えず、
@@ -1669,13 +1694,19 @@ document.addEventListener('click', (e) => {
   if (!(t && t.closest && t.closest('ytmusic-av-toggle'))) return;
   _userPlaybackModeKey = currentKey;
   _userPlaybackModeUntil = Date.now() + USER_PLAYBACK_MODE_GRACE_MS;
+  if (t.closest('.video-button')) rememberUserPlaybackMode('video');
+  else if (t.closest('.song-button')) rememberUserPlaybackMode('song');
 }, true);
 
+// 曲が変わった時に「曲 / 動画」を設定どおりに寄せる。名前は「曲」へ寄せるだけ
+// だった頃のまま。
 function preferLyricsDefault(targetKey, attempt = 0) {
   if (!targetKey || currentKey !== targetKey) return;
-  // 設定で切れるようにした。以前は曲が変わるたびに必ず「曲」へ寄せていたので、
+  // 設定で選べるようにした。以前は曲が変わるたびに必ず「曲」へ寄せていたので、
   // 「動画」を選んでいても毎曲戻され、動画モードに留まる手段が無かった。
-  if (!config.preferSongMode) return;
+  // ON/OFF にした後も、OFF は YouTube Music 任せで、選んだ方が続くとは限らなかった。
+  const want = wantedPlaybackModeOnTrackChange();
+  if (!want) return;
   if (_userPlaybackModeKey && (Date.now() < _userPlaybackModeUntil
     || playbackModeKeyTitle(_userPlaybackModeKey) === playbackModeKeyTitle(targetKey))) {
     _userPlaybackModeKey = targetKey;
@@ -1692,30 +1723,38 @@ function preferLyricsDefault(targetKey, attempt = 0) {
   }
 
   const mode = switcher.getAttribute("playback-mode");
-  if (mode === "ATV_PREFERRED") return;
-  if (mode !== "OMV_PREFERRED") {
+  if (mode === want) return;
+  if (mode !== "OMV_PREFERRED" && mode !== "ATV_PREFERRED") {
+    retry();
+    return;
+  }
+  // MV の無い曲は曲のまま流す。印(selected-item-has-video)は曲が変わってから
+  // 少し遅れて付くことがあるので、付くまで待つ(押すのは付いてから)
+  if (want === "OMV_PREFERRED" && !switcher.hasAttribute('selected-item-has-video')) {
     retry();
     return;
   }
 
-  const songBtn = switcher.querySelector('.song-button.ytmusic-av-toggle, .song-button');
-  if (!songBtn) {
+  const btn = want === "OMV_PREFERRED"
+    ? switcher.querySelector('.video-button.ytmusic-av-toggle, .video-button')
+    : switcher.querySelector('.song-button.ytmusic-av-toggle, .song-button');
+  if (!btn) {
     retry();
     return;
   }
 
   try {
-    songBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
-    if (typeof songBtn.click === 'function') songBtn.click();
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+    if (typeof btn.click === 'function') btn.click();
   } catch (e) {
-    console.warn('Failed to switch default playback mode to lyrics', e);
+    console.warn('Failed to switch playback mode on track change', e);
   }
 
   if (attempt < PREFER_SONG_MAX_ATTEMPTS) {
     setTimeout(() => {
       if (currentKey !== targetKey) return;
       const latestMode = switcher.getAttribute("playback-mode");
-      if (latestMode !== "ATV_PREFERRED") {
+      if (latestMode !== want) {
         preferLyricsDefault(targetKey, attempt + 1);
       }
     }, 250);
@@ -2981,6 +3020,24 @@ const applyMovieTime = (tv, v) => {
   return m.time;
 };
 
+// 曲が変わるのを見届けた時刻(performance.now)。0 なら見張らない。
+// 変わってすぐの数秒は、曲内の時刻が「変わってからの経過」より大きく進んでいる
+// はずがない。そういう時刻は前の曲のもの(動画がまだ前の曲の終わりを指している等)
+// なので、曲の頭として扱う。そのまま新しい歌詞を光らせると最後の行が選ばれ、歌詞が
+// 一番下まで飛んだ(自動で次の曲に移った時、報告)。シークしたら見張りをやめる。
+let _trackStartGuardAt = 0;
+const TRACK_START_GUARD_SEC = 8;
+const TRACK_START_SLACK_SEC = 4;
+const isImplausibleTrackStartTime = (t, rate) => {
+  if (!_trackStartGuardAt) return false;
+  const elapsed = (performance.now() - _trackStartGuardAt) / 1000;
+  if (elapsed > TRACK_START_GUARD_SEC) {
+    _trackStartGuardAt = 0;
+    return false;
+  }
+  return t > elapsed * rate + TRACK_START_SLACK_SEC;
+};
+
 const getCurrentPlaybackTimeSec = () => {
   const v = document.querySelector('video');
   if (!v || typeof v.currentTime !== 'number' || Number.isNaN(v.currentTime)) return null;
@@ -2992,6 +3049,8 @@ const getCurrentPlaybackTimeSec = () => {
   if (typeof duration === 'number' && duration > 0) {
     t = Math.min(t, duration);
   }
+  // 曲が変わってすぐの、前の曲の時刻(rAF ループと同じ扱い)
+  if (isImplausibleTrackStartTime(t, v.playbackRate > 0 ? v.playbackRate : 1)) return 0;
   return t;
 };
 
@@ -3129,7 +3188,9 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_keep_past_lyrics',
   'ytm_lyric_stagger',
   'ytm_fade_past_lyrics',
-  'ytm_prefer_song_mode',
+  'ytm_prefer_song_mode', // 以前の ON/OFF(ytm_track_change_mode の前身)。残っている値をリセットで消す
+  'ytm_track_change_mode',
+  'ytm_last_playback_mode',
   'ytm_level_volume',
   'ytm_video_quality',
   'ytm_movie_lyrics',
@@ -6724,7 +6785,7 @@ function isInsideSettingsUi(target) {
 // 今の曲へ反映する(以前は親の「保存」を押した時だけ取り直していた)。
 //
 // 保存前に書き換わる config の項目。閉じた時にここへ戻す。
-const SETTINGS_LIVE_KEYS = ['uiScale', 'lyricWeight', 'bgBrightness', 'mainLang', 'subLang', 'lyricSourceMode', 'uiLang'];
+const SETTINGS_LIVE_KEYS = ['uiScale', 'lyricWeight', 'bgBrightness', 'mainLang', 'subLang', 'lyricSourceMode', 'uiLang', 'trackChangePlaybackMode'];
 let settingsSession = null;
 
 // 自動保存。設定を変えたら少し待って保存する(続けて動かした時は 1 回にまとめる)。
@@ -7507,10 +7568,15 @@ function renderSettingsPanel() {
           <div class="settings-panel" id="panel-video">
             <div class="settings-section-title">${t('settings_sec_movie')}</div>
             <div class="settings-group-card">
-              <label class="setting-row toggle-label">
-                <span class="setting-name">${t('settings_prefer_song_mode')}</span>
-                <input type="checkbox" id="prefer-song-mode-toggle">
-              </label>
+              <div class="setting-row stacked">
+                <span class="setting-name">${t('settings_track_change_mode')}</span>
+                <span class="setting-desc">${t('settings_track_change_mode_desc')}</span>
+                <div class="ytm-lang-group" id="track-change-mode-group">
+                  <button class="ytm-lang-pill" data-value="song">${t('settings_track_change_song')}</button>
+                  <button class="ytm-lang-pill" data-value="keep">${t('settings_track_change_keep')}</button>
+                  <button class="ytm-lang-pill" data-value="ytm">${t('settings_track_change_ytm')}</button>
+                </div>
+              </div>
               <label class="setting-row toggle-label">
                 <span class="setting-name">${t('settings_level_volume')}</span>
                 <input type="checkbox" id="level-volume-toggle">
@@ -7776,7 +7842,6 @@ function renderSettingsPanel() {
   if (barAutoHideToggle) barAutoHideToggle.checked = typeof BarAutoHide !== 'undefined' && BarAutoHide.isEnabled();
   document.getElementById('lyric-stagger-toggle').checked = config.lyricStagger !== false;
   document.getElementById('fade-past-lyrics-toggle').checked = !!config.fadePastLyrics;
-  document.getElementById('prefer-song-mode-toggle').checked = !!config.preferSongMode;
   document.getElementById('level-volume-toggle').checked = config.levelVolume !== false;
   document.getElementById('movie-lyrics-toggle').checked = config.movieLyrics !== false;
   document.getElementById('movie-skip-toggle').checked = !!config.movieSkipScenes;
@@ -7867,6 +7932,11 @@ function renderSettingsPanel() {
   document.getElementById('deepl-key-input')?.addEventListener('input', updateTransEngineDesc);
   updateTransEngineDesc();
   setupLangPills('lyric-source-group', config.lyricSourceMode || 'ytm', v => { config.lyricSourceMode = v; });
+  setupLangPills('track-change-mode-group', normalizeTrackChangeMode(config.trackChangePlaybackMode), v => {
+    config.trackChangePlaybackMode = v;
+    // 「前のまま」に切り替えた時、まだ自分で選んだことが無ければ、今のモードを覚える
+    if (v === 'keep' && !_lastUserPlaybackMode) rememberUserPlaybackMode(currentPlaybackModeChoice());
+  });
   refreshUiLangGroup();
 
   if (draft) writeSettingsDraft(draft);
@@ -7961,7 +8031,6 @@ function renderSettingsPanel() {
     config.lyricStagger = document.getElementById('lyric-stagger-toggle').checked;
     config.fadePastLyrics = document.getElementById('fade-past-lyrics-toggle').checked;
     config.keepPastLyrics = !config.fadePastLyrics;
-    config.preferSongMode = document.getElementById('prefer-song-mode-toggle').checked;
     config.levelVolume = document.getElementById('level-volume-toggle').checked;
     VolumeLeveler.setEnabled(config.levelVolume);
     config.movieLyrics = document.getElementById('movie-lyrics-toggle').checked;
@@ -7996,7 +8065,7 @@ function renderSettingsPanel() {
       storage.set('ytm_left_align', config.leftAlignInfo),
       storage.set('ytm_lyric_stagger', config.lyricStagger),
       storage.set('ytm_fade_past_lyrics', config.fadePastLyrics),
-      storage.set('ytm_prefer_song_mode', config.preferSongMode),
+      storage.set('ytm_track_change_mode', normalizeTrackChangeMode(config.trackChangePlaybackMode)),
       storage.set('ytm_level_volume', config.levelVolume !== false),
       storage.set('ytm_movie_lyrics', !!config.movieLyrics),
       storage.set('ytm_movie_skip_scenes', !!config.movieSkipScenes),
@@ -10215,13 +10284,24 @@ const startLyricRowMotion = (container, target, primaryIndex) => {
   const shared = new Map();
   // 時間差の順番は、画面の中で拾った行だけで数える(上の行から 0, 1, 2…)
   let order = -1;
-  picked.forEach(({ row, y0, v0, wait, inView }) => {
-    if (inView) order += 1;
-    if (Math.abs(y0) < SCROLL_SETTLE_PX && Math.abs(v0) < SCROLL_SETTLE_VEL) return;
+  const moving = [];
+  picked.forEach((p) => {
+    if (p.inView) order += 1;
+    if (Math.abs(p.y0) < SCROLL_SETTLE_PX && Math.abs(p.v0) < SCROLL_SETTLE_VEL) return;
     const fresh = stagger ? Math.min(Math.max(order, 0), LYRIC_STAGGER_MAX_ROWS - 1) * LYRIC_STAGGER_DELAY : 0;
     // まだ待っている行は、残りの待ちと今回の順番の短い方。待ちを持ち越すだけだと、
     // 行が来るたびに距離だけ足されて、動き出しが前の行の順番のまま遅れていく。
-    const delay = wait !== null ? Math.min(wait, fresh) : fresh;
+    p.delay = p.wait !== null ? Math.min(p.wait, fresh) : fresh;
+    moving.push(p);
+  });
+  // 上の行は、下の行より後に動き出さない。動いている途中の行は待ち 0 のまま
+  // 動き続けるが、その上で止まり終えていた行には今回の順番の待ちが新しく付く。
+  // 行の間隔がばらつく曲(遅い行の直後に速い行)で、今の行の 2〜3 行下が
+  // 止まって待っている間に、まだ動いていた下の行が追い越して重なった。
+  for (let i = moving.length - 2; i >= 0; i--) {
+    moving[i].delay = Math.min(moving[i].delay, moving[i + 1].delay);
+  }
+  moving.forEach(({ row, y0, v0, delay }) => {
     const key = `${y0.toFixed(2)}|${v0.toFixed(1)}`;
     let built = shared.get(key);
     if (!built) {
@@ -10526,6 +10606,8 @@ function startLyricRafLoop() {
         t = applyMovieTime(t, v);
         // v.duration は曲ごとの長さ。ローカル時間はそれを超えないのでそのままクランプ
         t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
+        // 曲が変わってすぐなのに曲の先まで進んだ時刻は前の曲のもの。曲の頭として扱う
+        if (isImplausibleTrackStartTime(t, _playbackRateForMotion)) t = 0;
 
         // 再生時間が大幅に巻き戻った場合（曲切替 or 後方シーク）の検出。
         // 次のスクロールを即時ジャンプにして、0秒位置からのゆっくりスクロールを防ぐ。
@@ -10624,6 +10706,8 @@ document.addEventListener('seeked', (e) => {
   if (e.target.tagName !== 'VIDEO') return;
   const t = e.target.currentTime;
   if (typeof t === 'number' && timeOffset > 0 && t < timeOffset) timeOffset = 0;
+  // 自分で飛ばした先は、曲が変わってすぐでも正しい時刻
+  _trackStartGuardAt = 0;
   for (const container of [ui.lyrics, PipManager.pipLyricsContainer]) {
     if (!container) continue;
     resetLyricRowMotion(container);
@@ -11124,6 +11208,51 @@ function setupPlayerBarBlankClickGuard() {
     e.stopPropagation();
   }, true);
 }
+
+// ── 空いている所のダブルクリックで全画面 ─────────────────────
+// 曲モードでも動画モードでも、Immersion の空いている所(背景・余白・歌詞の行の
+// 間・映像の上)をダブルクリックしたら、全画面にする / 戻す。
+// 全画面には YouTube Music 自身の全画面ボタンを押して入る。自前で requestFullscreen
+// すると、YTM は全画面と知らないまま(ytmusic-player-page に player-fullscreened が
+// 付かない)で、YTM の f キーと食い違う。YTM の全画面でも Immersion の見た目は
+// 変わらない(実機)。戻る時は exitFullscreen。YTM のボタンは入るだけで、全画面中に
+// 押しても戻らない。YTM は fullscreenchange を見て自分の印も外す(実機)。
+// 押せる物・選びたい文字の上では何もしない: ボタン類、歌詞の行(押すとその時刻へ
+// 飛ぶ)、ジャケット(押すと再生/一時停止)、曲名・アーティスト名とボタン列、解説。
+const FULLSCREEN_DBLCLICK_IGNORE = [
+  'button', 'a', 'input', 'textarea', 'select', 'label', '[contenteditable]',
+  '[role="button"]', '[role="slider"]', '[role="menu"]', 'dialog',
+  // 曲名の欄(#ytm-custom-info-area)ごとは外さない。曲モードでは左の列の
+  // 下半分まで広がっていて、空いて見える所でも効かなかった(実機)
+  '.lyric-line', '#ytm-artwork-container', '#ytm-custom-title', '#ytm-custom-artist',
+  '#ytm-btn-area', '#ytm-lyrics-source-debug', '#ytm-meaning-panel', '.ytm-upload-menu',
+  'ytmusic-av-toggle',
+].join(', ');
+const isImmersionBlankTarget = (target) => !!target?.closest
+  && document.body.classList.contains('ytm-custom-layout')
+  && !!target.closest('#ytm-custom-wrapper, #ytm-custom-bg')
+  && !target.closest(FULLSCREEN_DBLCLICK_IGNORE);
+const toggleImmersionFullscreen = () => {
+  let done;
+  if (document.fullscreenElement) {
+    done = document.exitFullscreen?.();
+  } else {
+    const ytmButton = document.querySelector('ytmusic-player .fullscreen-button');
+    if (ytmButton) (ytmButton.querySelector('button') || ytmButton).click();
+    // YTM のボタンが見つからない時(作りが変わった等)は、ページごと全画面にする
+    else done = document.documentElement.requestFullscreen?.();
+  }
+  done?.catch?.((e) => console.warn('[YTM] 全画面の切り替えに失敗', e));
+};
+// 2 回目の押し下げで、近くの言葉が選ばれて青くなるのを止める
+document.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && e.detail > 1 && isImmersionBlankTarget(e.target)) e.preventDefault();
+}, true);
+document.addEventListener('dblclick', (e) => {
+  if (e.button !== 0 || !isImmersionBlankTarget(e.target)) return;
+  e.preventDefault();
+  toggleImmersionFullscreen();
+}, true);
 
 // ── 曲送り直後のメタデータの食い違い ─────────────────────────
 // 曲送りを 1 フレームずつ追うと(実機)、URL とプレイヤーバーの曲名が先に
@@ -11895,6 +12024,8 @@ const tick = async () => {
     } else {
       timeOffset = 0;
     }
+    // 途中から開いた時(見届けていない)は、今の位置がそのまま正しい
+    _trackStartGuardAt = sawTransition ? performance.now() : 0;
 
     if (!config.saveSyncOffset) {
       if (isFirstSongDetected) {
@@ -12453,10 +12584,15 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
   await restoreLyricEffectsPreferences();
   document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
-  const preferSongModeStored = await storage.get('ytm_prefer_song_mode');
-  if (preferSongModeStored !== null && preferSongModeStored !== undefined) {
-    config.preferSongMode = !!preferSongModeStored;
+  const trackChangeModeStored = await storage.get('ytm_track_change_mode');
+  if (TRACK_CHANGE_MODES.includes(trackChangeModeStored)) {
+    config.trackChangePlaybackMode = trackChangeModeStored;
+  } else if ((await storage.get('ytm_prefer_song_mode')) === false) {
+    // 以前の「曲が変わったら「曲」モードに切り替える」をオフにしていた人は、何もしない方
+    config.trackChangePlaybackMode = 'ytm';
   }
+  const lastPlaybackModeStored = await storage.get('ytm_last_playback_mode');
+  if (lastPlaybackModeStored === 'song' || lastPlaybackModeStored === 'video') _lastUserPlaybackMode = lastPlaybackModeStored;
   const levelVolumeStored = await storage.get('ytm_level_volume');
   if (levelVolumeStored !== null && levelVolumeStored !== undefined) config.levelVolume = !!levelVolumeStored;
   VolumeLeveler.setEnabled(config.levelVolume !== false);

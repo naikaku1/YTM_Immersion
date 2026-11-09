@@ -45,6 +45,35 @@ const QUEUE_OPEN_DWELL_MS = 160;
       return index;
     },
 
+    // 見えている行のうち、再生中の曲の行の番号。見つからなければ -1。
+    // 曲版と MV 版を持つ曲は、YTM のキューで 1 つの組
+    // (ytmusic-playlist-panel-video-wrapper-renderer)に 2 行入っていて、片方だけが
+    // 見えている。再生中の印(selected)は再生している版の行に付くので、
+    // 見えていない方の行に付くことがある。見える行だけで探すと見つからず、
+    // 最初に描いた「一番上が再生中」のまま更新されなくなっていた
+    // (動画モードで、曲は進むのにキューはずっと上の曲)。
+    // 印の付いた行を組ごと探し、それでも無ければ再生中の videoId で引き当てる。
+    _findCurrentQueueIndex: function (visibleItems, allItems) {
+      const entryIndexOf = (item) => {
+        const pair = item.closest && item.closest('ytmusic-playlist-panel-video-wrapper-renderer');
+        return pair ? visibleItems.findIndex(v => pair.contains(v)) : visibleItems.indexOf(item);
+      };
+      const all = Array.from(allItems);
+      const selected = all.find(item => item.hasAttribute('selected'));
+      if (selected) {
+        const index = entryIndexOf(selected);
+        if (index !== -1) return index;
+      }
+      let videoId = null;
+      try {
+        videoId = (typeof getCurrentVideoId === 'function' && getCurrentVideoId())
+          || new URL(location.href).searchParams.get('v');
+      } catch (e) { /* 取れなければ印だけで決める */ }
+      if (!videoId) return -1;
+      const playing = all.find(item => this._extractVideoIdFromQueueItem(item) === videoId);
+      return playing ? entryIndexOf(playing) : -1;
+    },
+
     _extractVideoIdFromQueueItem: function (queueItem) {
       // ページ側の橋渡し(page/queue-bridge.js)が置いた videoId が一番確か
       const stamped = queueItem.getAttribute('data-ytmi-video-id');
@@ -361,7 +390,7 @@ const QUEUE_OPEN_DWELL_MS = 160;
 
       if (visibleItems.length === 0) return;
 
-      let currentIndex = visibleItems.findIndex(item => item.hasAttribute('selected'));
+      let currentIndex = this._findCurrentQueueIndex(visibleItems, allRawItems);
       if (currentIndex === -1) {
         // 曲の切り替わり中、YTM は selected を一瞬外す。
         // ここで 0 に落とすとキューの先頭を「再生中」として描き直してしまい、

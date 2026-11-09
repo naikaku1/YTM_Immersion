@@ -101,3 +101,20 @@ test('PiP の曲/動画を切り替えたら、止める位置を読み直して
     delete globalThis.recenterLyricsAfterResize
   }
 })
+
+// 映像の上のボタンが半透明の丸だと、MV の明暗が丸に透けて場面ごとにチカチカした。
+// :hover が一瞬外れた時も、ボタン一式が消えてすぐ戻り、点滅して見えた。
+test('動画モードの PiP のボタンは丸を描かず、一瞬 :hover が外れても消えない', () => {
+  const rule = (sel) => {
+    const at = pipSource.indexOf(`${sel} {`)
+    assert.ok(at !== -1, `${sel} が無い`)
+    return pipSource.slice(at, pipSource.indexOf('}', at))
+  }
+  const btn = rule('body.ytm-pip-video .control-btn')
+  assert.match(btn, /background: transparent;/)
+  assert.match(btn, /backdrop-filter: none;/)
+  assert.match(rule('body.ytm-pip-video .control-btn:hover'), /background: transparent;/)
+  // 隠す時だけ待つ(出す時は待たない)
+  assert.match(pipSource, /body\.ytm-pip-video \.controls-box \{ opacity: 0; transition: opacity 0\.25s ease 0\.4s; \}/)
+  assert.match(rule('body.ytm-pip-video:hover .controls-box'), /transition-delay: 0s;/)
+})

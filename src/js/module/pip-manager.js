@@ -491,23 +491,31 @@ const forceStyle = pipDoc.createElement('style');
           body.ytm-pip-video #pip-title,
           body.ytm-pip-video #pip-artist { text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
           body.ytm-pip-video #pip-artist { color: rgba(255,255,255,0.75); }
-          /* ボタンの丸は、すりガラス(backdrop-filter)をやめて暗い色で塗る。
-             白 10% + 後ろのぼかしだと、丸の色は真後ろの映像の色そのものになる。
-             MV は場面がどんどん変わるので、丸が明るくなったり暗くなったりを
-             繰り返してチカチカして見えた(曲の PiP の背景はゆっくり動くので目立たない)。 */
+          /* 映像の上のボタンは丸を描かず、白いアイコンに影を付ける(動画プレーヤーと同じ作り)。
+             丸は半透明だと、真後ろの映像がそのまま透ける。すりガラス(白 10% + ぼかし)では
+             丸が映像の色そのものになり、暗い色(黒 42%)に替えても映像の明るさの 6 割が
+             透けた。MV は場面がどんどん変わるので、丸だけが明るくなったり暗くなったりを
+             繰り返してチカチカした(実測で 1 フレームに最大 60 段階)。
+             押せる所の目安は、乗った時に少し大きくすることで示す。 */
           body.ytm-pip-video .control-btn {
-            background: rgba(0, 0, 0, 0.42);
+            background: transparent;
             backdrop-filter: none; -webkit-backdrop-filter: none;
-            transition: background-color 0.2s ease, transform 0.2s ease;
+            filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 10px rgba(0, 0, 0, 0.35));
+            transition: transform 0.2s ease;
           }
-          body.ytm-pip-video .control-btn:hover { background: rgba(0, 0, 0, 0.6); }
-          body.ytm-pip-video .control-btn:active { background: rgba(0, 0, 0, 0.7); }
-          body.ytm-pip-video .controls-box { opacity: 0; transition: opacity 0.25s ease; }
-          body.ytm-pip-video:hover .controls-box { opacity: 1; }
+          body.ytm-pip-video .control-btn:hover { background: transparent; transform: scale(1.12); }
+          body.ytm-pip-video .control-btn:active { background: transparent; transform: scale(0.92); }
+          body.ytm-pip-video .main-btn svg { width: 40px; height: 40px; }
+          body.ytm-pip-video .sub-btn svg { width: 26px; height: 26px; }
+          body.ytm-pip-video .top-right-btn svg { width: 22px; height: 22px; }
+          /* 隠す時だけ少し待つ。窓の縁や Chrome の枠をかすめて :hover が一瞬外れると、
+             ボタン一式が消えてすぐ戻り、点滅して見えた。出す時は待たない。 */
+          body.ytm-pip-video .controls-box { opacity: 0; transition: opacity 0.25s ease 0.4s; }
+          body.ytm-pip-video:hover .controls-box { opacity: 1; transition-delay: 0s; }
           body.ytm-pip-video:not(:hover) .control-btn { pointer-events: none; }
           /* ★だけはボタンなので、操作ボタンと同じく乗った時だけ */
-          body.ytm-pip-video #pip-like-btn { opacity: 0; transition: opacity 0.25s ease; }
-          body.ytm-pip-video:hover #pip-like-btn { opacity: 1; }
+          body.ytm-pip-video #pip-like-btn { opacity: 0; transition: opacity 0.25s ease 0.4s, transform 0.2s ease; }
+          body.ytm-pip-video:hover #pip-like-btn { opacity: 1; transition-delay: 0s, 0s; }
 
           /* 歌詞は本体の動画モード(style.css の #ytm-lyrics-stage.moviemode)と
              同じ作り: 右寄りの帯に右揃え、前後の行は薄く、字の後ろに柔らかい影。

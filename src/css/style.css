@@ -2939,12 +2939,17 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTrackInfo {
   display: none !important;
 }
 
-/* シークバーは上端いっぱいに付いている。角丸で両端が切れないよう内側へ寄せる */
+/* シークバーは上端いっぱいに付いている。角丸で両端が切れないよう内側へ寄せる。
+   縦は線をバーの上端に乗せる(旧バーと同じ)。YTM は枠を translateY で上へずらして
+   いて、以前は -50% だったのが -100% に変わり、線がバーの上端から 8.5px 浮いて
+   見えた(実機、2026-11)。ずらし方を -50% に固定して、YTM の変更に左右されない
+   ようにする */
 body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
   left: calc(40px * var(--ytm-ui-scale)) !important;
   right: calc(40px * var(--ytm-ui-scale)) !important;
   width: auto !important;
   top: 2px !important;
+  transform: translateY(-50%) !important;
 }
 
 /* シークバーの当たり判定を、時刻の吹き出しが出る範囲と揃える。
@@ -6650,6 +6655,23 @@ body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-li
   transform-origin: right;
 }
 
+/* 押せる所・乗せて明るくなる所は、字のある所だけ。行は帯の幅いっぱい
+   (画面の 40% から右端まで)の箱なので、短い行の左に空いた映像の上を押しても
+   その行へ飛び、ダブルクリックの全画面も効かなかった。行そのものは押せなく
+   して、中の本文・訳・ハモリ・歌手名の箱を字の幅に縮め(右揃えのまま)、
+   そこだけ押せるようにする。押した先は .lyric-line まで遡って扱うので、
+   シークも乗せた時の明るさ(:hover は親にも付く)も今までどおり働く */
+body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-line {
+  pointer-events: none;
+}
+
+body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-line :is(.lyric-main, .lyric-translation, .lyric-bg, .lyric-singer-name) {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  pointer-events: auto;
+}
+
 /* 曲が変わった直後の Loading...。曲モード用の置き方(帯の幅いっぱいの中央、
    高さ 80%)のままだと、右下の帯の中ほど=画面の真ん中寄りに出ていた。
    歌詞の最初の行が来る所(帯の上の余白のすぐ下 = 今の行の位置)に、
@@ -6852,6 +6874,11 @@ body.ytm-custom-layout.ytm-movie-cut #ytm-lyrics-stage.moviemode {
   body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-line :is(.lyric-main, .lyric-singer-name, .lyric-bg) {
     text-align: left;
     transform-origin: left;
+  }
+  /* 字の幅に縮めた箱(押せる所)も左に寄せる */
+  body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-line :is(.lyric-main, .lyric-translation, .lyric-bg, .lyric-singer-name) {
+    margin-left: 0;
+    margin-right: auto;
   }
   body.ytm-custom-layout.ytm-movie-lyrics #my-lyrics-container.moviemode .lyric-loading {
     align-items: flex-start;

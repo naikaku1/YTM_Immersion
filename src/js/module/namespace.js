@@ -363,9 +363,11 @@ const normalizeSearchTrackTitle = (s, artist = '') => {
     keepPastLyrics: true,
     lyricStagger: true,
     fadePastLyrics: false,
-    // 曲が変わったときに YTM の「動画」を「曲」に切り替えるか。
-    // 既定 ON = 従来どおり。OFF にすると動画モードのまま聴ける。
-    preferSongMode: true,
+    // 曲が変わった時の「曲 / 動画」(lyrics-ui.js の preferLyricsDefault)。
+    // 'song' = 「曲」へ切り替える(既定・従来どおり)、'keep' = 最後に自分で選んだ方を
+    // 続ける(MV の無い曲だけは曲)、'ytm' = 何もせず YouTube Music に任せる。
+    // 以前は ON/OFF の preferSongMode で、OFF は今の 'ytm'。
+    trackChangePlaybackMode: 'song',
     // 小さい曲・動画の音量を上げて揃えるか(volume-leveler.js)。曲版と MV で音量が違うのを直す
     levelVolume: true,
     // 動画モードで、歌詞を映像の右下に重ねて出すか(YT-Immersion の MV モードと同じ置き方)
@@ -522,7 +524,11 @@ const normalizeSearchTrackTitle = (s, artist = '') => {
       settings_lyric_stagger_desc: "行ごとに少し遅れて動きます。",
       settings_fade_past_lyrics: "歌い終わった歌詞を消す",
       settings_fade_past_lyrics_desc: "歌い終わった行を約1秒で消します。",
-      settings_prefer_song_mode: "曲が変わったら「曲」モードに切り替える",
+      settings_track_change_mode: "曲が変わった時の「曲 / 動画」",
+      settings_track_change_mode_desc: "「前のまま」は最後に自分で選んだ方を続けます。MV の無い曲だけは曲で流します。",
+      settings_track_change_song: "曲に切り替える",
+      settings_track_change_keep: "前のまま",
+      settings_track_change_ytm: "YouTube Music に任せる",
       settings_level_volume: "小さい曲・動画の音量を上げて揃える",
       settings_movie_lyrics: "動画モードで歌詞を映像に重ねる",
       settings_movie_lyrics_desc: "映像を全画面に出し、歌詞を右下に重ねます。",
@@ -787,7 +793,11 @@ const normalizeSearchTrackTitle = (s, artist = '') => {
       settings_lyric_stagger_desc: "Each line follows with a slight delay.",
       settings_fade_past_lyrics: "Fade out completed lyrics",
       settings_fade_past_lyrics_desc: "Completed lines fade out after about 1 second.",
-      settings_prefer_song_mode: "Switch to Song mode when the track changes",
+      settings_track_change_mode: "Song / Video when the track changes",
+      settings_track_change_mode_desc: "Keep stays on the one you last picked. Tracks without a video play as songs.",
+      settings_track_change_song: "Switch to Song",
+      settings_track_change_keep: "Keep",
+      settings_track_change_ytm: "Leave it to YouTube Music",
       settings_level_volume: "Raise quiet songs and videos to an even volume",
       settings_movie_lyrics: "Show lyrics over the video in Video mode",
       settings_movie_lyrics_desc: "Shows the video full screen with the lyrics over its lower right.",
@@ -1052,7 +1062,11 @@ const normalizeSearchTrackTitle = (s, artist = '') => {
       settings_lyric_stagger_desc: "각 행이 조금씩 늦게 움직입니다.",
       settings_fade_past_lyrics: "재생이 끝난 가사 숨기기",
       settings_fade_past_lyrics_desc: "끝난 행을 약 1초 뒤에 숨깁니다.",
-      settings_prefer_song_mode: "곡이 바뀌면 '노래' 모드로 전환",
+      settings_track_change_mode: "곡이 바뀔 때 '노래 / 동영상'",
+      settings_track_change_mode_desc: "'그대로'는 마지막으로 직접 고른 쪽을 유지합니다. 뮤직비디오가 없는 곡만 노래로 재생합니다.",
+      settings_track_change_song: "노래로 전환",
+      settings_track_change_keep: "그대로",
+      settings_track_change_ytm: "YouTube Music에 맡기기",
       settings_level_volume: "작은 곡·동영상의 음량을 올려 맞추기",
       settings_movie_lyrics: "동영상 모드에서 영상 위에 가사 표시",
       settings_movie_lyrics_desc: "영상을 전체 화면으로 보여 주고 가사를 오른쪽 아래에 겹쳐 표시합니다.",
@@ -1317,7 +1331,11 @@ const normalizeSearchTrackTitle = (s, artist = '') => {
       settings_lyric_stagger_desc: "每行稍有延迟地移动。",
       settings_fade_past_lyrics: "淡出已唱完的歌词",
       settings_fade_past_lyrics_desc: "已唱完的行约1秒后淡出。",
-      settings_prefer_song_mode: "切换歌曲时自动切到「歌曲」模式",
+      settings_track_change_mode: "切换歌曲时的「歌曲 / 视频」",
+      settings_track_change_mode_desc: "「保持」会沿用你上次自己选择的模式。没有 MV 的歌曲以歌曲模式播放。",
+      settings_track_change_song: "切到歌曲",
+      settings_track_change_keep: "保持",
+      settings_track_change_ytm: "交给 YouTube Music",
       settings_level_volume: "调高音量较小的歌曲和视频，使音量一致",
       settings_movie_lyrics: "视频模式下在画面上显示歌词",
       settings_movie_lyrics_desc: "全屏显示视频，并在右下方叠加歌词。",

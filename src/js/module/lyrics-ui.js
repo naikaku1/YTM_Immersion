@@ -3217,6 +3217,7 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_pip_auto_open',
   'ytm_discord_enabled',
   'ytm_bar_autohide',
+  'ytm_auto_continue',
   'ytm_korean_ruby',
 ];
 const MEANING_PINNED_SONGS_KEY = 'ytm_meaning_pinned_songs';
@@ -7472,6 +7473,13 @@ function renderSettingsPanel() {
                 </span>
                 <input type="checkbox" id="bar-autohide-toggle" aria-describedby="bar-autohide-desc">
               </label>
+              <label class="setting-row toggle-label">
+                <span>
+                  <span class="setting-name">${t('settings_auto_continue')}</span>
+                  <span class="setting-desc" id="auto-continue-desc">${t('settings_auto_continue_desc')}</span>
+                </span>
+                <input type="checkbox" id="auto-continue-toggle" aria-describedby="auto-continue-desc">
+              </label>
             </div>
           </div>
 
@@ -7840,6 +7848,8 @@ function renderSettingsPanel() {
   document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
   const barAutoHideToggle = document.getElementById('bar-autohide-toggle');
   if (barAutoHideToggle) barAutoHideToggle.checked = typeof BarAutoHide !== 'undefined' && BarAutoHide.isEnabled();
+  const autoContinueToggle = document.getElementById('auto-continue-toggle');
+  if (autoContinueToggle) autoContinueToggle.checked = typeof AutoContinue !== 'undefined' && AutoContinue.isEnabled();
   document.getElementById('lyric-stagger-toggle').checked = config.lyricStagger !== false;
   document.getElementById('fade-past-lyrics-toggle').checked = !!config.fadePastLyrics;
   document.getElementById('level-volume-toggle').checked = config.levelVolume !== false;
@@ -8028,6 +8038,8 @@ function renderSettingsPanel() {
     config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
     const nextBarAutoHide = !!document.getElementById('bar-autohide-toggle')?.checked;
     if (typeof BarAutoHide !== 'undefined' && BarAutoHide.isEnabled() !== nextBarAutoHide) BarAutoHide.setEnabled(nextBarAutoHide);
+    const nextAutoContinue = !!document.getElementById('auto-continue-toggle')?.checked;
+    if (typeof AutoContinue !== 'undefined' && AutoContinue.isEnabled() !== nextAutoContinue) AutoContinue.setEnabled(nextAutoContinue);
     config.lyricStagger = document.getElementById('lyric-stagger-toggle').checked;
     config.fadePastLyrics = document.getElementById('fade-past-lyrics-toggle').checked;
     config.keepPastLyrics = !config.fadePastLyrics;
@@ -8070,6 +8082,7 @@ function renderSettingsPanel() {
       storage.set('ytm_movie_lyrics', !!config.movieLyrics),
       storage.set('ytm_movie_skip_scenes', !!config.movieSkipScenes),
       storage.set('ytm_bar_autohide', nextBarAutoHide),
+      storage.set('ytm_auto_continue', nextAutoContinue),
       storage.set('ytm_apple_bg', config.appleBg),
       storage.set('ytm_low_cpu_mode', config.lowCpuMode),
       storage.set('ytm_apple_sync_style', config.appleSyncStyle),
@@ -12550,6 +12563,8 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   if (typeof KoreanRuby !== 'undefined') await KoreanRuby.load();
   // 操作バーを自動で隠す(bar-autohide.js)
   if (typeof BarAutoHide !== 'undefined') await BarAutoHide.load();
+  // 一時停止の確認を自動で閉じる(auto-continue.js)
+  if (typeof AutoContinue !== 'undefined') await AutoContinue.load();
   if (savedSingerColors !== null) config.useSingerColors = !!savedSingerColors;
   document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
   applyAppleSyncClass();

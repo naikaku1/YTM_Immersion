@@ -68,6 +68,7 @@
         "src/js/module/korean-ruby.js",
         "src/js/module/builtin-translate.js",
         "src/js/module/bar-autohide.js",
+        "src/js/module/auto-continue.js",
         "src/js/module/fluid-bg.js",
         "src/js/module/volume-leveler.js",
         "src/js/module/video-quality.js",

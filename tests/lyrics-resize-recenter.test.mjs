@@ -88,7 +88,7 @@ test('大きさが変わった時に呼ぶ', () => {
 // initLayout は新しい器を組む。組んだ直後の器は空なので、いま出していた歌詞を
 // 出し直さないと、曲は鳴っているのに次の曲まで歌詞が出ないままになる。
 test('器を組み直したら、いまの歌詞を出し直す', () => {
-  const build = sliceBetween("if (isYTMPremiumUser()) setupMovieMode();", '\n}')
+  const build = sliceBetween('// ここまで来たのは、器を新しく組んだ時だけ', '\n}')
   assert.match(build, /applyLyricsText\(lastRawLyricsText\)/)
   assert.match(build, /typeof lastRawLyricsText === 'string' && lastRawLyricsText\.trim\(\)/)
 })

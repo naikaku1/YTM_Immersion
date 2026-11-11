@@ -1,14 +1,9 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import vm from 'node:vm'
+import { runBackground } from './background-harness.mjs'
 // 取得元どうしの突き合わせは実物を使う
 const RealAgreement = await import('../src/js/module/lyrics-agreement.js')
-
-const backgroundSource = fs.readFileSync(
-  new URL('../src/js/background.js', import.meta.url),
-  'utf8',
-).replace(/^import .*?;\r?$/gm, '')
 
 globalThis.chrome = globalThis.chrome || {
   storage: { local: { get: (keys, cb) => cb({}) } },
@@ -92,23 +87,9 @@ function createBackgroundHarness({ api = {}, disabledSources = [] } = {}) {
       DEFAULT_CLOUD_STATE: {},
     },
     chrome,
-    console: {
-      debug() {},
-      error() {},
-      log() {},
-      warn() {},
-    },
-    fetch,
-    self: { addEventListener() {} },
-    setTimeout,
-    clearTimeout,
-    URL,
-    URLSearchParams,
   }
 
-  vm.runInNewContext(backgroundSource, context, {
-    filename: 'src/js/background.js',
-  })
+  runBackground(context)
 
   assert.equal(messageListeners.length, 1, 'background must register one message listener')
 

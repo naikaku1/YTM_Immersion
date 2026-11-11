@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import test from 'node:test'
-import vm from 'node:vm'
+import { runBackground } from './background-harness.mjs'
 // 取得元どうしの突き合わせは実物を使う
 const RealAgreement = await import('../src/js/module/lyrics-agreement.js')
 
@@ -116,11 +115,6 @@ test('fetchFromLyricsPlus needs both a title and an artist', async () => {
 
 // ── background の勝ち抜け順序 ────────────────────────────────
 
-const backgroundSource = fs.readFileSync(
-  new URL('../src/js/background.js', import.meta.url),
-  'utf8',
-).replace(/^import .*?;\r?$/gm, '')
-
 function createBackgroundHarness({ api = {}, extra = {} } = {}) {
   const messageListeners = []
   const responses = []
@@ -169,7 +163,7 @@ function createBackgroundHarness({ api = {}, extra = {} } = {}) {
     fetchFromBuaaa: async () => null,
   }
 
-  vm.runInNewContext(backgroundSource, {
+  runBackground({
     API: { ...defaultApi, ...api },
     Extra: { ...defaultExtra, ...extra },
     // lyric-sources.js。既定は「標準の取得元は全部オン」。
@@ -177,14 +171,7 @@ function createBackgroundHarness({ api = {}, extra = {} } = {}) {
     Agreement: RealAgreement,
     CloudSync: { CLOUD_STORAGE_KEY: 'test-cloud-state', DEFAULT_CLOUD_STATE: {} },
     chrome,
-    console: { debug() {}, error() {}, log() {}, warn() {} },
-    fetch,
-    self: { addEventListener() {} },
-    setTimeout,
-    clearTimeout,
-    URL,
-    URLSearchParams,
-  }, { filename: 'src/js/background.js' })
+  })
 
   return {
     responses,

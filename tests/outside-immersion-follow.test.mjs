@@ -74,11 +74,18 @@ const tickSource = sliceBetween('const tick = async () => {', '// 背景に使�
 test('PiP が開いていれば、Immersion の外でも曲の切り替わりまで進む', () => {
   const gate = tickSource.slice(tickSource.indexOf('const immersionShown'), tickSource.indexOf('const meta = getMetadata();'))
   assert.match(gate, /const followForPip = !immersionShown && !!\(PipManager && PipManager\.pipWindow\) && !!ui\.lyrics;/)
-  // 戻るのは PiP を追わない時だけ
-  assert.match(gate, /if \(!followForPip\) \{[^}]*_wasTrackingPlayback = false;\s*return;\s*\}/)
-  // Immersion の器を組むのは、Immersion が見えている時だけ
-  const layoutCall = gate.indexOf('initLayout();')
-  assert.ok(layoutCall > gate.indexOf('} else {'), 'Immersion の外で器を組み直している')
+  // Discord の歌詞を送る設定の時も、Immersion の外で曲を追う
+  assert.match(gate, /const followForDiscord = !immersionShown && config\.discordEnabled === true;/)
+  // 戻るのは PiP も Discord も追わない時だけ
+  assert.match(gate, /if \(!followForPip && !followForDiscord\) \{[^}]*_wasTrackingPlayback = false;\s*return;\s*\}/)
+  // Immersion の外で器を組むのは、Discord のために器がまだ無い時だけ(毎 tick 組み直さない)
+  const outside = gate.slice(0, gate.indexOf('} else {'))
+  const outsideCalls = outside.match(/[^\n]*initLayout\(\);/g) || []
+  assert.deepEqual(outsideCalls.map(line => line.trim()),
+    ['if (followForDiscord && (!ui.lyrics || !ui.lyrics.isConnected)) initLayout();'],
+    'Immersion の外で器を組み直している')
+  // 見えている時は今までどおり毎回 initLayout(既にあれば手前で帰る)
+  assert.ok(gate.indexOf('initLayout();', gate.indexOf('} else {')) !== -1)
   // 曲の切り替わりで PiP を更新している
   assert.match(tickSource, /PipManager\.updateMeta\(shownTitleFor\(meta\), \(ui\.artist && ui\.artist\.textContent\) \|\| meta\.artist\);/)
 })

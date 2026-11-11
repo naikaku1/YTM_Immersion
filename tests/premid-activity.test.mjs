@@ -56,7 +56,13 @@ function readZipEntries(path) {
   return entries
 }
 
-const packagedEntries = readZipEntries(packagePath)
+// PreMiD の Activity は別に配る zip で、このリポジトリには入れていない
+// (premid/ は一度もコミットされていない)。手元に置いた時だけ中身を確かめる。
+const hasPackage = fs.existsSync(packagePath)
+const packagedEntries = hasPackage ? readZipEntries(packagePath) : new Map()
+const packageTest = (name, fn) => test(name, {
+  skip: hasPackage ? false : 'premid/YTM-Immersion-PreMiD.zip が無い(リポジトリの外で配る)',
+}, fn)
 const presenceSource = packagedEntries.get('presence.js')?.toString('utf8')
 const metadata = JSON.parse(packagedEntries.get('metadata.json')?.toString('utf8') || 'null')
 
@@ -214,7 +220,7 @@ function createActivityHarness() {
   }
 }
 
-test('package keeps the official YouTube Music settings and localization', () => {
+packageTest('package keeps the official YouTube Music settings and localization', () => {
   assert.ok(presenceSource)
   assert.ok(packagedEntries.has('YouTube Music.json'))
 
@@ -237,7 +243,7 @@ test('package keeps the official YouTube Music settings and localization', () =>
   assert.equal(metadata.settings.find(setting => setting.id === 'textLayout').values.length, 6)
 })
 
-test('packaged Activity maps song, artist, artwork lyric, and play state', async () => {
+packageTest('packaged Activity maps song, artist, artwork lyric, and play state', async () => {
   const harness = createActivityHarness()
   await harness.update()
 
@@ -258,7 +264,7 @@ test('packaged Activity maps song, artist, artwork lyric, and play state', async
   assert.equal(typeof harness.activity.endTimestamp, 'number')
 })
 
-test('packaged Activity switches pause icon and respects lyric/privacy settings', async () => {
+packageTest('packaged Activity switches pause icon and respects lyric/privacy settings', async () => {
   const harness = createActivityHarness()
   harness.setSnapshot({ playbackState: 'paused' })
   await harness.update()
@@ -283,7 +289,7 @@ test('packaged Activity switches pause icon and respects lyric/privacy settings'
   assert.equal(harness.activity.largeImageKey.includes('logo.png'), true)
 })
 
-test('packaged Activity supports all six text layouts and matching row links', async () => {
+packageTest('packaged Activity supports all six text layouts and matching row links', async () => {
   const expectedLayouts = [
     ['Test Song', 'Test Artist', 'Current lyric line', 'song', 'artist'],
     ['Test Song', 'Current lyric line', 'Test Artist', 'song', 'song'],
@@ -309,7 +315,7 @@ test('packaged Activity supports all six text layouts and matching row links', a
   }
 })
 
-test('packaged Activity defaults an invalid text layout and falls back to album without lyrics', async () => {
+packageTest('packaged Activity defaults an invalid text layout and falls back to album without lyrics', async () => {
   const harness = createActivityHarness()
   harness.settings.textLayout = 99
   harness.setSnapshot({ lyric: '' })
@@ -320,7 +326,7 @@ test('packaged Activity defaults an invalid text layout and falls back to album 
   assert.equal(harness.activity.largeImageText, 'Test Album')
 })
 
-test('packaged Activity keeps repeat information while using the play icon', async () => {
+packageTest('packaged Activity keeps repeat information while using the play icon', async () => {
   const harness = createActivityHarness()
   harness.setRepeatMode('ONE')
   await harness.update()
@@ -332,7 +338,7 @@ test('packaged Activity keeps repeat information while using the play icon', asy
   assert.equal(harness.activity.smallImageText, 'Playing • On loop')
 })
 
-test('packaged Activity falls back to the official Media Session path', async () => {
+packageTest('packaged Activity falls back to the official Media Session path', async () => {
   const harness = createActivityHarness()
   harness.setBridgeEnabled(false)
   harness.mediaSession.playbackState = 'playing'

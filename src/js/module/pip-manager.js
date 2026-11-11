@@ -564,6 +564,17 @@ const forceStyle = pipDoc.createElement('style');
           }
           body.ytm-pip-video .artwork-box { display: none; }
           body.ytm-pip-video .pip-header { top: 56.25vw; padding: 14px 24px 10px; }
+          /* 操作ボタンの丸は透けない色で塗る。すりガラス(白 10% + ぼかし)のままだと、
+             後ろを流れる歌詞が丸に透け、明るい今の行が丸の後ろを通るたびに丸だけが
+             1 フレームで 20〜35 段階明るくなったり暗くなったりして、横長の窓の時と
+             同じくチカチカした(Windows で報告、2026-11)。色はすりガラスの丸が
+             暗い背景の上で見えていた明るさに合わせる */
+          body.ytm-pip-video .controls-box .control-btn {
+            background: rgb(62, 62, 66);
+            backdrop-filter: none; -webkit-backdrop-filter: none;
+          }
+          body.ytm-pip-video .controls-box .control-btn:hover { background: rgb(80, 80, 84); }
+          body.ytm-pip-video .controls-box .control-btn:active { background: rgb(96, 96, 100); }
           body.ytm-pip-video:not(.ytm-animated-caption-mode) #pip-lyrics-container {
             top: calc(56.25vw + 64px);
             padding-top: 24px;

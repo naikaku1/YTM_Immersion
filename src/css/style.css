@@ -3289,11 +3289,14 @@ body:not(.ytm-custom-layout) ytmusic-player-bar tp-yt-paper-slider#progress-bar 
    YTM のままにして、角丸(16px)で両端が浮かないよう内側へ寄せるだけにする。
    旧バーの指定(左 -5px・幅 98%+5px・z-index 10)を当てると、線が角丸の外へ
    はみ出し、音量の縦スライダー(右の列、z-index 2)の下半分にも被さって、
-   アイコンからスライダーへマウスを上げる途中で吹き出しが閉じていた */
+   アイコンからスライダーへマウスを上げる途中で吹き出しが閉じていた。
+   縦のずらし方は Immersion 中と同じく translateY(-50%) に固定する。YTM が
+   -100% に変えたので、線がバーの上端から 10px 上に浮いていた(2026-11) */
 body:not(.ytm-custom-layout) ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
   left: 16px !important;
   right: 16px !important;
   width: auto !important;
+  transform: translateY(-50%) !important;
 }
 
 body:not(.ytm-custom-layout) #player-bar-background {

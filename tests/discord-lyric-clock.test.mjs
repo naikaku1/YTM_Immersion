@@ -150,8 +150,13 @@ test('clears old lyrics immediately when playback metadata changes tracks', () =
 })
 
 test('track-change observer has a background timer fallback for paused rAF', () => {
-  const observerStart = lyricsUiSource.indexOf('const setupObserver = () => {')
-  const observerSource = lyricsUiSource.slice(observerStart)
+  // tick の予約(scheduleTick)は setupObserver の手前に置いてあり、
+  // setupTickDrivers が requestImmersionTick として配る。
+  const observerStart = lyricsUiSource.indexOf('const runScheduledTick = () => {')
+  const observerSource = lyricsUiSource.slice(
+    observerStart,
+    lyricsUiSource.indexOf('const setupObserver = () => {', observerStart),
+  )
   const trackResetSource = lyricsUiSource.slice(
     lyricsUiSource.indexOf('currentKey = key;'),
     lyricsUiSource.indexOf('updateMetaUI(meta);'),
@@ -161,5 +166,6 @@ test('track-change observer has a background timer fallback for paused rAF', () 
   assert.match(observerSource, /const scheduleTick = \(\) => \{/)
   assert.match(observerSource, /document\.hidden \? 0 : 250/)
   assert.match(observerSource, /setTimeout\(\s*runScheduledTick/)
+  assert.match(observerSource, /requestImmersionTick = scheduleTick;/)
   assert.match(trackResetSource, /animatedCaptionData = null;/)
 })

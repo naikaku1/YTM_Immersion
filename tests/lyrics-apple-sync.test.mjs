@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+import { runBackground } from './background-harness.mjs'
 // 取得元どうしの突き合わせは実物を使う
 const RealAgreement = await import('../src/js/module/lyrics-agreement.js')
 
@@ -18,8 +19,6 @@ const lyricsUiSource = read('src/js/module/lyrics-ui.js')
 const namespaceSource = read('src/js/module/namespace.js')
 const styleSource = read('src/css/style.css')
 const pipSource = read('src/js/module/pip-manager.js')
-const backgroundSource = read('src/js/background.js')
-  .replace(/^import .*?;\r?$/gm, '')
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker)
@@ -908,7 +907,7 @@ function createBackgroundHarness({ api = {} } = {}) {
     getLrchubRecordId: RealAPI.getLrchubRecordId,
   }
 
-  vm.runInNewContext(backgroundSource, {
+  runBackground({
     API: { ...defaultApi, ...api },
     // extra-providers.js。既定は「有効だが誰も持っていない」。
     Extra: {
@@ -927,14 +926,7 @@ function createBackgroundHarness({ api = {} } = {}) {
       storage: { local: { get() {}, set() {} } },
       tabs: { sendMessage: () => Promise.resolve() },
     },
-    console: { debug() {}, error() {}, log() {}, warn() {} },
-    fetch,
-    self: { addEventListener() {} },
-    setTimeout,
-    clearTimeout,
-    URL,
-    URLSearchParams,
-  }, { filename: 'src/js/background.js' })
+  })
 
   return {
     responses,

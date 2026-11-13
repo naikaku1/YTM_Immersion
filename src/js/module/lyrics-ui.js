@@ -2075,9 +2075,12 @@ const thumbVideoId = (src) => {
 const pickArtworkSrc = (sessionSrc) => {
   const mode = document.querySelector('ytmusic-av-toggle')?.getAttribute('playback-mode');
   if (mode !== 'ATV_PREFERRED') return sessionSrc;
+  // ふつうの曲のジャケット(動画のサムネイルではない)なら、比べるまでもない。
+  // 先に見ておくと、曲モードでは動画 ID をページから探さずに済む
   const shownId = thumbVideoId(sessionSrc);
+  if (!shownId) return sessionSrc;
   const currentId = getCurrentVideoId();
-  if (!shownId || !currentId || shownId === currentId) return sessionSrc;
+  if (!currentId || shownId === currentId) return sessionSrc;
   // バーの中だけを見る。PlayerBar.query はバーに無いとページ全体から探すので、
   // ホームや検索結果に並ぶ別の曲のジャケット(img.image)を拾うことがある
   const barSrc = PlayerBar.get()?.querySelector('img.image, ytmusic-track-info img')?.src || '';
@@ -2977,9 +2980,26 @@ const movieToSongTime = (tv, segs) => {
 // 音源の時刻の歌詞は上の対応表で MV の時刻に直して出すので、表がある時だけ寄せる
 // (表が無いと音源の時刻のまま MV に当たってずれる)。返すのは { videoId, title, durationSec }。
 const MOVIE_SONG_WAIT_MS = 1500;
+// 曲 / 動画の切り替え(ytmusic-av-toggle)の playback-mode。
+// isMoviePlaybackNow は歌詞を塗るたび(1 秒 60 回)に呼ばれる。そのたびに
+// document.querySelector でページ全体から探していたので、要素 4,400 個のページで
+// 1 回 32µs = 約 2 ms/秒、塗りの JS 全体の 3 割ほどがこれだった(実機。ホームなど
+// 要素の多いページを裏に持っているともっと掛かる)。要素は覚えておき、探し直すのは
+// AV_TOGGLE_RECHECK_MS ごと(YTM が作り直した時のため)。属性は毎回読むので、
+// 曲 / 動画を切り替えたことにはその場で気づく。
+const AV_TOGGLE_RECHECK_MS = 500;
+function readAvToggleMode() {
+  const st = readAvToggleMode;
+  const now = performance.now();
+  if (now - (st.at ?? -Infinity) >= AV_TOGGLE_RECHECK_MS || (st.el && !st.el.isConnected)) {
+    st.at = now;
+    st.el = document.querySelector('ytmusic-av-toggle');
+  }
+  return st.el ? st.el.getAttribute('playback-mode') : null;
+}
 function isMoviePlaybackNow() {
   // The Immersion movie observer is intentionally absent while Discord alone follows playback.
-  const mode = document.querySelector('ytmusic-av-toggle')?.getAttribute('playback-mode');
+  const mode = readAvToggleMode();
   if (mode === 'OMV_PREFERRED') return true;
   if (mode === 'ATV_PREFERRED') return false;
   return moviemode === true;

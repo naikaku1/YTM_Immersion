@@ -242,21 +242,11 @@
       });
     }
 
+    // 聴いている途中の曲の再生時間は別のキーにある(replay-manager.js の loadHistory)。
+    // 畳んだ形で送らないと、サーバーには記録した時点の秒数(30 秒前後)しか届かない。
     function getLocalHistory() {
-      return new Promise((resolve) => {
-        if (!EXT.storage || !EXT.storage.local) {
-          resolve([]);
-          return;
-        }
-        EXT.storage.local.get(ReplayManager.HISTORY_KEY, (items) => {
-          const value = items && items[ReplayManager.HISTORY_KEY];
-          if (Array.isArray(value)) {
-            resolve(value);
-          } else {
-            resolve([]);
-          }
-        });
-      });
+      if (!EXT.storage || !EXT.storage.local) return Promise.resolve([]);
+      return ReplayManager.loadHistory().catch(() => []);
     }
 
     function setLocalHistory(history) {

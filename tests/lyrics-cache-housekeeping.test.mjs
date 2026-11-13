@@ -81,6 +81,51 @@ test('古い順に間引き、本人が決めたものは残す', async () => {
   assert.ok(!removed.includes('song1099///artist'), '新しいものを消している')
 })
 
+// 起動のたびに保存してある物を全部(再生履歴まで)読み込んでいた。
+// キーの名前だけ読めば、ほとんどの人は中身を読まずに済む。
+const loadWithKeys = (store) => {
+  const removed = []
+  const reads = []
+  const context = vm.createContext({
+    Object, Array, Number, Promise, Date, console,
+    chrome: {
+      runtime: {},
+      storage: {
+        local: {
+          getKeys: (cb) => cb(Object.keys(store)),
+          get: (keys, cb) => {
+            reads.push(keys)
+            cb(keys === null ? store : Object.fromEntries(keys.map(k => [k, store[k]])))
+          },
+          remove: (keys, cb) => { removed.push(...keys); cb() },
+        },
+      },
+    },
+  })
+  vm.runInContext(`${cacheSource}\nthis.mod = LyricsCache`, context)
+  return { mod: context.mod, removed, reads }
+}
+
+test('上限以下なら、保存してある中身を読まない', async () => {
+  const store = { ytm_local_history: new Array(10000).fill({ id: 'x' }), 'a///b': { lyrics: 'x', fetchedAt: 1 } }
+  const { mod, removed, reads } = loadWithKeys(store)
+  assert.equal(await mod.prune(), 0)
+  assert.equal(reads.length, 0, '中身を読んでいる')
+  assert.equal(removed.length, 0)
+})
+
+test('上限を超えた時も、読むのは歌詞のぶんだけ', async () => {
+  const store = { ytm_local_history: [{ id: 'x' }], 'settings-key': 1 }
+  for (let i = 0; i < 1100; i++) store[`song${i}///artist`] = { lyrics: 'x', fetchedAt: i + 1 }
+  store['mine///artist'] = { lyrics: 'x', fetchedAt: 0, manualLyrics: true }
+  const { mod, removed, reads } = loadWithKeys(store)
+  assert.equal(await mod.prune(), 1100 - mod.MAX_ENTRIES)
+  assert.equal(reads.length, 1)
+  assert.ok(Array.isArray(reads[0]) && reads[0].every(k => k.includes('///')), '歌詞でない物まで読んでいる')
+  assert.ok(!removed.includes('mine///artist'))
+  assert.ok(removed.includes('song0///artist'))
+})
+
 test('保存時に軽くしてから書く', () => {
   const writes = uiSource.match(/candidates: [^\n]*lyricsCandidates[^\n]*/g) || []
   assert.ok(writes.length >= 3)

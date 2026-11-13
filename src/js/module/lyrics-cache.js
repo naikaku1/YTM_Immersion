@@ -52,27 +52,49 @@ const LyricsCache = (() => {
   };
 
   // 起動時に 1 回だけ。古い順に間引いて上限に収める。
+  //
+  // 以前は毎回 get(null) で保存してある物を全部(歌詞キャッシュ数十 MB と、
+  // 再生履歴 2MB 余りまで)読み込んでから数えていた。上限に届いていない人でも、
+  // YouTube Music を開くたびにそれだけのメモリを一度使っていた。
+  // まずキーの名前だけを読み(Chrome 130 以降の getKeys)、上限を超えている時だけ
+  // 歌詞のぶんの中身を読む。getKeys の無い Chrome では今までどおり全部読む。
   const prune = () => new Promise((resolve) => {
     const api = chrome?.storage?.local;
     if (!api) { resolve(0); return; }
-    api.get(null, (items) => {
-      if (chrome.runtime?.lastError) { resolve(0); return; }
-      const entries = Object.keys(items || {})
-        .filter(key => key.includes('///'))
-        .map(key => ({ key, record: items[key] }))
-        .filter(entry => !isUserOwned(entry.record));
 
-      if (entries.length <= MAX_ENTRIES) { resolve(0); return; }
+    const pruneFrom = (keys) => {
+      api.get(keys, (items) => {
+        if (chrome.runtime?.lastError) { resolve(0); return; }
+        const entries = Object.keys(items || {})
+          .filter(key => key.includes('///'))
+          .map(key => ({ key, record: items[key] }))
+          .filter(entry => !isUserOwned(entry.record));
 
-      entries.sort((a, b) => savedAt(a.record) - savedAt(b.record));
-      const doomed = entries.slice(0, entries.length - MAX_ENTRIES).map(e => e.key);
-      api.remove(doomed, () => {
-        if (typeof YTMLog !== 'undefined') {
-          YTMLog.log(`[Cache] 歌詞キャッシュを ${doomed.length} 件間引きました`);
-        }
-        resolve(doomed.length);
+        if (entries.length <= MAX_ENTRIES) { resolve(0); return; }
+
+        entries.sort((a, b) => savedAt(a.record) - savedAt(b.record));
+        const doomed = entries.slice(0, entries.length - MAX_ENTRIES).map(e => e.key);
+        api.remove(doomed, () => {
+          if (typeof YTMLog !== 'undefined') {
+            YTMLog.log(`[Cache] 歌詞キャッシュを ${doomed.length} 件間引きました`);
+          }
+          resolve(doomed.length);
+        });
       });
-    });
+    };
+
+    if (typeof api.getKeys !== 'function') { pruneFrom(null); return; }
+    try {
+      api.getKeys((keys) => {
+        if (chrome.runtime?.lastError || !Array.isArray(keys)) { pruneFrom(null); return; }
+        const lyricKeys = keys.filter(key => typeof key === 'string' && key.includes('///'));
+        // 本人が決めた歌詞(間引かない)を除く前の数。これで上限以下なら読むまでもない
+        if (lyricKeys.length <= MAX_ENTRIES) { resolve(0); return; }
+        pruneFrom(lyricKeys);
+      });
+    } catch (e) {
+      pruneFrom(null);
+    }
   });
 
   return { MAX_ENTRIES, stripCandidateLyrics, isUserOwned, prune };

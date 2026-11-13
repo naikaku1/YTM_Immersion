@@ -202,3 +202,51 @@ test('lyric-past は変わった時だけ書く', () => {
   h.runAt(10.2, -1)
   assert.equal(h.counters[4].writes, before, 'past が変わらない行に書き続けている')
 })
+
+// ── 曲 / 動画の判定 ─────────────────────────────────────
+// isMoviePlaybackNow は歌詞を塗るたび(1 秒 60 回)に呼ばれる。そのたびに
+// document.querySelector('ytmusic-av-toggle') でページ全体から探していた
+// (実機: 要素 4,400 個のページで 1 回 32µs、約 2 ms/秒)。
+test('曲 / 動画の判定は、毎フレームページ全体から探さない', () => {
+  const src = fs.readFileSync(new URL('../src/js/module/lyrics-ui.js', import.meta.url), 'utf8')
+  const start = src.indexOf('const AV_TOGGLE_RECHECK_MS = 500;')
+  const end = src.indexOf('const resolveMovieLookupSong', start)
+  assert.ok(start !== -1 && end !== -1, '切り出しの目印が変わっている')
+
+  const clock = { now: 0 }
+  const state = { queries: 0, mode: 'ATV_PREFERRED', connected: true, exists: true }
+  const toggle = {
+    get isConnected() { return state.connected },
+    getAttribute: () => state.mode,
+  }
+  const context = vm.createContext({
+    performance: { now: () => clock.now },
+    document: { querySelector: () => { state.queries += 1; return state.exists ? toggle : null } },
+    moviemode: false,
+  })
+  vm.runInContext(`${src.slice(start, end)}\nthis.isMovie = isMoviePlaybackNow`, context)
+
+  // 1 秒ぶん(60 回)呼んでも、探すのは数回
+  for (let i = 0; i < 60; i++) { clock.now += 1000 / 60; context.isMovie() }
+  assert.ok(state.queries <= 3, `1 秒に ${state.queries} 回探している`)
+
+  // 切り替えにはその場で気づく(属性は毎回読む)
+  state.mode = 'OMV_PREFERRED'
+  assert.equal(context.isMovie(), true)
+  state.mode = 'ATV_PREFERRED'
+  assert.equal(context.isMovie(), false)
+
+  // YTM が要素を作り直したら、すぐ探し直す
+  const before = state.queries
+  state.connected = false
+  context.isMovie()
+  assert.equal(state.queries, before + 1)
+
+  // 要素が無いページでも、毎回は探さない
+  state.exists = false
+  state.connected = true
+  clock.now += 1000
+  const base = state.queries
+  for (let i = 0; i < 60; i++) { clock.now += 1000 / 60; context.isMovie() }
+  assert.ok(state.queries - base <= 3, `要素が無い時に ${state.queries - base} 回探している`)
+})

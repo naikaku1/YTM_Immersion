@@ -28,6 +28,7 @@ const runGetStats = (history, alias = {}) => {
   })
   vm.runInContext(
     'this.holder = { HISTORY_KEY: \'k\', formatDuration: (s) => String(s),'
+    + ' loadHistory: async function () { return await storage.get(this.HISTORY_KEY) || [] },'
     + ' _loadArtistAlias: async () => __alias, ' + getStatsSource + ' }',
     context,
   )

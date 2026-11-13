@@ -161,7 +161,19 @@
     send({ payload });
   };
 
+  // 再生中は timeupdate(1 秒 4 回)と下のタイマー(1 秒 2 回)が重なって来る。
+  // 1 回ごとに曲名・動画 ID・広告・今の歌詞をページから読み直すので(実機で 1 回
+  // 0.6 ms、要素の多いページではもっと)、連携を入れているだけで歌詞の塗りと
+  // 同じくらいの JS が走っていた。この 2 つは「変わっていないか見る」だけなので、
+  // 前に見てから ROUTINE_MIN_MS たっていなければ飛ばす。再生・停止・シークなど
+  // 他のきっかけは今までどおりその場で見る。
+  const ROUTINE_MIN_MS = 450;
+  let lastSyncAt = 0;
   const sync = (event) => {
+    const now = Date.now();
+    const routine = !event || event.type === 'timeupdate';
+    if (routine && enabled && !suspended && now - lastSyncAt < ROUTINE_MIN_MS) return;
+    lastSyncAt = now;
     try { syncPlayback(event); }
     catch (_) {
       // Metadata/UI helpers may not be ready yet. Keep the collector installed

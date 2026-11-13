@@ -1,5 +1,10 @@
   const ReplayManager = {
     HISTORY_KEY: 'ytm_local_history',
+    // 聴いている途中の曲の再生時間の置き場所(music.youtube.com の localStorage。
+    // updateDuration の説明を参照)
+    LIVE_KEY: 'ytmi_replay_live',
+    _liveId: null,
+    _liveStamp: null,
     ARTIST_ALIAS_KEY: 'ytm_artist_alias',
     _aliasBackfilled: false,
     currentVideoId: null,
@@ -187,7 +192,7 @@
     },
 
     exportHistory: async function () {
-      const history = await storage.get(this.HISTORY_KEY) || [];
+      const history = await this.loadHistory();
       if (history.length === 0) {
         alert('保存する履歴データがありません。');
         return;
@@ -254,7 +259,7 @@
               }
               const note = skipped > 0 ? `\n（読めない ${skipped} 件は飛ばします）` : '';
               if (confirm(`履歴を復元しますか？${note}\n[OK] 現在の履歴に結合 (マージ)\n[キャンセル] キャンセル`)) {
-                const current = await storage.get(this.HISTORY_KEY) || [];
+                const current = await this.loadHistory();
                 const existingIds = new Set(current.map(i => i.id + '_' + i.timestamp));
                 const newData = valid.filter(i => !existingIds.has(i.id + '_' + i.timestamp));
                 const merged = current.concat(newData);
@@ -310,6 +315,10 @@
       if (this.hasRecordedCurrent && !this.isRecording &&
         Number.isFinite(nowTime) && Number.isFinite(prevTime) && Number.isFinite(video.duration) &&
         video.duration > 10 && nowTime < 3 && prevTime > video.duration * 0.5) {
+        // 前の周の、まだ書いていない再生時間を書いておく
+        if (this.currentPlayTime > this.lastSaveTime) {
+          void this.updateDuration(this.currentVideoId, this.currentPlayTime, this.currentLyricLines);
+        }
         this.hasRecordedCurrent = false;
         this.currentPlayTime = 0;
         this.lastSaveTime = 0;
@@ -327,6 +336,8 @@
             try {
               await this.recordNewPlay();
               this.hasRecordedCurrent = true;
+              // 記録した値がそのまま最新。直後にもう一度書かない
+              this.lastSaveTime = this.currentPlayTime;
             } finally {
               this.isRecording = false;
             }
@@ -364,40 +375,109 @@
         timestamp: Date.now()
       };
 
-      let history = await storage.get(this.HISTORY_KEY) || [];
+      // 履歴をまるごと読み書きするのは、1 回の再生につきここの 1 度だけ。
+      // 前の曲までの途中経過(LIVE_KEY)は、この書き込みに畳んでから消す。
+      let history = await this.loadHistory();
       if (history.length > 10000) history = history.slice(-10000);
       history.push(record);
       await storage.set(this.HISTORY_KEY, history);
+      this._liveId = record.id;
+      this._liveStamp = record.timestamp;
+      this._writeLive(null);
 
       if (ui.replayPanel && ui.replayPanel.classList.contains('active')) {
         this.renderUI();
       }
     },
 
-    // 再生時間の書き込みは、履歴(最大 1 万件・2MB 余り)をまるごと読んで書き戻す。
-    // 以前は再生中 5 秒ごとに行っていて、Immersion を閉じていても 1 時間に
-    // 数 GB ぶんの読み書きと使い捨てのメモリを生んでいた。30 秒ごとにして、
-    // 曲が変わる時に残りを書く(check)。
+    // 再生時間は、聴いている間 30 秒ごと・曲が変わる時(check)・止めた時・タブを
+    // 閉じる時(init)に書く。
+    //
+    // 以前はそのたびに、履歴(最大 1 万件・2MB 余り)をまるごと読んで、最後の 1 件の
+    // 秒数だけ直して書き戻していた。4 分の曲 1 つで 9 回。chrome.storage は
+    // 書き込みのたびに、変更を見張っている所(バックグラウンドと、開いている
+    // YouTube Music のタブ全部)へ古い値と新しい値を丸ごと配るので、履歴が育った
+    // 人ほど、再生しているだけで数 MB の読み書きと使い捨てのメモリが 30 秒ごとに
+    // 出ていた。しかも 30 秒はバックグラウンド(サービスワーカー)が眠るまでの時間と
+    // 同じなので、再生している間じゅう起こし続けていた(実機)。
+    //
+    // いまは途中経過を、ページの localStorage の小さな 1 件(LIVE_KEY)にだけ書く。
+    // 中身は「曲の ID + 記録した時刻」→ 再生時間・歌詞の行数。
+    //  ・chrome.storage の小さなキーに書いても、バックグラウンドは起きる
+    //  ・chrome.storage への書き込みは非同期で、タブを閉じる時には届かない(実機:
+    //    閉じる 12 秒前に止めた時の値のままだった)。localStorage はその場で書ける
+    // 履歴に畳むのは、次の曲を記録する時(recordNewPlay。どのみち履歴を読み書き
+    // する)。履歴を読む側は loadHistory を通せば、畳む前でも同じ数字になる。
     SAVE_EVERY_SEC: 30,
+    // 畳まれないまま残った途中経過(履歴を消した・別の端末の履歴で上書きした等)を
+    // 溜めない。同時に再生するタブの数より多ければ足りる
+    LIVE_MAX_ENTRIES: 8,
 
-    updateDuration: async function (videoId = this.currentVideoId, playTime = this.currentPlayTime, lyricLines = this.currentLyricLines) {
-      let history = await storage.get(this.HISTORY_KEY) || [];
-      if (history.length === 0) return;
-
-      const lastIndex = history.length - 1;
-      if (history[lastIndex].id === videoId) {
-        history[lastIndex].duration = playTime;
-        history[lastIndex].lyricLines = lyricLines;
-
-        await storage.set(this.HISTORY_KEY, history);
-        if (ui.replayPanel && ui.replayPanel.classList.contains('active')) {
-          this.renderUI();
-        }
+    _readLive: function () {
+      try {
+        const live = JSON.parse(localStorage.getItem(this.LIVE_KEY) || 'null');
+        return (live && typeof live === 'object' && !Array.isArray(live)) ? live : {};
+      } catch (e) {
+        return {};   // 読めない・壊れている時は、途中経過が無いものとして進む
       }
     },
 
+    _writeLive: function (live) {
+      try {
+        if (live && Object.keys(live).length) localStorage.setItem(this.LIVE_KEY, JSON.stringify(live));
+        else localStorage.removeItem(this.LIVE_KEY);
+      } catch (e) { /* 書けなくても、記録した時点の秒数は履歴に残っている */ }
+    },
+
+    updateDuration: async function (videoId = this.currentVideoId, playTime = this.currentPlayTime, lyricLines = this.currentLyricLines) {
+      // このタブが記録した再生でなければ書かない(記録に失敗した曲・履歴を消した後)
+      const stamp = this._liveStamp;
+      if (!stamp || !videoId || this._liveId !== videoId) return;
+
+      const live = this._readLive();
+      live[videoId + '_' + stamp] = { id: videoId, timestamp: stamp, duration: playTime, lyricLines };
+      const keys = Object.keys(live);
+      if (keys.length > this.LIVE_MAX_ENTRIES) {
+        keys.sort((a, b) => (Number(live[a]?.timestamp) || 0) - (Number(live[b]?.timestamp) || 0));
+        keys.slice(0, keys.length - this.LIVE_MAX_ENTRIES).forEach(key => { delete live[key]; });
+      }
+      this._writeLive(live);
+
+      if (ui.replayPanel && ui.replayPanel.classList.contains('active')) {
+        this.renderUI();
+      }
+    },
+
+    // 途中経過を履歴に畳む。同じ再生(曲の ID と記録した時刻が同じ)を新しい方から
+    // 探し、長い方の再生時間を残す。何度畳んでも結果は同じ。
+    _foldLive: function (history, live) {
+      if (!Array.isArray(history) || !history.length) return history;
+      if (!live || typeof live !== 'object' || Array.isArray(live)) return history;
+      Object.values(live).forEach(entry => {
+        if (!entry || typeof entry.id !== 'string' || !Number.isFinite(Number(entry.timestamp))) return;
+        for (let i = history.length - 1; i >= 0; i--) {
+          const h = history[i];
+          if (!h || h.id !== entry.id || Number(h.timestamp) !== Number(entry.timestamp)) continue;
+          const duration = Number(entry.duration);
+          const lyricLines = Number(entry.lyricLines);
+          if (Number.isFinite(duration) && !(Number(h.duration) >= duration)) h.duration = duration;
+          if (Number.isFinite(lyricLines) && !(Number(h.lyricLines) >= lyricLines)) h.lyricLines = lyricLines;
+          break;
+        }
+      });
+      return history;
+    },
+
+    // 履歴を読む時はここを通す(集計・書き出し・クラウド同期)。
+    // 聴いている途中の曲の再生時間まで入った形で返す。
+    loadHistory: async function () {
+      const history = await storage.get(this.HISTORY_KEY);
+      if (!Array.isArray(history)) return [];
+      return this._foldLive(history, this._readLive());
+    },
+
     getStats: async function (range = 'day') {
-      const history = await storage.get(this.HISTORY_KEY) || [];
+      const history = await this.loadHistory();
       const now = Date.now();
       let threshold = 0;
       if (range === 'day') {
@@ -652,13 +732,29 @@
       footerArea.querySelector('#replay-reset-action').onclick = async () => {
         if (confirm(t('replay_reset_confirm'))) {
           await storage.remove(this.HISTORY_KEY);
+          this._writeLive(null);
+          this._liveId = null;
+          this._liveStamp = null;
           this.renderUI();
         }
       };
     },
 
+    // まだ書いていない再生時間があれば書く(止めた時・タブを閉じる時)
+    flushProgress: function () {
+      if (!this.hasRecordedCurrent || this.isRecording) return;
+      if (!(this.currentPlayTime > this.lastSaveTime)) return;
+      this.lastSaveTime = this.currentPlayTime;
+      void this.updateDuration();
+    },
+
     init: function () {
       setInterval(() => this.check(), 1000);
+      // メディアのイベントは泡立たないが、捕獲なら document で受けられる
+      document.addEventListener('pause', (e) => {
+        if (e.target instanceof HTMLMediaElement) this.flushProgress();
+      }, true);
+      window.addEventListener('pagehide', () => this.flushProgress());
     }
   };
 

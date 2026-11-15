@@ -4,6 +4,7 @@ import * as Extra from './module/extra-providers.js';
 import * as Sources from './module/lyric-sources.js';
 import * as Agreement from './module/lyrics-agreement.js';
 import * as LocalLyrics from './module/local-lyrics.js';
+import { pronounceDetailed } from './module/pronunciation-engine.js';
 import { createNowPlayingRelay } from './module/bg-now-playing.js';
 import { createNowPlayingPoller } from './module/bg-now-playing-poll.js';
 
@@ -262,6 +263,16 @@ chrome.commands?.onCommand.addListener((command, tab) => {
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (!req || typeof req !== 'object' || !req.type) {
     return;
+  }
+
+  if (req.type === 'GET_KOREAN_PRONUNCIATION') {
+    let trusted = false;
+    try { trusted = sender.id === chrome.runtime.id && new URL(sender.url || sender.tab?.url).origin === 'https://music.youtube.com'; } catch (_) { /* Invalid sender. */ }
+    if (!trusted) { sendResponse({ success: false }); return; }
+    pronounceDetailed(req.payload?.texts, { japanese: req.payload?.japanese === true, target: req.payload?.target })
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(() => sendResponse({ success: false }));
+    return true;
   }
 
   if (req.type === 'NOW_PLAYING_UPDATE' || req.type === 'NOW_PLAYING_CLEAR' || req.type === 'NOW_PLAYING_STATUS') {

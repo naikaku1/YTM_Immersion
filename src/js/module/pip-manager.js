@@ -345,6 +345,12 @@ const forceStyle = pipDoc.createElement('style');
                       opacity 1s ease, visibility 0s linear 1s !important;
         }
         
+        @font-face { font-family: "YTM-Pretendard"; src: url("${chrome.runtime.getURL('src/assets/fonts/PretendardVariable.woff2')}") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+        .lyric-pronunciation.caption-2, .lyric-pronunciation-word { font-family: "YTM-Pretendard", sans-serif; }
+        .lyric-line.active .lyric-pronunciation-timed .lyric-pronunciation-word { background: linear-gradient(to right, currentColor var(--pronunciation-progress, 0%), color-mix(in srgb, currentColor 42%, transparent) var(--pronunciation-progress, 0%)); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .lyric-pronunciation.caption-2 { display: block; min-height: 20px; margin-top: 4px; font-size: 20px; line-height: 1.4; font-weight: 600; opacity: 0.95; letter-spacing: normal; white-space: normal; overflow-wrap: anywhere; -webkit-text-fill-color: currentColor; }
+        .lyric-line.active .lyric-pronunciation-sync { background: linear-gradient(to right, currentColor var(--pronunciation-progress, 0%), color-mix(in srgb, currentColor 42%, transparent) var(--pronunciation-progress, 0%)); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent !important; }
+        .lyric-pronunciation[hidden] { display: none; }
         .lyric-translation { font-size: 0.6em; opacity: 0.5; font-weight: 600; margin-top: 4px; display: block; }
         
         body.ytm-no-timestamp .lyric-line { 
@@ -644,6 +650,7 @@ pipDoc.body.innerHTML = `
 
       this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
       this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
+      if (typeof KoreanPronunciation !== 'undefined') KoreanPronunciation.decorate(this.pipLyricsContainer);
       this.pipLyricsContainer._lastScrolledIndex = -1;
       this.pipLyricsContainer._isUserScrolling = false;
       this.pipLyricsContainer._isProgrammaticScrolling = false;

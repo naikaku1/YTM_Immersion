@@ -1297,6 +1297,7 @@ const syncTimedTextStage = (stage, activeEvents) => {
       cue.dataset.srv3EventId = eventId;
       cue.style.cssText = getTimedTextCueStyle(event);
       cue.innerHTML = getTimedTextSegmentHtml(event);
+      if (typeof KoreanPronunciation !== 'undefined') KoreanPronunciation.decorateCue(cue, event.text, !!animatedCaptionData?._koreanJapanese);
     }
     // appendChild は既存nodeを破棄せず、srv3の重なり順だけを揃える。
     stage.appendChild(cue);
@@ -1310,6 +1311,9 @@ const syncTimedTextStage = (stage, activeEvents) => {
 function renderAnimatedTimedText(captionData) {
   if (!ui.lyrics || !captionData) return;
   animatedCaptionData = captionData;
+  const readingTexts = (captionData.events || []).map(event => String(event.text || ''));
+  captionData._koreanJapanese = readingTexts.some(text => /[ぁ-ゖァ-ヺ]/.test(text));
+  if (typeof KoreanPronunciation !== 'undefined') KoreanPronunciation.prepare(readingTexts);
   animatedCaptionFrameKey = '';
   // innerHTML差し替えによるscrollイベントをユーザースクロール扱いにしない
   suppressUserScrollDetection(500);
@@ -4951,6 +4955,7 @@ const paintLyricWordRow = (row, t, rate = 1) => {
   // 塗り。語ごとに書くが、値が変わるのは先端がいる語だけ(writeLyricWordSweep)
   const sweep = lyricSweepAt(row, t);
   for (let i = 0; i < spans.length; i++) writeLyricWordSweep(spans[i], sweep);
+  if (typeof KoreanPronunciation !== 'undefined' && !KoreanPronunciation.paintTimed(row, t, spans) && row._sweepEnd > 0) KoreanPronunciation.paint(row, sweep / row._sweepEnd);
 
   // 光は位置を動かさないので丸めの問題が無い。濃さ(opacity)を毎フレーム書く。
   // 合成側のアニメーションにはしない: 動画モードでは合成側で動くものがあると
@@ -7585,6 +7590,17 @@ function renderSettingsPanel() {
             <div class="settings-group-card">
               <label class="setting-row toggle-label">
                 <span>
+                  <span class="setting-name">${t('settings_korean_pronunciation')}</span>
+                  <span class="setting-desc" id="korean-pronunciation-desc">${t('settings_korean_pronunciation_desc')}</span>
+                </span>
+                <input type="checkbox" id="korean-pronunciation-toggle" aria-describedby="korean-pronunciation-desc">
+              </label>
+              <div class="setting-row stacked">
+                <div class="setting-row-top"><label class="setting-name" for="korean-pronunciation-size">${t('settings_korean_pronunciation_size')}</label><span class="setting-value-badge" id="korean-pronunciation-size-val">${(typeof KoreanPronunciation !== 'undefined' ? KoreanPronunciation.getSize() : 20) + 'px'}</span></div>
+                <input type="range" id="korean-pronunciation-size" min="14" max="36" step="1" value="${typeof KoreanPronunciation !== 'undefined' ? KoreanPronunciation.getSize() : 20}">
+              </div>
+              <label class="setting-row toggle-label">
+                <span>
                   <span class="setting-name">${t('settings_korean_ruby')}</span>
                   <span class="setting-desc" id="korean-ruby-desc">${t('settings_korean_ruby_desc')}</span>
                 </span>
@@ -7878,6 +7894,8 @@ function renderSettingsPanel() {
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
   document.getElementById('apple-sync-toggle').checked = !!config.appleSyncStyle;
+  const koreanPronunciationToggle = document.getElementById('korean-pronunciation-toggle');
+  if (koreanPronunciationToggle) koreanPronunciationToggle.checked = typeof KoreanPronunciation !== 'undefined' && KoreanPronunciation.isEnabled();
   const koreanRubyToggle = document.getElementById('korean-ruby-toggle');
   if (koreanRubyToggle) koreanRubyToggle.checked = typeof KoreanRuby !== 'undefined' && KoreanRuby.isEnabled();
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
@@ -7918,6 +7936,12 @@ function renderSettingsPanel() {
   updateSliderFill(wSlider);
   updateSliderFill(bSlider);
   updateSliderFill(sSlider);
+  const pronunciationSizeSlider = document.getElementById('korean-pronunciation-size');
+  updateSliderFill(pronunciationSizeSlider);
+  pronunciationSizeSlider?.addEventListener('input', e => {
+    document.getElementById('korean-pronunciation-size-val').textContent = `${e.target.value}px`;
+    updateSliderFill(e.target);
+  });
   if (sSlider) {
     sSlider.addEventListener('input', (e) => {
       const val = e.target.value;
@@ -8072,6 +8096,10 @@ function renderSettingsPanel() {
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
     config.appleSyncStyle = document.getElementById('apple-sync-toggle').checked;
     // 試作: 韓国語の読み(korean-ruby.js)。切り替えたら下で描き直す
+    const prevKoreanPronunciation = typeof KoreanPronunciation !== 'undefined' && KoreanPronunciation.isEnabled();
+    const nextKoreanPronunciation = !!document.getElementById('korean-pronunciation-toggle')?.checked;
+    if (typeof KoreanPronunciation !== 'undefined' && prevKoreanPronunciation !== nextKoreanPronunciation) await KoreanPronunciation.setEnabled(nextKoreanPronunciation);
+    if (typeof KoreanPronunciation !== 'undefined') await KoreanPronunciation.setSize(document.getElementById('korean-pronunciation-size')?.value);
     const prevKoreanRuby = typeof KoreanRuby !== 'undefined' && KoreanRuby.isEnabled();
     const nextKoreanRuby = !!document.getElementById('korean-ruby-toggle')?.checked;
     if (typeof KoreanRuby !== 'undefined' && prevKoreanRuby !== nextKoreanRuby) KoreanRuby.setEnabled(nextKoreanRuby);
@@ -8165,6 +8193,7 @@ function renderSettingsPanel() {
     const uiLanguageChanged = prevUiLang !== config.uiLang;
     const meaningAlwaysChanged = prevAlwaysShowMeaning !== config.alwaysShowMeaning;
     // 読みは表示言語でカナとローマ字が変わるので、言語を変えた時も描き直す
+    const koreanPronunciationChanged = prevKoreanPronunciation !== nextKoreanPronunciation || (nextKoreanPronunciation && uiLanguageChanged);
     const koreanRubyChanged = prevKoreanRuby !== nextKoreanRuby || (nextKoreanRuby && uiLanguageChanged);
 
     if (close) {
@@ -8190,8 +8219,9 @@ function renderSettingsPanel() {
         const metaNow = getMetadata();
         if (metaNow?.title && metaNow?.artist) await loadLyrics(metaNow);
       }
-    } else if (koreanRubyChanged && Array.isArray(lyricsData) && lyricsData.length) {
-      renderLyrics(lyricsData);
+    } else if ((koreanRubyChanged || koreanPronunciationChanged) && (animatedCaptionData || (Array.isArray(lyricsData) && lyricsData.length))) {
+      if (animatedCaptionData) renderAnimatedTimedText(animatedCaptionData);
+      else renderLyrics(lyricsData);
     }
 
     if (meaningAlwaysChanged) {
@@ -9939,6 +9969,10 @@ function renderLyrics(data) {
       PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
     }
   }
+  if (typeof KoreanPronunciation !== 'undefined') {
+    KoreanPronunciation.decorate(ui.lyrics);
+    if (PipManager.pipLyricsContainer) KoreanPronunciation.decorate(PipManager.pipLyricsContainer);
+  }
   refreshCompletedLyrics(getCurrentPlaybackTimeSec(), document.querySelector('video')?.duration);
 }
 
@@ -10906,6 +10940,16 @@ function paintActiveLyricRow(r, t) {
   if (!charSpans) charSpans = r._ytmCharSpans = Array.from(r.querySelectorAll('.lyric-char'));
   if (charSpans.length === 0) return false;
 
+  if (typeof KoreanPronunciation !== 'undefined') {
+    let elapsed = 0;
+    for (let i = 0; i < charSpans.length; i++) {
+      const start = Number(charSpans[i].dataset.time);
+      const end = Number(charSpans[i + 1]?.dataset.time);
+      if (!Number.isFinite(start) || t < start) break;
+      elapsed = i + (Number.isFinite(end) && end > start ? Math.min(1, (t - start) / (end - start)) : 1);
+    }
+    if (!KoreanPronunciation.paintTimed(r, t, charSpans)) KoreanPronunciation.paint(r, elapsed / charSpans.length);
+  }
   charSpans.forEach(sp => {
     if (sp._ytmTime === undefined) sp._ytmTime = parseFloat(sp.dataset.time || '0');
     const tt = sp._ytmTime;
@@ -12581,6 +12625,7 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   if (savedAppleSync !== null) config.appleSyncStyle = !!savedAppleSync;
   // 試作: 韓国語の読み(korean-ruby.js)。歌詞を描く前に入り切りを読んでおく
   if (typeof KoreanRuby !== 'undefined') await KoreanRuby.load();
+  if (typeof KoreanPronunciation !== 'undefined') await KoreanPronunciation.load();
   // 操作バーを自動で隠す(bar-autohide.js)
   if (typeof BarAutoHide !== 'undefined') await BarAutoHide.load();
   // 一時停止の確認を自動で閉じる(auto-continue.js)

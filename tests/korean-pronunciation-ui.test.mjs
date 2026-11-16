@@ -10,9 +10,9 @@ const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve()
 function harness({ stored = null, uiLang = 'ko' } = {}) {
   const requests = [], writes = [], nodes = [];
   class Element {
-    constructor(className = '') { this.className = className; this.children = []; this.textContent = ''; this.hidden = false; this.connected = true; this.ownerDocument = document; this.style = { setProperty(key, value) { this[key] = value; } }; this.classList = { add: name => { if (!this.className.split(' ').includes(name)) this.className += ' ' + name; }, remove: name => { this.className = this.className.split(' ').filter(x => x !== name).join(' '); } }; nodes.push(this); }
+    constructor(className = '') { this.className = className; this.dataset = {}; this.children = []; this.textContent = ''; this.hidden = false; this.connected = true; this.ownerDocument = document; this.style = { setProperty(key, value) { this[key] = value; } }; this.classList = { add: name => { if (!this.className.split(' ').includes(name)) this.className += ' ' + name; }, remove: name => { this.className = this.className.split(' ').filter(x => x !== name).join(' '); } }; nodes.push(this); }
     get isConnected() { return this.connected && (!this.parent || this.parent.isConnected); }
-    appendChild(node) { this.children.push(node); node.parent = this; }
+    appendChild(node) { this.children = this.children.filter(child => child !== node); this.children.push(node); node.parent = this; node.connected = true; }
     before(node) { const at = this.parent.children.indexOf(this); this.parent.children.splice(at, 0, node); node.parent = this.parent; }
     after(node) { const at = this.parent.children.indexOf(this); this.parent.children.splice(at + 1, 0, node); node.parent = this.parent; }
     setAttribute(name, value) { this[name] = value; }
@@ -36,7 +36,12 @@ function harness({ stored = null, uiLang = 'ko' } = {}) {
     }
     return host;
   }
-  return { api: context.api, requests, writes, container, document };
+  const uiSource = fs.readFileSync(new URL('../src/js/module/lyrics-ui.js', import.meta.url), 'utf8');
+  const start = uiSource.indexOf('const syncTimedTextStage =');
+  const end = uiSource.indexOf('function renderAnimatedTimedText', start);
+  Object.assign(context, { getTimedTextCueStyle: () => '', getTimedTextSegmentHtml: () => '', animatedCaptionData: {} });
+  vm.runInContext(`${uiSource.slice(start, end)}\nthis.syncTimedTextStage = syncTimedTextStage`, context);
+  return { api: context.api, requests, writes, container, document, syncTimedTextStage: context.syncTimedTextStage };
 }
 
 test('enabled by default; original synchronized spans remain unchanged while readings load', async () => {
@@ -206,5 +211,48 @@ test('rows already written in display language do not request a reading', () => 
   for (const [uiLang, text] of [['ko', '사랑해'], ['ja', 'こんにちは'], ['en', 'hello']]) {
     const h = harness({ uiLang }); const host = h.container([text]); h.api.decorate(host);
     assert.equal(h.requests.length, 0); assert.equal(host.querySelector('.lyric-pronunciation'), null);
+  }
+});
+
+
+test('prefetched readings are applied when a new animated cue attaches', async () => {
+  const h = harness(); h.api.prepare(['hello']);
+  h.requests[0].resolve({ success: true, lines: ['헬로'] }); await flush();
+  const create = h.document.createElement;
+  h.document.createElement = tag => { const node = create(tag); node.connected = false; return node; };
+  const stage = h.container([]);
+  h.syncTimedTextStage(stage, [{ id: 1, text: 'hello' }]);
+  assert.equal(stage.querySelector('.lyric-pronunciation').textContent, '헬로');
+  assert.equal(h.requests.length, 1);
+  const cue = stage.children[0];
+  h.syncTimedTextStage(stage, [{ id: 1, text: 'hello' }]);
+  assert.equal(stage.children[0], cue);
+  assert.equal(cue.querySelectorAll('.lyric-pronunciation').length, 1);
+});
+
+test('caption prefetch skips same-language rows and preserves mixed-script readings', () => {
+  for (const [uiLang, own, foreign] of [['ja', 'こんにちは', '사랑해'], ['en', 'hello', 'こんにちは'], ['ko', '안녕', 'hello']]) {
+    const h = harness({ uiLang });
+    h.api.prepare([own]); assert.equal(h.requests.length, 0);
+    h.api.prepare([own, foreign, foreign, `${own} ${foreign}`]);
+    assert.deepEqual(Array.from(h.requests[0].message.payload.texts), [foreign, `${own} ${foreign}`]);
+  }
+  const h = harness({ uiLang: 'zh' }); h.api.prepare(['hello', 'こんにちは']);
+  assert.equal(h.requests.length, 0);
+});
+
+test('out-of-order batches update every repeated main and PiP row once', async () => {
+  const h = harness();
+  const texts = [...Array.from({ length: 165 }, (_, i) => `hello ${i}`), 'hello 0', 'hello 164'];
+  const main = h.container(texts), pip = h.container(texts);
+  h.api.decorate(main); h.api.decorate(pip);
+  assert.equal(h.requests.length, 3);
+  assert.deepEqual(h.requests.map(request => request.message.payload.texts.length), [80, 80, 5]);
+  for (const request of [...h.requests].reverse()) {
+    request.resolve({ success: true, lines: request.message.payload.texts.map(text => `발음 ${text}`) });
+    await flush();
+  }
+  for (const host of [main, pip]) {
+    assert.deepEqual(host.querySelectorAll('.lyric-pronunciation').map(node => node.textContent), texts.map(text => `발음 ${text}`));
   }
 });

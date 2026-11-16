@@ -1291,16 +1291,17 @@ const syncTimedTextStage = (stage, activeEvents) => {
     const eventId = String(event.id);
     activeIds.add(eventId);
     let cue = existing.get(eventId);
+    const isNewCue = !cue;
     if (!cue) {
       cue = ownerDocument.createElement('div');
       cue.className = 'ytm-animated-caption-cue';
       cue.dataset.srv3EventId = eventId;
       cue.style.cssText = getTimedTextCueStyle(event);
       cue.innerHTML = getTimedTextSegmentHtml(event);
-      if (typeof KoreanPronunciation !== 'undefined') KoreanPronunciation.decorateCue(cue, event.text, !!animatedCaptionData?._koreanJapanese);
     }
     // appendChild は既存nodeを破棄せず、srv3の重なり順だけを揃える。
     stage.appendChild(cue);
+    if (isNewCue && typeof KoreanPronunciation !== 'undefined') KoreanPronunciation.decorateCue(cue, event.text, !!animatedCaptionData?._koreanJapanese);
   });
 
   existing.forEach((cue, eventId) => {
@@ -3243,6 +3244,8 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_bar_autohide',
   'ytm_auto_continue',
   'ytm_korean_ruby',
+  'ytm_korean_pronunciation',
+  'ytm_korean_pronunciation_size',
 ];
 const MEANING_PINNED_SONGS_KEY = 'ytm_meaning_pinned_songs';
 let meaningPinnedSongs = new Set();

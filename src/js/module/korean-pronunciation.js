@@ -17,6 +17,12 @@ const KoreanPronunciation = (() => {
     while (cache.size > LIMIT) cache.delete(cache.keys().next().value);
   };
   const currentTarget = () => typeof config === 'undefined' ? 'ko' : (['ko', 'ja', 'en'].includes(config.uiLang) ? config.uiLang : null);
+  const needsReading = (text, japanese, target) => {
+    if (typeof text !== 'string' || !text || text.length > 1000) return false;
+    const hasLatin = /[A-Za-z]/.test(text), hasHangul = /[가-힣]/.test(text);
+    const hasJapanese = /[ぁ-ゖァ-ヺ]/.test(text) || (japanese && /[\u3400-\u9fff]/.test(text));
+    return target === 'ko' ? hasLatin || hasJapanese : target === 'ja' ? hasLatin || hasHangul : hasHangul || hasJapanese;
+  };
   const request = (texts, japanese, target) => {
     const key = JSON.stringify([target, japanese, texts]);
     if (inflight.has(key)) return inflight.get(key);
@@ -29,6 +35,13 @@ const KoreanPronunciation = (() => {
       }).catch(() => {}).finally(() => inflight.delete(key));
     inflight.set(key, job);
     return job;
+  };
+
+  const requestBatches = (texts, japanese, target, apply) => {
+    for (let at = 0; at < texts.length; at += 80) {
+      const batch = texts.slice(at, at + 80);
+      void request(batch, japanese, target).then(() => { if (apply) batch.forEach(apply); });
+    }
   };
 
   // Measure original text only after layout. One observer per document handles
@@ -84,13 +97,10 @@ const KoreanPronunciation = (() => {
     for (const [main, observer] of observed) {
       if (!main.isConnected) { observer.unobserve(main); observed.delete(main); }
     }
-    const pending = [];
+    const pending = new Map();
     for (const [host, raw] of entries) {
       const text = String(raw || '');
-      const hasLatin = /[A-Za-z]/.test(text), hasHangul = /[가-힣]/.test(text);
-      const hasJapanese = /[ぁ-ゖァ-ヺ]/.test(text) || (japanese && /[\u3400-\u9fff]/.test(text));
-      const needsReading = target === 'ko' ? hasLatin || hasJapanese : target === 'ja' ? hasLatin || hasHangul : hasHangul || hasJapanese;
-      if (!text || text.length > 1000 || !needsReading) continue;
+      if (!needsReading(text, japanese, target)) continue;
       const sub = host.ownerDocument.createElement('span');
       sub.className = 'lyric-pronunciation caption-2';
       sub.lang = target;
@@ -106,7 +116,7 @@ const KoreanPronunciation = (() => {
         const reading = value?.reading || '';
         sub.textContent = '';
         sub._ytmSegments = [];
-        if (reading && value.segments.length && host.querySelector('.lyric-main')) {
+        if (reading && value.segments.length && main) {
           for (const part of value.segments) {
             const span = sub.ownerDocument.createElement('span');
             span.className = 'lyric-pronunciation-word';
@@ -119,18 +129,16 @@ const KoreanPronunciation = (() => {
         if (reading && sub._ytmSegments.length && main) observeWrap(main, sub);
       };
       if (cache.has(`${target}:${japanese}:${text}`)) apply();
-      else pending.push({ text, apply });
+      else {
+        if (!pending.has(text)) pending.set(text, []);
+        pending.get(text).push(apply);
+      }
     }
     // Bound message size and coalesce repeated chorus lines. The same batch in
     // the main window and PiP shares one in-flight request.
-    const texts = [...new Set(pending.map(entry => entry.text))];
-    for (let at = 0; at < texts.length; at += 80) {
-      const batch = texts.slice(at, at + 80);
-      const inBatch = new Set(batch);
-      void request(batch, japanese, target).then(() => {
-        pending.filter(entry => inBatch.has(entry.text)).forEach(entry => entry.apply());
-      });
-    }
+    requestBatches([...pending.keys()], japanese, target, text => {
+      pending.get(text).forEach(apply => apply());
+    });
   };
 
   const decorate = container => {
@@ -217,8 +225,8 @@ const KoreanPronunciation = (() => {
       const target = currentTarget();
       if (!target) return;
       const japanese = texts.some(text => /[ぁ-ゖァ-ヺ]/.test(text));
-      const unique = [...new Set(texts.filter(text => text && text.length <= 1000 && !cache.has(`${target}:${japanese}:${text}`)))];
-      for (let i = 0; i < unique.length; i += 80) void request(unique.slice(i, i + 80), japanese, target);
+      const unique = [...new Set(texts.filter(text => needsReading(text, japanese, target) && !cache.has(`${target}:${japanese}:${text}`)))];
+      requestBatches(unique, japanese, target);
     },
   };
 })();

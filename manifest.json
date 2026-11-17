@@ -66,6 +66,7 @@
         "src/js/module/ytm-lyrics.js",
         "src/js/module/budoux-ja.js",
         "src/js/module/korean-ruby.js",
+        "src/js/module/korean-pronunciation.js",
         "src/js/module/builtin-translate.js",
         "src/js/module/bar-autohide.js",
         "src/js/module/auto-continue.js",

@@ -47,3 +47,16 @@ test('storage.clear は残っていない', () => {
   )
   assert.match(uiSource, /SETTINGS_STORAGE_KEYS\.map\(key => storage\.remove\(key\)\)/)
 })
+
+
+test('pronunciation toggle and size return to defaults after resetting settings', async () => {
+  const values = new Map([['ytm_korean_pronunciation', false], ['ytm_korean_pronunciation_size', 32]]);
+  const load = async () => {
+    const context = vm.createContext({ storage: { get: async key => values.get(key) ?? null } });
+    vm.runInContext(`${read('src/js/module/korean-pronunciation.js')}\nthis.api = KoreanPronunciation`, context);
+    await context.api.load(); return context.api;
+  };
+  const before = await load(); assert.equal(before.isEnabled(), false); assert.equal(before.getSize(), 32);
+  keys.forEach(key => values.delete(key));
+  const after = await load(); assert.equal(after.isEnabled(), true); assert.equal(after.getSize(), 20);
+});

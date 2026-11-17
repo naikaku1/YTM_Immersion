@@ -262,3 +262,6 @@ const KoreanRuby = (() => {
     _kanaWord: kanaWord,
   };
 })();
+
+// Reuse the existing local Korean pronunciation rules in the service worker.
+globalThis.YtmKoreanRuby = KoreanRuby;

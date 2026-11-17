@@ -6954,3 +6954,43 @@ body.ytm-custom-layout.ytmi-nav-yield ytmusic-nav-bar:not(:has(ytmusic-search-bo
     display: none;
   }
 }
+
+/* Caption 2: pronunciation stays outside karaoke spans and retains line wrapping. */
+.lyric-pronunciation.caption-2 {
+  display: block;
+  min-height: 20px;
+  margin-top: 4px;
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.95;
+  letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  -webkit-text-fill-color: currentColor;
+}
+.lyric-pronunciation[hidden] { display: none; }
+
+.lyric-line.active .lyric-pronunciation-sync {
+  background: linear-gradient(to right, currentColor var(--pronunciation-progress, 0%), color-mix(in srgb, currentColor 42%, transparent) var(--pronunciation-progress, 0%));
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent !important;
+}
+
+@font-face {
+  font-family: "YTM-Pretendard";
+  src: url("chrome-extension://__MSG_@@extension_id__/src/assets/fonts/PretendardVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+.lyric-pronunciation.caption-2, .lyric-pronunciation-word { font-family: "YTM-Pretendard", sans-serif; }
+.lyric-line.active .lyric-pronunciation-timed .lyric-pronunciation-word {
+  background: linear-gradient(to right, currentColor var(--pronunciation-progress, 0%), color-mix(in srgb, currentColor 42%, transparent) var(--pronunciation-progress, 0%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
